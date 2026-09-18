@@ -309,6 +309,10 @@ static u8 printf_desc[8];
 static u8 printf_flag;
 
 /* timer subsystem */
+static volatile u32 timer_raw_tick;
+static volatile u32 timer_slow_tick;
+static u32 timer_tod_sec;
+static u32 timer_tod_usec;
 static u32 timer_context[10];
 static u32 timer_ref_counts[8];
 static u8 srv6_my_ipv6[16];
@@ -764,6 +768,7 @@ static void timer_isr(int src)
 {
 	u32 bit = timer_get_bit((u32)src);
 	u32 base;
+	u32 tick;
 
 	if (src >= 24 && src <= 31)
 		base = NPU_TIMER1_BASE;
@@ -773,6 +778,19 @@ static void timer_isr(int src)
 	/* clear timer interrupt */
 	REG32(base) |= (1u << bit);
 	REG32(base) &= ~(1u << bit);
+
+	tick = timer_raw_tick + 1;
+	timer_raw_tick = tick;
+
+	if (tick % 100 == 0)
+		timer_slow_tick++;
+
+	if (timer_tod_usec + 100000 > 999999999u) {
+		timer_tod_sec++;
+		timer_tod_usec -= 999900000;
+	} else {
+		timer_tod_usec += 100000;
+	}
 }
 
 static void timer_init(int timer, int enable, int period)
@@ -4119,7 +4137,6 @@ static u32 wifi_tx_pending;
 static u32 wifi_rx_pending;
 static u8 wifi_batch_count;
 static u8 wifi_mode_flags;
-static u32 wifi_tick_count;
 
 /* WiFi TX/RX ring state */
 static u32 wifi_rx_ring_base_2g;
@@ -4181,9 +4198,9 @@ static void wifi_rx_process(void)
 
 	/* periodic housekeeping */
 	if (wifi_bridge_report == 0 &&
-	    (wifi_tick_count - wifi_rx_last_tick) > 9) {
+	    (timer_slow_tick - wifi_rx_last_tick) > 9) {
 		wifi_periodic_check(0);
-		wifi_rx_last_tick = wifi_tick_count;
+		wifi_rx_last_tick = timer_slow_tick;
 	}
 
 	while (1) {
@@ -4283,9 +4300,9 @@ static void wifi_tx_process(void)
 		(*(u32 *)(counter_base_5g + 4))++;
 
 	if (wifi_bridge_report == 0 &&
-	    (wifi_tick_count - wifi_tx_last_tick) > 9) {
+	    (timer_slow_tick - wifi_tx_last_tick) > 9) {
 		wifi_periodic_check(1);
-		wifi_tx_last_tick = wifi_tick_count;
+		wifi_tx_last_tick = timer_slow_tick;
 	}
 
 	while (1) {
