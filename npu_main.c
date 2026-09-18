@@ -130,11 +130,48 @@ static int wifi_mail_dispatch(u32 base, u32 cnt);
 static int wifi_mail_set_wait(u32 base, u32 cnt);
 #endif
 #ifdef WIFI_KITE
+static int wifi_mail_get_npu_info(u32 *msg);
+static int wifi_mail_get_last_rate(u32 *msg);
+static int wifi_mail_get_counter(u32 *msg);
+static int wifi_mail_get_dbg_counter(u32 *msg);
+static int wifi_mail_get_rxdesc_base(u32 *msg);
+static int wifi_mail_get_wcid_dbg_counter(u32 *msg);
+static int wifi_mail_get_dma_addr(u32 *msg);
+static int wifi_mail_get_ring_size(u32 *msg);
+static int wifi_mail_get_mdc_lock(u32 *msg);
+static int wifi_mail_get_dump_mapping(u32 *msg);
+static int wifi_mail_set_pcie_addr(u32 *msg);
+static int wifi_mail_set_desc(u32 *msg);
+static int wifi_mail_set_init_done(u32 *msg);
+static int wifi_mail_set_tran_to_cpu(u32 *msg);
+static int wifi_mail_set_ba_win_size(u32 *msg);
+static int wifi_mail_set_driver_model_cmd(u32 *msg);
+static int wifi_mail_set_del_sta(u32 *msg);
+static int wifi_mail_set_dram_ba_node(u32 *msg);
+static int wifi_mail_set_pkt_buf(u32 *msg);
+static int wifi_mail_set_test_noba(u32 *msg);
+static int wifi_mail_set_flushone(u32 *msg);
+static int wifi_mail_set_flushall(u32 *msg);
+static int wifi_mail_set_force_cpu(u32 *msg);
+static int wifi_mail_set_pcie_state(u32 *msg);
+static int wifi_mail_set_port_type(u32 *msg);
+static int wifi_mail_set_retry(u32 *msg);
+static int wifi_mail_set_bar_info_cmd(u32 *msg);
+static int wifi_mail_set_fast_flag_cmd(u32 *msg);
+static int wifi_mail_set_band0_cpu(u32 *msg);
+static int wifi_mail_set_tx_ring_pcie(u32 *msg);
+static int wifi_mail_set_tx_desc_hw(u32 *msg);
+static int wifi_mail_set_tx_buf_hw(u32 *msg);
+static int wifi_mail_set_rx_txdone_hw(u32 *msg);
+static int wifi_mail_set_tx_pkt_buf(u32 *msg);
+static int wifi_mail_set_txrx_reg(u32 *msg);
+static int wifi_mail_set_debug_flag(u32 *msg);
+static int wifi_mail_set_wait_inode_cfg(u32 *msg);
+static int wifi_mail_set_wait_inode_stop(u32 *msg);
+static int wifi_mail_set_pcie_swap(u32 *msg);
+static int wifi_mail_set_ratelimit(u32 *msg);
+static int wifi_mail_set_arht_chip_info(u32 *msg);
 static int wifi_mail_set_event(u32 base, u32 cnt);
-static int wifi_mail_print_stats_5g(u32 base, u32 cnt);
-static int wifi_mail_print_stats_2g(u32 base, u32 cnt);
-static int wifi_mail_get_counter_base(u32 base, u32 cnt);
-static int wifi_mail_get_wcid_counter_base(u32 base, u32 cnt);
 static void tdma_tx_init(void);
 static int kite_wifi_config(u32 base, u32 cnt);
 #endif
@@ -215,9 +252,11 @@ static u32 plic_src_reg_map[32] = {
  * (exact layout TBD - placeholder for binary matching) */
 static u32 plic_config_ext[16];
 
-/* 0x1C0: mailbox command dispatch table (kite WiFi) */
-#ifdef WIFI_KITE
-static mbox_handler_t wifi_mbox_handlers[10];
+/* 0x180: GET_WAIT function table (indexed by SDK WIFI_MAIL_Get_Wait_Func_t) */
+#ifdef HAS_WIFI
+typedef int (*wifi_mail_fn_t)(u32 *msg);
+static wifi_mail_fn_t get_wait_func_table[10];
+static wifi_mail_fn_t set_wait_func_table[31];
 #endif
 
 /* 0x1EC: WiFi chip name table (kite only, 8 bytes per entry) */
@@ -552,6 +591,13 @@ static u8 wifi_port_band_5g[16];
 /* WiFi pipeline pkt queue */
 static u32 wifi_pipeline_queue_2g;
 static u32 wifi_pipeline_queue_5g;
+
+#ifdef WIFI_KITE
+static u32 ratelimit_table[32];
+static u32 arht_chip_info[6];
+static u32 arht_phy_tx_gpio;
+static u32 arht_chip_info_valid;
+#endif
 
 #ifdef WIFI_EAGLE
 static volatile u32 eagle_rro_cfg[26];
@@ -4611,10 +4657,48 @@ static void wifi_bridge_init(void)
 	wifi_pipeline_widx = 0;
 
 #ifdef WIFI_KITE
-	wifi_mbox_handlers[0] = wifi_mail_print_stats_5g;
-	wifi_mbox_handlers[1] = wifi_mail_print_stats_2g;
-	wifi_mbox_handlers[2] = wifi_mail_get_counter_base;
-	wifi_mbox_handlers[3] = wifi_mail_get_wcid_counter_base;
+	get_wait_func_table[0] = wifi_mail_get_npu_info;
+	get_wait_func_table[1] = wifi_mail_get_last_rate;
+	get_wait_func_table[2] = wifi_mail_get_counter;
+	get_wait_func_table[3] = wifi_mail_get_dbg_counter;
+	get_wait_func_table[4] = wifi_mail_get_rxdesc_base;
+	get_wait_func_table[5] = wifi_mail_get_wcid_dbg_counter;
+	get_wait_func_table[6] = wifi_mail_get_dma_addr;
+	get_wait_func_table[7] = wifi_mail_get_ring_size;
+	get_wait_func_table[8] = wifi_mail_get_mdc_lock;
+	get_wait_func_table[9] = wifi_mail_get_dump_mapping;
+
+	set_wait_func_table[0]  = wifi_mail_set_pcie_addr;
+	set_wait_func_table[1]  = wifi_mail_set_desc;
+	set_wait_func_table[2]  = wifi_mail_set_init_done;
+	set_wait_func_table[3]  = wifi_mail_set_tran_to_cpu;
+	set_wait_func_table[4]  = wifi_mail_set_ba_win_size;
+	set_wait_func_table[5]  = wifi_mail_set_driver_model_cmd;
+	set_wait_func_table[6]  = wifi_mail_set_del_sta;
+	set_wait_func_table[7]  = wifi_mail_set_dram_ba_node;
+	set_wait_func_table[8]  = wifi_mail_set_pkt_buf;
+	set_wait_func_table[9]  = wifi_mail_set_test_noba;
+	set_wait_func_table[10] = wifi_mail_set_flushone;
+	set_wait_func_table[11] = wifi_mail_set_flushall;
+	set_wait_func_table[12] = wifi_mail_set_force_cpu;
+	set_wait_func_table[13] = wifi_mail_set_pcie_state;
+	set_wait_func_table[14] = wifi_mail_set_port_type;
+	set_wait_func_table[15] = wifi_mail_set_retry;
+	set_wait_func_table[16] = wifi_mail_set_bar_info_cmd;
+	set_wait_func_table[17] = wifi_mail_set_fast_flag_cmd;
+	set_wait_func_table[18] = wifi_mail_set_band0_cpu;
+	set_wait_func_table[19] = wifi_mail_set_tx_ring_pcie;
+	set_wait_func_table[20] = wifi_mail_set_tx_desc_hw;
+	set_wait_func_table[21] = wifi_mail_set_tx_buf_hw;
+	set_wait_func_table[22] = wifi_mail_set_rx_txdone_hw;
+	set_wait_func_table[23] = wifi_mail_set_tx_pkt_buf;
+	set_wait_func_table[24] = wifi_mail_set_txrx_reg;
+	set_wait_func_table[25] = wifi_mail_set_debug_flag;
+	set_wait_func_table[26] = wifi_mail_set_wait_inode_cfg;
+	set_wait_func_table[27] = wifi_mail_set_wait_inode_stop;
+	set_wait_func_table[28] = wifi_mail_set_pcie_swap;
+	set_wait_func_table[29] = wifi_mail_set_ratelimit;
+	set_wait_func_table[30] = wifi_mail_set_arht_chip_info;
 #endif
 #endif
 }
@@ -5065,7 +5149,7 @@ static void npu_set_wait_state(u32 port, u8 state)
 }
 
 /* WiFi RXD init thunk: dispatches to band-specific init */
-static void npu_set_rxd_init(u32 band, u32 ring_size)
+static void npu_set_rxd_init(u32 ring_size, u32 band)
 {
 	if (band == 1)
 		wifi_init_rxd_5g(ring_size, 1);
@@ -5131,6 +5215,13 @@ static void npu_mbox_set_debug_flag(u32 band, u32 flag)
 	npu_printf("%s L%d not support on 791X\n",
 		   "npu_mbox_set_debug_flag_wrapper", 4025);
 	(void)band; (void)flag;
+}
+
+static void npu_mbox_set_txrx_reg_addr(u32 band, u32 a, u32 b, u32 c, u32 d)
+{
+	npu_printf("%s L%d not support on 791X\n",
+		   "npu_mbox_set_wait_inode_txrx_reg_addr_wrapper", 4032);
+	(void)band; (void)a; (void)b; (void)c; (void)d;
 }
 
 static u32 npu_mbox_get_rxdesc_base(u32 band)
@@ -5253,6 +5344,188 @@ static int wifi_mail_set_pcie_swap(u32 *msg)
 	return 1;
 }
 
+/* SET_WAIT handlers [0]-[23], [29]-[30] — indexed by SDK enum */
+
+static int wifi_mail_set_pcie_addr(u32 *msg)
+{
+	npu_set_pcie_base(msg[2], msg[0] & 0xF);
+	return 1;
+}
+
+static int wifi_mail_set_desc(u32 *msg)
+{
+	npu_set_rxd_init(msg[2], msg[0] & 0xF);
+	return 1;
+}
+
+static int wifi_mail_set_init_done(u32 *msg)
+{
+	(void)msg;
+	return 1;
+}
+
+static int wifi_mail_set_tran_to_cpu(u32 *msg)
+{
+	npu_printf("%s() interfaceID = %u \n",
+		   "wifi_mail_set_wait_tran2cpu", msg[0] & 0xF);
+	npu_set_wait_state(msg[0] & 0xF, (u8)msg[2]);
+	return 1;
+}
+
+static int wifi_mail_set_ba_win_size(u32 *msg)
+{
+	npu_set_ba_entry(msg[0] & 0xF, msg[2]);
+	return 1;
+}
+
+static int wifi_mail_set_driver_model_cmd(u32 *msg)
+{
+	npu_set_driver_model((u8)msg[2]);
+	return 1;
+}
+
+static int wifi_mail_set_del_sta(u32 *msg)
+{
+	wifi_reset_ba_entry(msg[0] & 0xF, msg[2]);
+	return 1;
+}
+
+static int wifi_mail_set_dram_ba_node(u32 *msg)
+{
+	npu_set_dram_ba_node_addr(msg[2]);
+	return 1;
+}
+
+static int wifi_mail_set_pkt_buf(u32 *msg)
+{
+	npu_set_pkt_buf_addr(msg[2]);
+	return 1;
+}
+
+static int wifi_mail_set_test_noba(u32 *msg)
+{
+	npu_set_no_ba_test((u8)msg[2]);
+	return 1;
+}
+
+static int wifi_mail_set_flushone(u32 *msg)
+{
+	npu_set_flushone_timeout((u16)msg[2]);
+	return 1;
+}
+
+static int wifi_mail_set_flushall(u32 *msg)
+{
+	npu_set_flushall_timeout((u16)msg[2]);
+	return 1;
+}
+
+static int wifi_mail_set_force_cpu(u32 *msg)
+{
+	npu_set_force_to_cpu((u8)msg[2]);
+	return 1;
+}
+
+static int wifi_mail_set_pcie_state(u32 *msg)
+{
+	npu_set_band_enable(msg[0] & 0xF);
+	return 1;
+}
+
+static int wifi_mail_set_port_type(u32 *msg)
+{
+	npu_set_pcie_port_type((u8)msg[2]);
+	return 1;
+}
+
+static int wifi_mail_set_retry(u32 *msg)
+{
+	npu_set_retry_limit((u16)msg[2]);
+	return 1;
+}
+
+static int wifi_mail_set_bar_info_cmd(u32 *msg)
+{
+	npu_set_bar_info(msg[0] & 0xF, msg[2]);
+	return 1;
+}
+
+static int wifi_mail_set_fast_flag_cmd(u32 *msg)
+{
+	npu_set_fast_flag((u8)msg[2]);
+	return 1;
+}
+
+static int wifi_mail_set_band0_cpu(u32 *msg)
+{
+	npu_set_band0_on_cpu((u8)msg[2]);
+	return 1;
+}
+
+static int wifi_mail_set_tx_ring_pcie(u32 *msg)
+{
+	(void)msg;
+	return 1;
+}
+
+static int wifi_mail_set_tx_desc_hw(u32 *msg)
+{
+	npu_printf("%s: [band_idx=%d] desc phy addr=%lx \n",
+		   "wifi_mail_set_wait_tx_ring_desc_phy_addr",
+		   msg[0] & 0xF, msg[2]);
+	return 1;
+}
+
+static int wifi_mail_set_tx_buf_hw(u32 *msg)
+{
+	(void)msg;
+	return 1;
+}
+
+static int wifi_mail_set_rx_txdone_hw(u32 *msg)
+{
+	(void)msg;
+	return 1;
+}
+
+static int wifi_mail_set_tx_pkt_buf(u32 *msg)
+{
+	(void)msg;
+	return 1;
+}
+
+static int wifi_mail_set_txrx_reg(u32 *msg)
+{
+	npu_mbox_set_txrx_reg_addr(msg[0] & 0xF, msg[2], msg[3],
+				   msg[4], msg[5]);
+	return 1;
+}
+
+static int wifi_mail_set_ratelimit(u32 *msg)
+{
+	npu_printf("%s:%d band_idx=%d bssid_idx=%d ctrl=%d !!!\n",
+		   "wifi_mail_set_wait_ratelimit_ctrl", 460,
+		   msg[2], msg[3], msg[4]);
+	ratelimit_table[msg[2] * 16 + msg[3]] = msg[4];
+	return 1;
+}
+
+static int wifi_mail_set_arht_chip_info(u32 *msg)
+{
+	u32 i;
+
+	if (msg[9] == 0xFFFFFFFF) {
+		npu_printf("%s get phy tx gpio error\n",
+			   "wifi_mail_set_wait_arht_chip_info");
+		return 0;
+	}
+	arht_phy_tx_gpio = msg[9];
+	for (i = 0; i < 6; i++)
+		arht_chip_info[i] = msg[2 + i];
+	arht_chip_info_valid = 1;
+	return 1;
+}
+
 static int wifi_mail_get_dma_addr(u32 *msg)
 {
 	u32 dir = msg[2];
@@ -5293,35 +5566,78 @@ static int wifi_mail_get_rxdesc_base(u32 *msg)
 	return 1;
 }
 
-static int wifi_mail_get_counter_base(u32 base, u32 cnt)
+/* GET_WAIT handlers — indexed by SDK WIFI_MAIL_Get_Wait_Func_t in
+ * get_wait_func_table[10].  Each receives the DMA-translated msg pointer. */
+
+static int wifi_mail_get_npu_info(u32 *msg)
 {
-	u32 *msg = (u32 *)base;
-	(void)cnt;
+	msg[2] = 0;
+	npu_mbox_get_npu_info();
+	return 1;
+}
+
+static int wifi_mail_get_last_rate(u32 *msg)
+{
+	msg[2] = 222;
+	msg[3] = 3333;
+	return 1;
+}
+
+static int wifi_mail_get_counter(u32 *msg)
+{
+	u32 *v2 = &msg[4];
+	u8 *v3 = (u8 *)&msg[132];
+	u64 bytes_2g, pkts_2g, bytes_5g, pkts_5g;
+	u8 omac_2g, omac_5g;
+	u32 i;
+
+	msg[2] = 0;
+	for (i = 0; i < 16; i++) {
+		npu_mbox_get_counter(i, &bytes_2g, &pkts_2g,
+				     &bytes_5g, &pkts_5g,
+				     &omac_2g, &omac_5g);
+		v2[0] = (u32)pkts_2g;
+		v2[1] = (u32)(pkts_2g >> 32);
+		v2[32] = (u32)pkts_5g;
+		v2[33] = (u32)(pkts_5g >> 32);
+		v2[64] = (u32)bytes_2g;
+		v2[65] = (u32)(bytes_2g >> 32);
+		v2[96] = (u32)bytes_5g;
+		v2[97] = (u32)(bytes_5g >> 32);
+		v3[0] = omac_5g;
+		v3[16] = omac_2g;
+		v2 += 2;
+		v3++;
+	}
+	return 1;
+}
+
+static int wifi_mail_get_dbg_counter(u32 *msg)
+{
 	msg[2] = counter_base_get(msg[0] & 0xF);
 	return 1;
 }
 
-static int wifi_mail_get_wcid_counter_base(u32 base, u32 cnt)
+static int wifi_mail_get_wcid_dbg_counter(u32 *msg)
 {
-	u32 *msg = (u32 *)base;
-	(void)cnt;
 	msg[2] = wcid_counter_base_get(msg[0] & 0xF);
 	return 1;
 }
 
-static int wifi_mail_print_stats_5g(u32 base, u32 cnt)
+static int wifi_mail_get_mdc_lock(u32 *msg)
 {
-	(void)base; (void)cnt;
-	wifi_print_stats_5g();
+	(void)msg;
 	return 1;
 }
 
-static int wifi_mail_print_stats_2g(u32 base, u32 cnt)
+static int wifi_mail_get_dump_mapping(u32 *msg)
 {
-	(void)base; (void)cnt;
+	wifi_print_stats_5g();
 	wifi_print_stats_2g();
+	msg[2] = 0;
 	return 1;
 }
+
 
 #ifdef HAS_TR471
 static int kite_wifi_config(u32 base, u32 cnt)
@@ -5424,107 +5740,57 @@ static int eagle_wifi_config(u32 base, u32 cnt)
 
 #endif /* WIFI_EAGLE */
 
-/* WiFi mailbox command dispatcher: lookup and call handler by cmd index */
-static int wifi_mbox_cmd_dispatch(u32 *msg)
-{
-#ifdef WIFI_KITE
-	u32 cmd_idx = *msg;
-
-	if (cmd_idx < 10 && wifi_mbox_handlers[cmd_idx])
-		return wifi_mbox_handlers[cmd_idx]((u32)msg, 0);
-#endif
-	return 0;
-}
-
 #ifdef HAS_WIFI
 /* WiFi funcType dispatch (callback[0] — MFUNC_WIFI)
- * Host sends funcType in msg[0] bits [7:4] (from WIFI_MAIL_Data_t bitfield).
- * SET_WAIT=1 → wifi_mail_set_wait, SET_NO_WAIT=2 → wifi_mail_set_event. */
+ *
+ * Blob dispatches all four funcTypes via function pointer tables in .data:
+ *   SET_WAIT(1): set_wait_func_table[31] indexed by funcId (up to 30)
+ *   SET_NO_WAIT(2): single fn ptr, only funcId=0
+ *   GET_WAIT(3): get_wait_func_table[10] indexed by funcId (up to 9)
+ *   GET_NO_WAIT(4): single fn ptr, only funcId=0
+ *
+ * All handlers receive the DMA-translated msg pointer. */
 static int wifi_mail_dispatch(u32 base, u32 cnt)
 {
 	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);
 	u32 func_type = (msg[0] >> 4) & 0xF;
+	u32 func_id;
 
 	switch (func_type) {
-	case 1:
+	case 1: /* SET_WAIT */
 		return wifi_mail_set_wait(base, cnt);
-	case 2:
+	case 2: /* SET_NO_WAIT */
 #ifdef WIFI_KITE
 		return wifi_mail_set_event(base, cnt);
-#endif
-	default:
+#elif defined(WIFI_EAGLE)
+		return eagle_mail_set_event(base, cnt);
+#else
 		return 0;
+#endif
+	case 3: /* GET_WAIT */
+		func_id = msg[1];
+		if (func_id < 10 && get_wait_func_table[func_id])
+			return get_wait_func_table[func_id](msg);
+		npu_printf("not support unknow funcType\n");
+		return 1;
+	case 4: /* GET_NO_WAIT */
+		return 1;
+	default:
+		npu_printf("not support unknow funcType\n");
+		return 1;
 	}
 }
-#endif /* HAS_WIFI */
 
 /* WiFi mail set_wait handler: dispatches sub-commands from host */
 static int __attribute__((noinline)) wifi_mail_set_wait(u32 base, u32 cnt)
 {
 	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);
-	u32 cmd = msg[1];
-	u32 band = msg[0] & 0xF;
-	u32 val = msg[2];
+	u32 func_id = msg[1];
 
-	switch (cmd) {
-	case 0:
-		npu_set_driver_model(val);
-		break;
-	case 1:
-		npu_set_pcie_port_type(val);
-		break;
-	case 2:
-		npu_set_retry_limit(val);
-		break;
-	case 3:
-		npu_set_force_to_cpu((u8)val);
-		break;
-	case 4:
-		npu_set_flushall_timeout(val);
-		break;
-	case 5:
-		npu_set_flushone_timeout(val);
-		break;
-	case 6:
-		npu_set_no_ba_test((u8)val);
-		break;
-	case 7:
-		npu_set_fast_flag((u8)val);
-		break;
-	case 8:
-		npu_set_pkt_buf_addr(val);
-		break;
-	case 9:
-		npu_set_dram_ba_node_addr(val);
-		break;
-	case 10:
-		npu_set_band0_on_cpu(val);
-		break;
-	case 11:
-		npu_set_bar_info(band, val);
-		break;
-	case 12:
-		npu_set_ba_entry(band, val);
-		break;
-	case 13:
-		wifi_reset_ba_entry(band, val);
-		break;
-	case 14:
-		npu_set_pcie_base(val, band);
-		break;
-	case 15:
-		npu_set_rxd_init(band, val);
-		break;
-	case 16:
-		npu_set_band_enable(band);
-		break;
-	case 17:
-		npu_set_wait_state(val, (u8)(msg[3]));
-		break;
-	default:
-		npu_printf("wifi_mail_set_wait: unknown cmd %d\n", cmd);
-		break;
-	}
+	(void)cnt;
+	if (func_id < 31 && set_wait_func_table[func_id])
+		return set_wait_func_table[func_id](msg);
+	npu_printf("wifi_mail_set_wait: unknown cmd %d\n", func_id);
 	return 1;
 }
 
@@ -5539,11 +5805,12 @@ static int __attribute__((noinline)) wifi_mail_set_event(u32 base, u32 cnt)
 		wifi_npu_init(msg[0] & 0xF);
 		break;
 	default:
-		wifi_mbox_cmd_dispatch(msg);
+		npu_printf("set_event: unknown cmd %d\n", cmd);
 		break;
 	}
 	return 1;
 }
+#endif /* HAS_WIFI */
 
 /* Core0 WiFi init wrapper */
 static void core0_wifi_init_wrapper(void)
