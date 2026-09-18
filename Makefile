@@ -28,7 +28,7 @@ MAP     := $(BUILD)/firmware.map
 DIS     := $(BUILD)/firmware.dis
 
 SRCS_S  := crt0.S
-SRCS_C  := npu_main.c
+SRCS_C  := npu_main.c npu_printf.c npu_wifi.c npu_tunnel.c
 OBJS    := $(patsubst %.S,$(BUILD)/%.o,$(SRCS_S)) \
            $(patsubst %.c,$(BUILD)/%.o,$(SRCS_C))
 
@@ -42,7 +42,7 @@ $(BUILD):
 $(BUILD)/%.o: %.S npu_config.h | $(BUILD)
 	$(CC) $(ASFLAGS) -c -o $@ $<
 
-$(BUILD)/%.o: %.c npu_config.h npu_regs.h npu_types.h | $(BUILD)
+$(BUILD)/%.o: %.c npu_config.h npu_regs.h npu_types.h npu_internal.h | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(ELF): $(OBJS) link.ld

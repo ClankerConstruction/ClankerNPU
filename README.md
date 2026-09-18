@@ -64,16 +64,21 @@ Linker flags: `--gc-sections --relax` + libgcc (for 64-bit division on RV32)
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `npu_main.c` | ~8000 | All firmware logic |
+| `npu_main.c` | ~1700 | Globals, core infra (PLIC, timer, mutex, SRAM, mailbox), boot, DBA |
+| `npu_wifi.c` | ~4500 | WiFi subsystem: BA, reorder, classifier, bridge, mailbox handlers |
+| `npu_tunnel.c` | ~1300 | Tunnel offload, L4S ECN, SRv6, fragmentation |
+| `npu_printf.c` | ~340 | vsprintf, UART output, debug console |
+| `npu_internal.h` | ~430 | Cross-file prototypes and extern declarations |
 | `npu_config.h` | 59 | `#ifdef` variant selection |
 | `npu_regs.h` | 222 | MMIO register definitions |
 | `npu_types.h` | 52 | `u8`/`u16`/`u32`/`u64`/`s32` typedefs, struct types |
 | `crt0.S` | 137 | Reset vector, BSS clear, stack setup, per-hart dispatch |
 | `link.ld` | 71 | Linker script (DRAM + SRAM regions) |
-| `Makefile` | 74 | Build system with all 11 variants |
+| `Makefile` | 75 | Build system with all 11 variants |
 
-All compile-time variants are handled with `#ifdef` in the single source
-file. Convention: `AN75XX` = all three SoCs, `AN758X` = AN7581 + AN7583.
+All compile-time variants are handled with `#ifdef` across the source
+files. Convention: `AN75XX` = all three SoCs, `AN758X` = AN7581 + AN7583.
+All `.data` globals stay in `npu_main.c` to preserve `npu_data.bin` layout.
 
 ### Conditional Feature Flags
 
