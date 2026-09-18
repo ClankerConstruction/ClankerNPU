@@ -2036,7 +2036,7 @@ static void tdma_init(void)
 	sram_buf_init();
 }
 
-#ifdef WIFI_KITE
+#ifdef HAS_BME
 /* BME ISR handler */
 static void bme_done_isr(int src)
 {
@@ -2050,7 +2050,7 @@ static void tdma_bme_init(void)
 	u32 i;
 
 	tdma_bme_dscp_base_addr = sram_buf_alloc(134);
-	REG32(0x1EC0B80C) = tdma_bme_dscp_base_addr;
+	REG32(BME_BASE + 0x00C) = tdma_bme_dscp_base_addr;
 	npu_printf("tdma_bme_dscp =%x\n", tdma_bme_dscp_base_addr);
 
 	/* zero 512 8-byte descriptors (4KB) */
@@ -2060,30 +2060,30 @@ static void tdma_bme_init(void)
 		desc[i * 2 + 1] = 0;
 	}
 
-	REG32(0x1EC0B800) = 511;
-	REG32(0x1EC0B808) = 0;
+	REG32(BME_BASE + 0x000) = 511;
+	REG32(BME_BASE + 0x008) = 0;
 
 	/* register BME done ISR on PLIC source 32 */
 	plic_register_isr(32, bme_done_isr);
 	npu_printf("bme plic register done, INTR_BUFID_MOVE_ENGINE(%d)\n", 32);
 
 	/* configure BME: interrupt mode + SRAM mode, ID threshold */
-	REG32(0x1EC0B824) = (REG32(0x1EC0B824) & 0xFFFF0000) | 0x10;
-	npu_printf("BME intMode + sarm mode, id thld=%x\n", REG32(0x1EC0B824));
+	REG32(BME_CSR_CTRL) = (REG32(BME_CSR_CTRL) & 0xFFFF0000) | 0x10;
+	npu_printf("BME intMode + sarm mode, id thld=%x\n", REG32(BME_CSR_CTRL));
 
 	/* timeout */
-	REG32(0x1EC0B818) = 1000;
-	npu_printf("BME timeout setting%x = %x\n", 0x1EC0B818, 1000);
+	REG32(BME_CSR_MAX_INDEX) = 1000;
+	npu_printf("BME timeout setting%x = %x\n", BME_CSR_MAX_INDEX, 1000);
 
 	/* global config: enable with size=8 */
 	{
-		u32 cfg = REG32(0x1EC0B814);
+		u32 cfg = REG32(BME_CSR_BASE_ADDR);
 
 		npu_printf("[%s] defult: BME_CSR_GLB_CFG(%x)=%x\n",
-			   "tdma_bme_init", 0x1EC0B814, cfg);
+			   "tdma_bme_init", BME_CSR_BASE_ADDR, cfg);
 		npu_printf(" csr_mng_en enable");
 		cfg = (cfg & 0xFFE0) | 0x170007;
-		REG32(0x1EC0B814) = cfg;
+		REG32(BME_CSR_BASE_ADDR) = cfg;
 		npu_printf("[%s] configed: BME_CSR_GLB_CFG(%x), bme size=%d\n",
 			   "tdma_bme_init", cfg, 8);
 	}
@@ -2107,12 +2107,18 @@ static void tdma_bmgr_init(void)
 	REG32(BMGR_BASE + 0x030) = 7;
 	REG32(BMGR_INIT) = 1;
 
+#if defined(AN7552)
+	while (!(REG32(BMGR_BASE + 0x02C) & 8))
+#else
 	while (!(REG32(BMGR_BASE + 0x02C) & 1))
+#endif
 		;
 
 	plic_enable_wrapper(33);
 }
+#endif /* HAS_BME */
 
+#ifdef WIFI_KITE
 /* TDMA TX init: configure TX descriptor rings */
 static void tdma_tx_init(void)
 {
@@ -2195,12 +2201,17 @@ static void tdma_tx_init(void)
 	}
 
 	/* WiFi buffer config */
+#if defined(AN7581)
+	REG32(TDMA_WIFI_BUF_CFG) = (REG32(TDMA_WIFI_BUF_CFG) & 0xFFE200FF) | 0x190100;
+#else
 	REG32(TDMA_WIFI_BUF_CFG) = (REG32(TDMA_WIFI_BUF_CFG) & 0xFFA200FF) | 0x590100;
+#endif
 	npu_printf("[%s] PPE_WIFI_BUF_CFG=%x, value=%x\n",
 		   "tdma_tx_init", TDMA_WIFI_BUF_CFG, REG32(TDMA_WIFI_BUF_CFG));
 
-	/* init BME */
+#ifdef HAS_BME
 	tdma_bme_init();
+#endif
 }
 
 static u32 *tdma_stats_base(u32 band)
@@ -7694,10 +7705,10 @@ static void __attribute__((noinline)) core0_main(void)
 {
 	tdma_init();
 
-#ifdef WIFI_KITE
+#ifdef HAS_BME
 	bufid_pool_init();
 	tdma_bmgr_init();
-#else
+#elif defined(HAS_WIFI)
 	buf_mgr_init();
 #endif
 

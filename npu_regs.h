@@ -92,8 +92,12 @@
 #define NPU_BRIDGE_BASE         0x1EC0C000
 #define BRIDGE_CH_BASE(ch)      (NPU_BRIDGE_BASE + ((ch) * 0x40))
 
-/* BME (Buffer Move Engine) - AN7552 only */
+/* BME (Buffer Move Engine) - AN7552 and AN7583 (with WiFi) */
+#if defined(AN7552)
 #define BME_BASE                0x1EC08000
+#else /* AN7583 */
+#define BME_BASE                0x1EC0B800
+#endif
 #define BME_CSR_BASE_ADDR       (BME_BASE + 0x014)
 #define BME_CSR_MAX_INDEX       (BME_BASE + 0x018)
 #define BME_CSR_SW_INDEX        (BME_BASE + 0x01C)

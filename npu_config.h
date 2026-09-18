@@ -59,4 +59,8 @@
 #define HAS_TR471
 #endif
 
+#if !defined(AN7581) && defined(HAS_WIFI)
+#define HAS_BME
+#endif
+
 #endif /* NPU_CONFIG_H */
