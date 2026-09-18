@@ -467,8 +467,8 @@ static u32 uart_cmd_idx;
 static u8 uart_cmd_buf[32];
 
 /* npu_init sync */
-static u32 mib12_snapshot;
 static u32 core_sync_flag;
+static u32 sim_mode_flag;
 
 /* WiFi extended state */
 static u32 wifi_ext_state[32];
@@ -659,6 +659,16 @@ static char get_core_char(void)
 	if (id <= 7)
 		return (char)('0' + id);
 	return 'X';
+}
+
+static u16 npu_htons(u16 x)
+{
+	return (u16)((x >> 8) | (x << 8));
+}
+
+static void wfi_idle(void)
+{
+	__asm__ volatile("wfi");
 }
 
 /* ================================================================
@@ -887,6 +897,68 @@ static void delay_1ms(u32 ms)
 	for (i = 0; i < ms; i++)
 		for (j = 0; j < 25000; j++)
 			;
+}
+
+/* PLL clock frequency: bits[7:6] select {800,750,720,600} MHz, bits[2:0]+1 = divider */
+#define PLL_CFG_REG 0x1FA201FC
+
+static u32 cpu_clock_get(void)
+{
+	static const u32 pll_freq[] = { 800, 750, 720, 600 };
+
+	if (sim_mode_flag != 0)
+		return 100;
+	return pll_freq[(REG32(PLL_CFG_REG) >> 6) & 3] /
+	       ((REG32(PLL_CFG_REG) & 7) + 1);
+}
+
+static u32 cpu_clock_div2(void)
+{
+	if (sim_mode_flag != 0)
+		return 50;
+	return cpu_clock_get() >> 1;
+}
+
+static u32 cpu_clock_div4(void)
+{
+	if (sim_mode_flag != 0)
+		return 25;
+	return cpu_clock_get() >> 2;
+}
+
+static void delay_us(u32 us)
+{
+	u32 target = 800 * us;
+	u32 prev = csr_read(mcycle);
+	u32 elapsed = 0;
+
+	do {
+		u32 cur = csr_read(mcycle);
+
+		if (cur >= prev)
+			elapsed += cur - prev;
+		else
+			elapsed += cur - prev - 1;
+		prev = cur;
+	} while (elapsed < target);
+}
+
+static void delay_ms_mcycle(u32 ms)
+{
+	u32 clk = cpu_clock_div4();
+	u32 target = 1000 * ms * clk;
+	u32 prev = csr_read(mcycle);
+	u32 elapsed = 0;
+
+	do {
+		u32 cur = csr_read(mcycle);
+
+		if (cur >= prev)
+			elapsed += cur - prev;
+		else
+			elapsed += cur - prev - 1;
+		prev = cur;
+	} while (elapsed < target);
 }
 
 /* ================================================================
@@ -1336,6 +1408,7 @@ static void usb_powerdown(void)
 static void npu_reboot(void)
 {
 	npu_printf("REBOOTING...\n");
+	delay_ms_mcycle(10);
 	REG32(0x1FB00040) = 0x80000001;
 }
 
@@ -1441,7 +1514,7 @@ static void sram_buf_init(void)
 {
 	npu_memset((void *)SRAM_BASE, 0, SRAM_SIZE);
 	npu_memset(sram_alloc_table, 0, sizeof(sram_alloc_table));
-	sram_buf_mutex[0] = 2;
+	sram_buf_mutex[0] = 18;
 	sram_buf_mutex[1] = 0;
 	sram_alloc_offset = 0;
 	sram_alloc_count = 0;
@@ -1551,28 +1624,71 @@ static u32 counter_base_tri;
 static u32 wcid_counter_base_2g;
 static u32 wcid_counter_base_5g;
 
-/* buf_id recycle ring (return freed IDs to alloc pool) */
-static u32 bufid_free_mutex[2];
-static u16 bufid_free_widx;
-static u32 bufid_free_base;
-static u32 bufid_free_count;
+/* buf_id recycle ring (5600-entry ring of u16 buffer indices) */
+static u32 bufid_enq_mutex[2];
+static u16 bufid_widx;
+static u32 bufid_ring_base;
+static u32 bufid_enq_count;
+static u32 bufid_deq_mutex[2];
+static u16 bufid_ridx;
+static u32 bufid_deq_count;
 
-static void bufid_ring_mutex_init(void)
+static void __attribute__((noinline)) bufid_ring_mutex_init(void)
 {
-	bufid_free_mutex[0] = 13;
-	bufid_free_mutex[1] = 0;
+	bufid_enq_mutex[0] = 29;
+	bufid_enq_mutex[1] = 0;
+	bufid_deq_mutex[0] = 28;
+	bufid_deq_mutex[1] = 0;
 }
 
 static void buf_id_return(u16 buf_id)
 {
-	hw_mutex_lock(bufid_free_mutex);
-	*(u16 *)(bufid_free_base + 2 * bufid_free_widx) = buf_id;
-	bufid_free_count++;
+	hw_mutex_lock(bufid_enq_mutex);
+	*(u16 *)(bufid_ring_base + 2 * (u32)bufid_widx) = buf_id;
+	bufid_enq_count++;
 	if ((wifi_debug_flags & 4) && counter_base_tri)
 		(*(u32 *)(counter_base_tri + 0x18))++;
-	bufid_free_widx = (bufid_free_widx + 1 == 5600) ?
-		0 : bufid_free_widx + 1;
-	hw_mutex_unlock(bufid_free_mutex);
+	bufid_widx = (bufid_widx + 1 == 5600) ? 0 : bufid_widx + 1;
+	hw_mutex_unlock(bufid_enq_mutex);
+}
+
+static s32 buf_id_alloc_ring(void)
+{
+	u16 next;
+	s32 id;
+
+	hw_mutex_lock(bufid_deq_mutex);
+	next = (bufid_ridx + 1 == 5600) ? 0 : bufid_ridx + 1;
+	if (bufid_widx == next) {
+		if ((wifi_debug_flags & 4) && counter_base_tri)
+			(*(u32 *)(counter_base_tri + 0x20))++;
+		hw_mutex_unlock(bufid_deq_mutex);
+		return -1;
+	}
+	bufid_deq_count++;
+	if ((wifi_debug_flags & 4) && counter_base_tri)
+		(*(u32 *)(counter_base_tri + 0x1C))++;
+	id = *(s16 *)(bufid_ring_base + 2 * (u32)bufid_ridx);
+	bufid_ridx = next;
+	hw_mutex_unlock(bufid_deq_mutex);
+	return id;
+}
+
+static void bufid_pool_init(void)
+{
+	u16 *ring;
+	u32 i;
+
+	bufid_deq_mutex[0] = 28;
+	bufid_deq_mutex[1] = 0;
+	bufid_enq_mutex[0] = 29;
+	bufid_enq_mutex[1] = 0;
+	ring = (u16 *)sram_buf_alloc(138);
+	bufid_ring_base = (u32)ring;
+	for (i = 0; i < 5600; i++)
+		ring[i] = (u16)i;
+	bufid_ridx = 0;
+	bufid_widx = 0;
 }
 
 static void counter_init(u32 band)
@@ -1655,7 +1771,7 @@ static void npu_bridge_buf_init(void)
 
 	delay_1ms(10);
 
-	for (i = 0; i < 4; i++) {
+	for (i = 0; i < 8; i++) {
 		ch_status = (u32 *)(0x1EC12210 + i * 16);
 		if (*ch_status & 1)
 			npu_printf("npu bridge channel-%d buf init sucess\n", i);
@@ -1777,6 +1893,10 @@ static u32 tdma_tx_ring0_base;
 static u32 tdma_tx_ring1_base;
 static u32 tdma_tx_ring0_cnt;
 static u32 tdma_tx_ring1_cnt;
+
+/* TDMA TX ring per-band state */
+static u32 tdma_tx_ring_base[4];
+static u32 tdma_tx_sw_idx[8];
 
 /* BME descriptor state */
 static u32 tdma_bme_dscp_base_addr;
@@ -1952,6 +2072,69 @@ static void tdma_tx_init(void)
 
 	/* init BME */
 	tdma_bme_init();
+}
+
+static u32 *tdma_stats_base(u32 band)
+{
+	if (band == 0)
+		return (u32 *)counter_base_2g;
+	if (band == 1)
+		return (u32 *)counter_base_5g;
+	return (u32 *)counter_base_tri;
+}
+
+static int __attribute__((noinline)) tdma_tx_submit(u32 port, u32 pkt_len,
+						    u32 buf_addr, u32 band)
+{
+	u32 sw_idx = tdma_tx_sw_idx[band + 3];
+	volatile u32 *hw_idx_reg = (volatile u32 *)(0x1FB5080C + 16 * band);
+	u32 retries = 5;
+	u32 hw_idx, free_slots;
+	u32 *desc;
+	u32 next;
+
+	while (1) {
+		hw_idx = *hw_idx_reg;
+		if (sw_idx < hw_idx)
+			free_slots = hw_idx - sw_idx - 1;
+		else
+			free_slots = 1023 - sw_idx + hw_idx;
+		if (free_slots > 9)
+			break;
+		{ volatile u32 i; for (i = 0; i < 300; i++) ; }
+		if ((wifi_debug_flags & 4))
+			(*(tdma_stats_base(band) + 63))++;
+		if (--retries == 0) {
+			if ((wifi_debug_flags & 4))
+				(*(tdma_stats_base(band) + 64))++;
+			return -1;
+		}
+	}
+
+	desc = (u32 *)(tdma_tx_ring_base[band] + 32 * sw_idx);
+	if ((s32)desc[1] >= 0) {
+		if ((wifi_debug_flags & 4))
+			(*(tdma_stats_base(band) + 63))++;
+		npu_printf("tdma tx (%d) full. cpu %d desc word %x\n",
+			   band, sw_idx, desc[1]);
+		return -1;
+	}
+
+	if ((wifi_debug_flags & 4))
+		(*(tdma_stats_base(band) + 79))++;
+
+	if (pkt_len < 60) {
+		npu_memset((void *)(buf_addr + pkt_len), 0, 60 - pkt_len);
+		pkt_len = 60;
+	}
+
+	next = (sw_idx <= 0x3FE) ? sw_idx + 1 : 0;
+	desc[4] = (port << 14) | 0x80000000;
+	desc[2] = (buf_addr & 0x3FFFFFFF) | 0x80000000;
+	desc[1] = pkt_len;
+	REG32(0x1FB50808 + 16 * band) = next;
+	tdma_tx_sw_idx[band + 3] = next;
+	return 0;
 }
 #endif /* WIFI_KITE */
 
@@ -7424,6 +7607,7 @@ static void __attribute__((noinline)) core0_main(void)
 	tdma_init();
 
 #ifdef WIFI_KITE
+	bufid_pool_init();
 	tdma_bmgr_init();
 #else
 	buf_mgr_init();
@@ -7711,7 +7895,7 @@ void npu_init(void)
 	/* hart 0 conditional block: first-time initialization */
 	if (npu_reset_pending != 0) {
 		npu_reset_pending = 0;
-		mib12_snapshot = REG32(NPU_MIB12);
+		sim_mode_flag = REG32(NPU_MIB12);
 		REG32(NPU_SCU_RSTCTRL1) = 0;
 		REG32(NPU_THREAD_ENABLE) = 1;
 		REG32(NPU_MIB0) = ALL_FF;
