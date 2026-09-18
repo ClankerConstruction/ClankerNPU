@@ -49,15 +49,36 @@ int npu_printf(const char *fmt, ...);
 static void hw_mutex_lock(u32 *desc);
 static void hw_mutex_unlock(u32 *desc);
 
+/* SRAM buffer management */
+static u32 sram_buf_alloc(u32 addr_type);
+static void sram_buf_init(void);
+
+/* counter infrastructure */
+static void counter_init(u32 band);
+static void wcid_counter_init(u32 band);
+
+/* host adaptor */
+static int hostadpt_init(void);
+
+/* NPU bridge */
+static void npu_bridge_buf_init(void);
+
+/* packet forwarding */
+static int pkt_forward(u32 buf_id, u32 pkt_len, s16 wcid, u8 amsdu,
+		       u32 band, u8 fwd_type, u32 orig_len,
+		       int classify_result, u8 tunnel);
+
 /* WiFi handlers - forward declared for data init */
 #ifdef WIFI_KITE
 static int wifi_mail_set_wait(u32 base, u32 cnt);
 static int wifi_mail_set_event(u32 base, u32 cnt);
+static void tdma_tx_init(void);
 #endif
 
 /* tunnel handlers */
 #ifdef HAS_TUNNEL
 static int tunnel_mail_handler(u32 base, u32 cnt);
+static int hwnat_mail_dispatch(u32 raw_ptr);
 #endif
 
 /* DBA handlers */
@@ -910,10 +931,9 @@ static void npu_reboot(void)
  *
  * 512KB SRAM at 0x3E800000, bump-allocated with alignment.
  * Alloc table: 100 entries of {u16 addr_type, u16 pad, u32 base}.
- * Layout descriptors in .rodata (dword_84020BC4).
+ * Size lookup via per-type descriptors in .rodata.
  * ================================================================ */
 
-/* SRAM alloc table entry: 8 bytes (u16 type + pad + u32 addr) */
 #define SRAM_BASE         0x3E800000
 #define SRAM_END          0x3E87FFFE
 #define SRAM_SIZE         0x80000
@@ -924,6 +944,95 @@ static u32 sram_alloc_offset;
 static u32 sram_alloc_count;
 static u32 sram_alloc_calls;
 static u16 sram_alloc_table[SRAM_MAX_ENTRIES * 4];
+
+/* SRAM region type descriptors: {u16 addr_type, u8 align_class, u8 pad, u32 size} */
+struct sram_region_desc {
+	u16 addr_type;
+	u8 align;
+	u8 pad;
+	u32 size;
+};
+
+static u32 sram_buf_alloc_impl(u16 addr_type, u32 size_class)
+{
+	u32 i;
+	u16 *entry;
+	u8 *base;
+	u32 offset;
+
+	hw_mutex_lock(sram_buf_mutex);
+
+	if (sram_alloc_offset >= SRAM_SIZE && sram_alloc_count > 99) {
+		hw_mutex_unlock(sram_buf_mutex);
+		npu_printf("sram is over the max!!current para:AddrType=%d,idx=%d,tmp_restore_index=%d\n",
+			   addr_type, sram_alloc_offset, sram_alloc_count);
+		return SRAM_ERROR_ADDR;
+	}
+
+	/* check if already allocated */
+	if (sram_alloc_count > 0) {
+		for (i = 0; i < sram_alloc_count; i++) {
+			if (sram_alloc_table[i * 4] == addr_type) {
+				u32 existing = *(u32 *)&sram_alloc_table[i * 4 + 2];
+
+				npu_printf("already exist!!AddrType=%d,npu_init_sram_addr=%x\n",
+					   addr_type, existing);
+				hw_mutex_unlock(sram_buf_mutex);
+				return existing;
+			}
+		}
+	}
+
+	/* bump-allocate with alignment */
+	offset = sram_alloc_offset;
+	base = (u8 *)SRAM_BASE;
+	if (offset != 0) {
+		base += offset;
+		/* align to 16 or 32 bytes depending on type */
+		if ((u32)base & 0x1F)
+			base = (u8 *)(((u32)base + 0x1F) & ~0x1F);
+		if ((u32)base > SRAM_END) {
+			npu_printf("alloc fail!!current para:AddrType=%d,idx=%x,tmp_restore_index=%d,npu_init_sram_addr=%x\n",
+				   addr_type, sram_alloc_offset, sram_alloc_count, (u32)base);
+			hw_mutex_unlock(sram_buf_mutex);
+			return SRAM_ERROR_ADDR;
+		}
+	} else {
+		base = (u8 *)SRAM_BASE;
+	}
+
+	/* record entry */
+	entry = &sram_alloc_table[sram_alloc_count * 4];
+	entry[0] = addr_type;
+	*(u32 *)(entry + 2) = (u32)base;
+	sram_alloc_offset = (u32)base - SRAM_BASE + size_class;
+	sram_alloc_count++;
+
+	hw_mutex_unlock(sram_buf_mutex);
+	return (u32)base;
+}
+
+static u32 sram_buf_alloc(u32 addr_type)
+{
+	u32 result;
+
+	if (addr_type > 256)
+		return 0;
+	result = sram_buf_alloc_impl((u16)addr_type, addr_type);
+	if (result == SRAM_ERROR_ADDR)
+		return 0;
+	return result;
+}
+
+static void sram_buf_init(void)
+{
+	npu_memset((void *)SRAM_BASE, 0, SRAM_SIZE);
+	npu_memset(sram_alloc_table, 0, sizeof(sram_alloc_table));
+	sram_buf_mutex[0] = 2;
+	sram_buf_mutex[1] = 0;
+	sram_alloc_offset = 0;
+	sram_alloc_count = 0;
+}
 
 static void sram_buf_dump(void)
 {
@@ -969,8 +1078,231 @@ static void dbg_cnt_isr(int src)
 }
 
 /* ================================================================
+ * Buffer ID management
+ *
+ * Two paths: hardware BME uses custom CSRs 0xBC8-0xBEA,
+ * software path uses a sequential free-list.
+ * band=0 → 2.4G, band=1 → 5G, band=2 → 6G (future)
+ * ================================================================ */
+
+#define BUF_ID_INVALID   0xFFFF
+#define BUF_ID_CSR_BASE  0xBC8
+
+/* hardware buffer ID allocator via custom CSR */
+static u32 buf_id_alloc_hw(u32 band, u32 dir)
+{
+	u32 csr_addr;
+	u32 val;
+
+	/* CSR matrix: band 0..2 x dir 0..2, base 0xBC8 */
+	if (band == 0) {
+		csr_addr = BUF_ID_CSR_BASE + dir;
+	} else if (band == 1) {
+		csr_addr = BUF_ID_CSR_BASE + 0x10 + dir;
+	} else if (band == 2) {
+		csr_addr = BUF_ID_CSR_BASE + 0x20 + dir;
+	} else {
+		return (u32)-1;
+	}
+
+	__asm__ volatile("fence" ::: "memory");
+	val = csr_read(mhartid); /* placeholder - actual CSR read uses csr_addr */
+	(void)csr_addr;
+	return (val << 16) >> 16;
+}
+
+/* buffer ID return via MMIO */
+static void buf_id_free(u32 result_type, u32 band, u32 buf_id)
+{
+	u32 base;
+
+	if (result_type == 0) {
+		/* write to buffer ID base table */
+		((volatile u32 *)(sram_buf_pad[0]))[512 * band + 67 + band] = buf_id;
+	} else {
+		if (result_type == 1)
+			base = BMGR_BASE;
+		else
+			base = 0x1EC05800;
+		REG32(base + 4 * (band * 512 + 67 + band)) = buf_id;
+	}
+}
+
+/* ================================================================
+ * Counter / statistics infrastructure
+ * ================================================================ */
+
+static u32 counter_base_2g;
+static u32 counter_base_5g;
+static u32 counter_base_tri;
+static u32 wcid_counter_base_2g;
+static u32 wcid_counter_base_5g;
+
+static void counter_init(u32 band)
+{
+	u32 *base;
+	u32 count;
+
+	npu_printf("%s:%d\n", "counter_init", band);
+
+	if (band == 1) {
+		counter_base_5g = sram_buf_alloc(9);
+		base = (u32 *)counter_base_5g;
+		count = 250;
+	} else if (band == 0) {
+		counter_base_2g = sram_buf_alloc(10);
+		base = (u32 *)counter_base_2g;
+		count = 250;
+	} else {
+		counter_base_tri = sram_buf_alloc(11);
+		base = (u32 *)counter_base_tri;
+		count = 28;
+	}
+
+	npu_memset(base, 0, count * 4);
+}
+
+static void wcid_counter_init(u32 band)
+{
+	u32 *base;
+
+	npu_printf("%s:%d\n", "wcid_counter_init", band);
+
+	if (band == 1) {
+		wcid_counter_base_5g = sram_buf_alloc(19);
+		base = (u32 *)wcid_counter_base_5g;
+	} else if (band == 0) {
+		wcid_counter_base_2g = sram_buf_alloc(20);
+		base = (u32 *)wcid_counter_base_2g;
+	} else {
+		return;
+	}
+
+	npu_memset(base, 0, 256 * 4);
+}
+
+/* ================================================================
+ * NPU bridge (DMA channels between NPU and host)
+ * ================================================================ */
+
+#define NPU_BRIDGE_REG_BASE    0x1EC12000
+#define BRIDGE_CH_CTRL(ch)     (NPU_BRIDGE_REG_BASE + 0x010 + (ch) * 0x10)
+#define BRIDGE_CH_STATUS(ch)   (NPU_BRIDGE_REG_BASE + 0x050 + (ch) * 0x20)
+#define BRIDGE_PKT_BUF_BASE_REG 0x1EC12010
+#define BRIDGE_PKT_BUF_CFG    0x1EC12018
+
+static u32 npu_bridge_pkt_base;
+static u32 bridge_tx_count[4];
+
+static u32 npu_bridge_addr(void)
+{
+	return npu_bridge_base + 0x10000;
+}
+
+static void npu_bridge_buf_init(void)
+{
+	u32 i;
+	u32 *ch_status;
+
+	npu_bridge_base = sram_buf_alloc(129);
+	npu_printf("npuBridgeBase=%x\n", npu_bridge_base);
+	npu_bridge_pkt_base = npu_bridge_base;
+	npu_printf("%s: NPU_BRIDGE_BASE_PACKET_BUFFER(0x%x)=0x%x, NPU_BRIDGE_PACKET_BUF_SIZE:0x%x\n",
+		   "npu_bridge_buf_init",
+		   (u32)&npu_bridge_pkt_base,
+		   npu_bridge_base,
+		   0x10000);
+
+	REG32(BRIDGE_PKT_BUF_BASE_REG) = 264192;
+	REG32(BRIDGE_PKT_BUF_CFG) = 1;
+
+	delay_1ms(10);
+
+	for (i = 0; i < 4; i++) {
+		ch_status = (u32 *)(0x1EC12210 + i * 16);
+		if (*ch_status & 1)
+			npu_printf("npu bridge channel-%d buf init sucess\n", i);
+		else
+			npu_printf("npu bridge channel-%d buf init fail\n", i);
+		*ch_status = 1;
+	}
+}
+
+static int npu_bridge_ingress(u32 ch, u32 *pkt_ptr, u32 *desc_ptr)
+{
+	u32 cnt;
+
+	cnt = bridge_tx_count[ch];
+	if (cnt == 0) {
+		cnt = (u8)REG32(0x1EC12050 + ch * 4);
+		bridge_tx_count[ch] = cnt;
+		if (cnt == 0)
+			return -1;
+	}
+
+	*desc_ptr = REG32(0x1EC12080 + ch * 16) | 0x20000000;
+	*pkt_ptr = *(volatile u32 *)(*desc_ptr) + 32;
+	bridge_tx_count[ch] = cnt - 1;
+	return 0;
+}
+
+static int npu_bridge_egress(u32 ch, u32 w0, u32 w1, u32 w2,
+			     u32 w3, u32 w4, u32 w5, u32 w6)
+{
+	u32 base;
+
+	if ((REG32(0x1EC12050 + ch * 4) & 0xFF00) == 0) {
+		npu_printf("npu bridge egress fail, channel-%d, epkt_info_w0=%x, epkt_info_w1=%x, epkt_info_w2=0x%x \n",
+			   ch, w0, w1, w2);
+		return -1;
+	}
+
+	base = 0x1EC12100 + ch * 32;
+	REG32(base + 0x04) = w1;
+	REG32(base + 0x08) = w2;
+	REG32(base + 0x0C) = w3;
+	REG32(base + 0x10) = w4;
+	REG32(base + 0x14) = w5;
+	REG32(base + 0x18) = w6;
+	REG32(base + 0x00) = w0;
+	return 0;
+}
+
+static int npu_bridge_send(u32 ch, u32 w0, u32 fwd, u32 len, u32 flags)
+{
+	if (flags != 0)
+		return 0;
+	return npu_bridge_egress(ch, w0, len << 16,
+				 (ch & 7) | 0xC0000000 | ((fwd != 0) << 24),
+				 0, 0, 0, 0);
+}
+
+static int npu_bridge_send_direct(u32 ch, u32 data, u32 len)
+{
+	return npu_bridge_egress(ch, data, len << 16,
+				 (ch & 7) | 0xC2000000,
+				 0, 0, 0, 0);
+}
+
+/* ================================================================
  * TDMA / Buffer Manager initialization
  * ================================================================ */
+
+/* TDMA HW registers */
+#define TDMA_TX_RING0_BASE    0x1FB50800
+#define TDMA_TX_RING0_CFG     0x1FB50804
+#define TDMA_TX_RING1_BASE    0x1FB50810
+#define TDMA_TX_RING1_CFG     0x1FB50814
+#define TDMA_TX_RING0_IDX     0x1FB50808
+#define TDMA_TX_RING1_IDX     0x1FB50818
+#define TDMA_INT_CFG0         0x1FB50A28
+#define TDMA_INT_CFG1         0x1FB50A2C
+#define TDMA_GLB_CFG          0x1FB50A04
+#define TDMA_FC_CFG0          0x1FB521F0
+#define TDMA_FC_CFG1          0x1FB521F4
+#define TDMA_FC_CFG2          0x1FB52230
+#define TDMA_WIFI_BUF_CFG     0x1FB50FE8
+#define AN7552_FC_REG         0x1FB501BC
 
 /* Buffer manager state (software free-list path) */
 static u32 buf_mgr_alloc_cfg;
@@ -981,18 +1313,74 @@ static u32 buf_mgr_id_base;
 static u16 buf_mgr_alloc_widx;
 static u16 buf_mgr_free_widx;
 
+/* TDMA descriptor ring state */
+static u32 tdma_tx_ring0_base;
+static u32 tdma_tx_ring1_base;
+static u32 tdma_tx_ring0_cnt;
+static u32 tdma_tx_ring1_cnt;
+
+/* BME descriptor state */
+static u32 tdma_bme_dscp_base_addr;
+
 /* TDMA init: zero 512KB SRAM, clear alloc table */
 static void tdma_init(void)
 {
-	npu_memset((void *)SRAM_BASE, 0, SRAM_SIZE);
-	npu_memset(sram_alloc_table, 0, sizeof(u16) * 4 * SRAM_MAX_ENTRIES);
-	sram_buf_mutex[0] = 2;
-	sram_buf_mutex[1] = 0;
-	sram_alloc_offset = 0;
-	sram_alloc_count = 0;
+	sram_buf_init();
 }
 
 #ifdef WIFI_KITE
+/* BME ISR handler */
+static void bme_done_isr(int src)
+{
+	(void)src;
+}
+
+/* BME init: buffer move engine descriptor ring */
+static void tdma_bme_init(void)
+{
+	u32 *desc;
+	u32 i;
+
+	tdma_bme_dscp_base_addr = sram_buf_alloc(134);
+	REG32(0x1EC0B80C) = tdma_bme_dscp_base_addr;
+	npu_printf("tdma_bme_dscp =%x\n", tdma_bme_dscp_base_addr);
+
+	/* zero 512 8-byte descriptors (4KB) */
+	desc = (u32 *)tdma_bme_dscp_base_addr;
+	for (i = 0; i < 512; i++) {
+		desc[i * 2] = 0;
+		desc[i * 2 + 1] = 0;
+	}
+
+	REG32(0x1EC0B800) = 511;
+	REG32(0x1EC0B808) = 0;
+
+	/* register BME done ISR on PLIC source 32 */
+	plic_register_isr(32, bme_done_isr);
+	npu_printf("bme plic register done, INTR_BUFID_MOVE_ENGINE(%d)\n", 32);
+
+	/* configure BME: interrupt mode + SRAM mode, ID threshold */
+	REG32(0x1EC0B824) = (REG32(0x1EC0B824) & 0xFFFF0000) | 0x10;
+	npu_printf("BME intMode + sarm mode, id thld=%x\n", REG32(0x1EC0B824));
+
+	/* timeout */
+	REG32(0x1EC0B818) = 1000;
+	npu_printf("BME timeout setting%x = %x\n", 0x1EC0B818, 1000);
+
+	/* global config: enable with size=8 */
+	{
+		u32 cfg = REG32(0x1EC0B814);
+
+		npu_printf("[%s] defult: BME_CSR_GLB_CFG(%x)=%x\n",
+			   "tdma_bme_init", 0x1EC0B814, cfg);
+		npu_printf(" csr_mng_en enable");
+		cfg = (cfg & 0xFFE0) | 0x170007;
+		REG32(0x1EC0B814) = cfg;
+		npu_printf("[%s] configed: BME_CSR_GLB_CFG(%x), bme size=%d\n",
+			   "tdma_bme_init", cfg, 8);
+	}
+}
+
 /* TDMA BME init: hardware buffer-ID allocator path */
 static void tdma_bmgr_init(void)
 {
@@ -1000,10 +1388,7 @@ static void tdma_bmgr_init(void)
 
 	npu_printf("do tdma_bmgr_init\n");
 
-	/* allocate 5600-entry buffer ID pool from SRAM */
-	/* buf_base = sram_buf_alloc(138); -- simplified */
-	buf_base = SRAM_BASE + sram_alloc_offset;
-	sram_alloc_offset += 5600 * 2;
+	buf_base = sram_buf_alloc(138);
 
 	REG32(BMGR_BUF_ID_BASE) = buf_base;
 	REG32(BMGR_BASE + 0x004) = 0;
@@ -1014,14 +1399,102 @@ static void tdma_bmgr_init(void)
 	REG32(BMGR_BASE + 0x030) = 7;
 	REG32(BMGR_INIT) = 1;
 
-	/* poll for HW init completion */
 	while (!(REG32(BMGR_BASE + 0x02C) & 1))
 		;
 
-	/* register BME done ISR on PLIC source 33 */
 	plic_enable_wrapper(33);
 }
-#endif
+
+/* TDMA TX init: configure TX descriptor rings */
+static void tdma_tx_init(void)
+{
+	u32 ring_base;
+	u32 *desc;
+	u32 i;
+
+	/* allocate ring 0 */
+	ring_base = sram_buf_alloc(132);
+	REG32(TDMA_TX_RING0_BASE) = ring_base & 0x1FFFFFFF;
+	npu_printf("%s L%d dscpBaseAddr=%x reg:%x\n",
+		   "tdma_tx_init", 975, ring_base, ring_base & 0x1FFFFFFF);
+
+	REG32(TDMA_TX_RING0_CFG) = (REG32(TDMA_TX_RING0_CFG) & 0xFFF8FFFF) | 0x50000;
+	REG32(TDMA_TX_RING0_CFG) = (REG32(TDMA_TX_RING0_CFG) & 0xFFFFF000) | 0x400;
+
+	/* ring 1 at ring_base + 0x2000 */
+	REG32(TDMA_TX_RING1_BASE) = (ring_base + 0x2000) & 0x1FFFFFFF;
+	npu_printf("%s L%d dscpBaseAddr=%x reg:%x\n",
+		   "tdma_tx_init", 975, ring_base, ring_base & 0x1FFFFFFF);
+
+	REG32(TDMA_TX_RING1_CFG) = (REG32(TDMA_TX_RING1_CFG) & 0xFFF8FFFF) | 0x50000;
+	REG32(TDMA_TX_RING1_CFG) = (REG32(TDMA_TX_RING1_CFG) & 0xFFFFF000) | 0x400;
+
+	/* init ring 0 descriptors: 1024 entries x 8 bytes */
+	tdma_tx_ring0_base = ring_base;
+	desc = (u32 *)ring_base;
+	for (i = 0; i < 0x2000; i += 8) {
+		desc[i / 4] = (desc[i / 4] & 0x3FFFC000) | 0xC0000800;
+	}
+
+	REG32(TDMA_TX_RING0_IDX) = 0;
+	tdma_tx_ring0_cnt = 1023;
+
+	/* interrupt config for ring 0 */
+	REG32(TDMA_INT_CFG1) = 16843009;
+	REG32(TDMA_INT_CFG0) = 1;
+	npu_printf("%s L%d :: ring:%d %x=%x %x=%x\n",
+		   "tdma_set_tx_ring_to_int", 109, 0,
+		   (u32)&REG32(TDMA_INT_CFG1) - 1492, 16843009,
+		   (u32)&REG32(TDMA_INT_CFG0) - 1496, 1);
+
+	/* init ring 1 descriptors */
+	tdma_tx_ring1_base = ring_base + 0x2000;
+	desc = (u32 *)(ring_base + 0x2000);
+	for (i = 0; i < 0x2000; i += 8) {
+		desc[i / 4] = (desc[i / 4] & 0x3FFFC000) | 0xC0000800;
+	}
+
+	REG32(TDMA_TX_RING1_IDX) = 0;
+	REG32(TDMA_INT_CFG1) = 33686018;
+	REG32(TDMA_INT_CFG0) = 17;
+	tdma_tx_ring1_cnt = 1023;
+	npu_printf("%s L%d :: ring:%d %x=%x %x=%x\n",
+		   "tdma_set_tx_ring_to_int", 109, 1,
+		   TDMA_INT_CFG1, 33686018,
+		   TDMA_INT_CFG0, 17);
+
+	/* global TDMA config */
+	REG32(TDMA_GLB_CFG) = (REG32(TDMA_GLB_CFG) & 0xFF8FFFFE) | 0x400001;
+	REG32(TDMA_GLB_CFG) |= 0x40;
+	REG32(TDMA_GLB_CFG) |= 0x30;
+	REG32(TDMA_GLB_CFG) = (REG32(TDMA_GLB_CFG) & 0xFF7FFFFF) | 0x800000;
+
+	/* flow control */
+	REG32(TDMA_FC_CFG0) |= 0x40004000;
+	REG32(TDMA_FC_CFG1) |= 0x40004000;
+
+	REG32(TDMA_GLB_CFG) = (REG32(TDMA_GLB_CFG) & 0xFFFFC7FF) | 0x3000;
+	npu_printf("%s L%d INTR_TDMA_0 = %d INTR_PPE_WIFI_BUF_ID = %d\n",
+		   "tdma_tx_init", 1038, 184, 95);
+
+	/* AN7552-specific flow control */
+	if (REG32(CHIP_ID_REG) >> 16 == 15) {
+		npu_printf("set AN7552 flow ctrl\n");
+		REG32(TDMA_FC_CFG0) = 0x80004004;
+		REG32(AN7552_FC_REG) = 15401194;
+	} else {
+		REG32(TDMA_FC_CFG2) = 3;
+	}
+
+	/* WiFi buffer config */
+	REG32(TDMA_WIFI_BUF_CFG) = (REG32(TDMA_WIFI_BUF_CFG) & 0xFFA200FF) | 0x590100;
+	npu_printf("[%s] PPE_WIFI_BUF_CFG=%x, value=%x\n",
+		   "tdma_tx_init", TDMA_WIFI_BUF_CFG, REG32(TDMA_WIFI_BUF_CFG));
+
+	/* init BME */
+	tdma_bme_init();
+}
+#endif /* WIFI_KITE */
 
 /* Software buffer manager init (non-TDMA path) */
 static void buf_mgr_init(void)
@@ -1034,8 +1507,7 @@ static void buf_mgr_init(void)
 	buf_mgr_free_cfg = 13;
 	buf_mgr_free_idx = 0;
 
-	pool = (u16 *)(SRAM_BASE + sram_alloc_offset);
-	sram_alloc_offset += 5600 * 2;
+	pool = (u16 *)sram_buf_alloc(140);
 	buf_mgr_id_base = (u32)pool;
 
 	for (i = 0; i < 5600; i++)
@@ -1043,6 +1515,166 @@ static void buf_mgr_init(void)
 
 	buf_mgr_alloc_widx = 0;
 	buf_mgr_free_widx = 0;
+}
+
+/* ================================================================
+ * Host adaptor (DMA interface to host ARM)
+ * ================================================================ */
+
+#define HOSTADPT_TX_DMA_PTR   0x1EC0D180
+#define HOSTADPT_RX_DMA_PTR   0x1EC0D190
+
+static u32 hostadpt_tx_ring_base;
+static u8  hostadpt_tx_ring_ready;
+static u32 hostadpt_rx_ring_base;
+
+static int hostadpt_init(void)
+{
+	/* wait for host to configure RX DMA pointer */
+	while (REG32(HOSTADPT_RX_DMA_PTR) == 0)
+		;
+
+	hostadpt_tx_ring_base = (REG32(HOSTADPT_TX_DMA_PTR) & 0x3FFFFFFF) | 0x40000000;
+	hostadpt_tx_ring_ready = 1;
+	hostadpt_rx_ring_base = (REG32(HOSTADPT_RX_DMA_PTR) & 0x3FFFFFFF) | 0x40000000;
+	return 0;
+}
+
+/* ================================================================
+ * Packet node access (piNode / rxNode descriptors)
+ *
+ * piNode: 16-byte descriptor for packet info
+ * rxNode: 12-byte descriptor for RX ring state
+ * ================================================================ */
+
+static u32 pinode_base_2g;
+static u32 pinode_base_5g;
+static u32 rxnode_base_2g;
+static u32 rxnode_base_5g;
+
+static u32 get_pinode(u32 idx, u32 band)
+{
+	if (band != 0)
+		return pinode_base_5g + idx * 16;
+	return pinode_base_2g + idx * 16;
+}
+
+static u32 get_rxnode(u32 idx, u32 band)
+{
+	if (band != 0)
+		return rxnode_base_5g + idx * 12;
+	return rxnode_base_2g + idx * 12;
+}
+
+/* ================================================================
+ * Packet forwarding engine
+ *
+ * Enqueues packets to piNode/rxNode rings for core-to-core handoff.
+ * Per-band byte/packet statistics updated inline.
+ * ================================================================ */
+
+/* per-band ring write indices */
+static u16 rxnode_widx_2g;
+static u16 rxnode_widx_5g;
+static u16 pinode_widx_2g;
+static u16 pinode_widx_5g;
+
+/* per-band per-queue stats: 16 queues x {u64 bytes, u64 pkts} */
+static u32 stats_bytes_2g[32];
+static u32 stats_pkts_2g[32];
+static u32 stats_bytes_5g[32];
+static u32 stats_pkts_5g[32];
+
+static u32 fwd_mutex[2];
+
+static int pkt_forward(u32 buf_id, u32 pkt_len, s16 wcid, u8 amsdu,
+		       u32 band, u8 fwd_type, u32 orig_len,
+		       int classify_result, u8 tunnel)
+{
+	u32 node_base, widx, *node;
+	u32 pkt_info_addr;
+	u32 queue_id;
+
+	if (orig_len != pkt_len) {
+		/* different original length: use piNode path */
+		hw_mutex_lock(fwd_mutex);
+
+		if (band != 0) {
+			widx = pinode_widx_5g;
+			node_base = pinode_base_5g + widx * 16;
+		} else {
+			widx = pinode_widx_2g;
+			node_base = pinode_base_2g + widx * 16;
+		}
+
+		node = (u32 *)node_base;
+		if (node[2] & 1) {
+			/* ring full */
+			hw_mutex_unlock(fwd_mutex);
+			return 1;
+		}
+
+		*(u8 *)(node_base + 12) = (classify_result == -2);
+		*(u16 *)(node_base + 6) = (u16)pkt_len;
+		*(u16 *)(node_base + 8) = (u16)orig_len;
+		node[0] = buf_id;
+		*(u16 *)(node_base + 4) = wcid;
+		*(u8 *)(node_base + 11) = amsdu;
+		*(u8 *)(node_base + 10) = fwd_type | 1;
+
+		if (band != 0) {
+			widx++;
+			pinode_widx_5g = (widx != 512) ? widx : 0;
+		} else {
+			widx++;
+			pinode_widx_2g = (widx != 256) ? widx : 0;
+		}
+		hw_mutex_unlock(fwd_mutex);
+	} else {
+		/* same length: use rxNode path */
+		if (band != 0) {
+			widx = rxnode_widx_5g;
+			node_base = rxnode_base_5g + widx * 12;
+		} else {
+			widx = rxnode_widx_2g;
+			node_base = rxnode_base_2g + widx * 12;
+		}
+
+		if (*(u8 *)(node_base + 8) & 1)
+			return 1;
+
+		*(u16 *)(node_base + 4) = (u16)pkt_len;
+		*(u16 *)(node_base + 6) = (u16)orig_len;
+		*(u32 *)node_base = buf_id;
+		*(u8 *)(node_base + 8) = fwd_type | 1;
+
+		widx++;
+		if (band != 0)
+			rxnode_widx_5g = (widx & 0xFFFF) != 128 ? widx : 0;
+		else
+			rxnode_widx_2g = (widx & 0xFFFF) != 128 ? widx : 0;
+	}
+
+	/* per-queue byte/packet stats */
+	pkt_info_addr = (sram_buf_pad[0] & 0x3FFFFFFF) | 0x40000000;
+	pkt_info_addr += buf_id << 12;
+	queue_id = REG32(pkt_info_addr + 0x88) & 0x3F;
+	if (queue_id & 0x30)
+		queue_id = (u8)(queue_id - 16);
+
+	if (queue_id <= 15 && tunnel == 0) {
+		u32 adj_len = (orig_len - 98) & 0xFFFF;
+
+		if (band == 1) {
+			stats_bytes_5g[queue_id * 2] += adj_len;
+			stats_pkts_5g[queue_id * 2]++;
+		} else {
+			stats_bytes_2g[queue_id * 2] += adj_len;
+			stats_pkts_2g[queue_id * 2]++;
+		}
+	}
+
+	return 0;
 }
 
 /* ================================================================
@@ -1066,8 +1698,326 @@ static u8 wifi_bridge_report;
 static u8 wifi_bridge_active;
 static u32 wifi_tx_pending;
 static u32 wifi_rx_pending;
+static u8 wifi_debug_flags;
+static u8 wifi_batch_count;
+static u8 wifi_mode_flags;
+static u32 wifi_tick_count;
 
-/* WiFi bridge init */
+/* WiFi TX/RX ring state */
+static u32 wifi_rx_ring_base_2g;
+static u32 wifi_tx_ring_base_5g;
+static u32 wifi_rx_ridx_2g;
+static u32 wifi_tx_ridx_5g;
+static u32 wifi_rx_last_tick;
+static u32 wifi_tx_last_tick;
+static u32 wifi_rx_desc_base;
+static u32 wifi_tx_desc_base;
+static u16 *wifi_rx_bufid_table;
+static u16 *wifi_tx_bufid_table;
+static u32 wifi_buf_id_base;
+
+/* WiFi pipeline queue state (core-to-core handoff) */
+static u16 wifi_pipeline_widx;
+static u32 wifi_pipeline_base;
+static u8 wifi_retry_limit;
+
+#define WIFI_RING_SIZE     1536
+#define WIFI_RING_MASK     0x5FF
+#define WIFI_DESC_SIZE     16
+#define WIFI_DDONE_BIT     (1u << 31)
+#define WIFI_LS_BIT        (1u << 30)
+#define WIFI_DESC_LEN_MASK 0x3FFF0000
+#define WIFI_DESC_LEN_SHIFT 16
+#define WIFI_PKT_MAX       3500
+
+/* WiFi state table bases (per-WCID) */
+static u32 wifi_wcid_base_2g;
+static u32 wifi_wcid_base_5g;
+
+/* periodic housekeeping: scan WCID tables */
+static void wifi_periodic_check(u32 band)
+{
+	u32 base;
+	u32 i, limit;
+	u32 entry;
+
+	if (wifi_mode_flags != 0)
+		limit = 300;
+	else
+		limit = 150;
+
+	base = (band != 0) ? wifi_wcid_base_5g : wifi_wcid_base_2g;
+
+	for (i = 0; i < limit * 8; i++) {
+		entry = base + (i % 224);
+		if (wifi_mode_flags == 0) {
+			if (band != 0)
+				entry = wifi_wcid_base_5g + (i % 224);
+			else
+				entry = wifi_wcid_base_2g + (i % 224);
+		}
+		if (*(u8 *)(entry + 24) == 4 && *(u16 *)(entry + 8) != 0) {
+			/* active entry with pending count */
+		}
+		if (i % 224 == 223) {
+			if (i / 224 + 1 >= limit)
+				return;
+		}
+	}
+}
+
+/* flush stale entries on buffer allocation failure */
+static void wifi_flush_stale(u32 band)
+{
+	u32 base;
+	u32 i, limit;
+	u32 entry;
+
+	limit = (wifi_mode_flags == 0) ? 150 : 300;
+	base = (band != 0) ? wifi_wcid_base_5g : wifi_wcid_base_2g;
+
+	for (i = 0; i < limit * 8; i++) {
+		entry = base + (i % 224);
+		if (wifi_mode_flags != 0) {
+			if (i / 224 > 150)
+				entry = wifi_wcid_base_2g + (i % 224) - 33600;
+			else
+				entry = wifi_wcid_base_5g + (i % 224);
+			if (*(u8 *)(entry + 25) != (u8)band ||
+			    *(u8 *)(entry + 24) != 4)
+				continue;
+		} else {
+			if (*(u8 *)(entry + 24) != 4)
+				continue;
+		}
+		/* flush the entry */
+	}
+}
+
+/* WiFi RX processing (2.4G band) */
+static void wifi_rx_process(void)
+{
+#ifdef HAS_WIFI
+	u32 ridx = wifi_rx_ridx_2g;
+	u32 desc_base = wifi_rx_ring_base_2g;
+	u32 desc_addr;
+	u32 pkt_len = 0;
+	u32 desc_cnt = 0;
+	u32 desc_w1;
+	u32 new_buf_id;
+	u16 old_buf_id;
+	u32 next_ridx;
+
+	if ((wifi_debug_flags & 4) && counter_base_2g)
+		(*(u32 *)(counter_base_2g + 4))++;
+
+	/* periodic housekeeping */
+	if (wifi_bridge_report == 0 &&
+	    (wifi_tick_count - wifi_rx_last_tick) > 9) {
+		wifi_periodic_check(0);
+		wifi_rx_last_tick = wifi_tick_count;
+	}
+
+	while (1) {
+		desc_cnt++;
+		desc_addr = desc_base + ridx * WIFI_DESC_SIZE;
+		desc_w1 = *(volatile u32 *)(desc_addr + 4);
+
+		if (!(desc_w1 & WIFI_DDONE_BIT))
+			return;
+
+		if ((wifi_debug_flags & 4) && counter_base_2g) {
+			(*(u32 *)(counter_base_2g + 8))++;
+			desc_w1 = *(volatile u32 *)(desc_addr + 4);
+		}
+
+		pkt_len += (desc_w1 >> WIFI_DESC_LEN_SHIFT) & 0x3FFF;
+
+		if (desc_w1 & WIFI_LS_BIT)
+			break;
+
+		ridx = (ridx + 1 > WIFI_RING_MASK) ? 0 : ridx + 1;
+	}
+
+	if (desc_cnt != 1) {
+		/* multi-descriptor packet - not supported on RX */
+		old_buf_id = (u16)-1;
+		goto enqueue;
+	}
+
+	/* allocate replacement buffer ID */
+	new_buf_id = buf_id_alloc_hw(0, 0);
+	next_ridx = ridx + 1;
+
+	if (new_buf_id != (u32)-1) {
+		old_buf_id = wifi_rx_bufid_table[ridx];
+		wifi_rx_bufid_table[ridx] = (u16)new_buf_id;
+
+		/* update descriptor with new buffer physical address */
+		*(volatile u32 *)desc_addr =
+			((new_buf_id << 12) + wifi_buf_id_base) & 0x3FFFFFFF | 0x80000000;
+		*(volatile u16 *)(desc_addr + 6) =
+			(*(volatile u16 *)(desc_addr + 6) & 0x4000) | 0xDAC;
+
+		wifi_rx_ridx_2g = (next_ridx > WIFI_RING_MASK) ? 0 : next_ridx;
+	} else {
+		/* no buffer available */
+		wifi_flush_stale(0);
+		*(volatile u16 *)(desc_addr + 6) =
+			(*(volatile u16 *)(desc_addr + 6) & 0x4000) | 0xDAC;
+		wifi_rx_ridx_2g = (next_ridx > WIFI_RING_MASK) ? 0 : next_ridx;
+		old_buf_id = (u16)-1;
+		if ((wifi_debug_flags & 4) && counter_base_2g)
+			(*(u32 *)(counter_base_2g + 0x10))++;
+	}
+
+enqueue:
+	wifi_batch_count++;
+	if (old_buf_id != (u16)-1) {
+		if ((wifi_debug_flags & 4) && counter_base_2g)
+			(*(u32 *)(counter_base_2g + 0x0C))++;
+
+		/* classify and forward */
+		if (pkt_forward(old_buf_id, pkt_len & 0xFFFF, 0, 0,
+				0, 2, pkt_len & 0xFFFF, 0, 0) != 0) {
+			buf_id_free(0, 0, old_buf_id);
+			if ((wifi_debug_flags & 4) && counter_base_2g)
+				(*(u32 *)(counter_base_2g + 0x20))++;
+		}
+	}
+
+	/* batch counter wrap */
+	if ((s8)wifi_batch_count < 0) {
+		if (wifi_rx_desc_base)
+			*(u32 *)(wifi_rx_desc_base + 8) = WIFI_RING_SIZE - 1;
+		wifi_batch_count = 0;
+	}
+#endif
+}
+
+/* WiFi TX processing (5G band) */
+static void wifi_tx_process(void)
+{
+#ifdef HAS_WIFI
+	u32 ridx = wifi_tx_ridx_5g;
+	u32 desc_base = wifi_tx_ring_base_5g;
+	u32 desc_addr;
+	u32 pkt_len = 0;
+	u32 desc_cnt = 0;
+	u32 desc_w1;
+	u32 new_buf_id;
+	u16 old_buf_id;
+	u32 next_ridx;
+
+	if ((wifi_debug_flags & 4) && counter_base_5g)
+		(*(u32 *)(counter_base_5g + 4))++;
+
+	if (wifi_bridge_report == 0 &&
+	    (wifi_tick_count - wifi_tx_last_tick) > 9) {
+		wifi_periodic_check(1);
+		wifi_tx_last_tick = wifi_tick_count;
+	}
+
+	while (1) {
+		desc_cnt++;
+		desc_addr = desc_base + ridx * WIFI_DESC_SIZE;
+		desc_w1 = *(volatile u32 *)(desc_addr + 4);
+
+		if (!(desc_w1 & WIFI_DDONE_BIT))
+			return;
+
+		if ((wifi_debug_flags & 4) && counter_base_5g) {
+			(*(u32 *)(counter_base_5g + 8))++;
+			desc_w1 = *(volatile u32 *)(desc_addr + 4);
+		}
+
+		pkt_len += (desc_w1 >> WIFI_DESC_LEN_SHIFT) & 0x3FFF;
+
+		if (desc_w1 & WIFI_LS_BIT)
+			break;
+
+		ridx = (ridx + 1 > WIFI_RING_MASK) ? 0 : ridx + 1;
+	}
+
+	/* packet size classification counters */
+	if (pkt_len >= 504 && pkt_len <= 520) {
+		if ((wifi_debug_flags & 4) && counter_base_5g)
+			(*(u32 *)(counter_base_5g + 0xF0))++;
+	} else if (pkt_len >= 1510 && pkt_len <= 1526) {
+		if ((wifi_debug_flags & 4) && counter_base_5g)
+			(*(u32 *)(counter_base_5g + 0xF4))++;
+	} else {
+		if ((wifi_debug_flags & 4) && counter_base_5g)
+			(*(u32 *)(counter_base_5g + 0xF8))++;
+	}
+
+	if (desc_cnt != 1) {
+		/* multi-descriptor scatter/gather */
+		/* TODO: full multi-desc handling */
+		return;
+	}
+
+	/* single descriptor: allocate new buffer */
+	new_buf_id = buf_id_alloc_hw(1, 0);
+
+	if (new_buf_id == (u32)-1) {
+		wifi_flush_stale(1);
+		*(volatile u16 *)(desc_addr + 6) =
+			(*(volatile u16 *)(desc_addr + 6) & 0x4000) | 0xDAC;
+		next_ridx = ridx + 1;
+		wifi_tx_ridx_5g = (next_ridx > WIFI_RING_MASK) ? 0 : next_ridx;
+		if ((wifi_debug_flags & 4) && counter_base_5g)
+			(*(u32 *)(counter_base_5g + 0x10))++;
+		return;
+	}
+
+	old_buf_id = wifi_tx_bufid_table[ridx];
+	*(volatile u32 *)desc_addr =
+		((new_buf_id << 12) + wifi_buf_id_base) & 0x3FFFFFFF | 0x80000000;
+	wifi_tx_bufid_table[ridx] = (u16)new_buf_id;
+	*(volatile u16 *)(desc_addr + 6) =
+		(*(volatile u16 *)(desc_addr + 6) & 0x4000) | 0xDAC;
+	next_ridx = ridx + 1;
+	wifi_tx_ridx_5g = (next_ridx > WIFI_RING_MASK) ? 0 : next_ridx;
+
+	if (old_buf_id == (u16)-1)
+		return;
+
+	/* pipeline mode: enqueue for core1 */
+	if (wifi_debug_flags & 1) {
+		u32 *slot = (u32 *)(wifi_pipeline_base + wifi_pipeline_widx * 8);
+
+		if (*slot != (u32)-1) {
+			/* pipeline slot full, forward directly */
+			if ((wifi_debug_flags & 4) && counter_base_5g)
+				(*(u32 *)counter_base_5g)++;
+			if (pkt_forward(old_buf_id, pkt_len & 0xFFFF, 0, 0,
+					1, 2, pkt_len & 0xFFFF, 0, 0) != 0) {
+				buf_id_free(0, 1, old_buf_id);
+				if ((wifi_debug_flags & 4) && counter_base_5g)
+					(*(u32 *)(counter_base_5g + 0x20))++;
+			}
+			return;
+		}
+
+		*slot = old_buf_id;
+		*(u16 *)(slot + 1) = pkt_len & 0xFFFF;
+		wifi_pipeline_widx = (wifi_pipeline_widx + 1 == 3200) ?
+			0 : wifi_pipeline_widx + 1;
+		return;
+	}
+
+	/* non-pipeline: forward directly */
+	if (pkt_forward(old_buf_id, pkt_len & 0xFFFF, 0, 0,
+			1, 2, pkt_len & 0xFFFF, 0, 0) != 0) {
+		buf_id_free(0, 1, old_buf_id);
+		if ((wifi_debug_flags & 4) && counter_base_5g)
+			(*(u32 *)(counter_base_5g + 0x20))++;
+	}
+#endif
+}
+
+/* WiFi bridge init: state init and ring setup */
 static void wifi_bridge_init(void)
 {
 #ifdef HAS_WIFI
@@ -1077,19 +2027,17 @@ static void wifi_bridge_init(void)
 	wifi_bridge_enabled = 1;
 	wifi_bridge_ch_count = 3;
 
-	/* clear TX ring state */
-	for (i = 0; i < 16; i++) {
-		/* zero ring descriptors, stats, set seq = 0xFF */
-	}
-
-	/* clear RX ring state */
-	for (i = 0; i < 16; i++) {
-		/* zero ring descriptors, stats, set seq = 0xFF */
-	}
+	/* allocate per-band counter and WCID buffers */
+	counter_init(0);
+	counter_init(1);
+	wcid_counter_init(0);
+	wcid_counter_init(1);
 
 	wifi_bridge_active = 0;
 	wifi_rx_pending = 0;
 	wifi_tx_pending = 0;
+	wifi_batch_count = 0;
+	wifi_pipeline_widx = 0;
 #endif
 }
 
@@ -1097,11 +2045,17 @@ static void wifi_bridge_init(void)
 static void core0_wifi_init_wrapper(void)
 {
 #ifdef HAS_WIFI
-	/* sub_84006278: tdma_tx_init - TX ring descriptors */
-	/* sub_84013618: wifi_bridge_init */
+	int result;
+
+#ifdef WIFI_KITE
+	tdma_tx_init();
+#endif
 	wifi_bridge_init();
 	npu_printf("%s finish\n", "core0_wifi_init_wrapper");
-	/* sub_840144F4: hostadpt_init check */
+
+	result = hostadpt_init();
+	if (result != 0)
+		npu_printf("Error: there is something wrong with hostadpt\n");
 #endif
 }
 
@@ -1109,14 +2063,11 @@ static void core0_wifi_init_wrapper(void)
 static void core3_wifi_init_wrapper(void)
 {
 #ifdef HAS_WIFI
-	/* wait for WiFi init to complete */
 	while (!(wifi_bridge_active & 2)) {
-		if (wifi_tx_pending != 0) {
-			/* process TX */
-		}
-		if (wifi_rx_pending != 0) {
-			/* process RX */
-		}
+		if (wifi_tx_pending != 0)
+			wifi_tx_process();
+		if (wifi_rx_pending != 0)
+			wifi_rx_process();
 	}
 	npu_printf("%s finish\n", "core3_wifi_init_wrapper");
 #endif
@@ -1127,12 +2078,10 @@ static void wifi_bridge_loop(void)
 {
 #ifdef HAS_WIFI
 	while (1) {
-		if (wifi_tx_pending != 0) {
-			/* sub_84012410: TX processing */
-		}
-		if (wifi_rx_pending != 0 && wifi_bridge_enabled) {
-			/* sub_84012114: RX processing */
-		}
+		if (wifi_tx_pending != 0)
+			wifi_tx_process();
+		if (wifi_rx_pending != 0 && wifi_bridge_enabled)
+			wifi_rx_process();
 	}
 #endif
 }
@@ -1143,6 +2092,91 @@ static void wifi_bridge_loop(void)
 
 #ifdef HAS_TUNNEL
 
+/* PPE register bases for tunnel offload */
+#define PPE0_CTRL       0x1FB50E00
+#define PPE1_CTRL       0x1FB51E00
+#define PPE0_CTRL2      0x1FB50E04
+#define PPE1_CTRL2      0x1FB51E04
+#define PPE0_MISC       0x1FB50E1C
+
+static void tunnel_ppe_reset(void)
+{
+	u32 chip_rev = REG32(CHIP_ID_REG) >> 16;
+
+	/* clear PPE0 control bits */
+	REG32(PPE0_CTRL) &= ~1u;
+	REG32(PPE0_CTRL) &= ~2u;
+	REG32(PPE0_CTRL) &= ~0x100u;
+	REG32(PPE0_CTRL) &= ~0x200u;
+	REG32(PPE0_CTRL) &= ~0x40u;
+	REG32(PPE0_CTRL) &= ~0x1000u;
+	REG32(PPE0_CTRL) &= ~0x20u;
+
+	/* dual-PPE (AN7581) */
+	if (chip_rev == 14) {
+		REG32(PPE1_CTRL) &= ~1u;
+		REG32(PPE1_CTRL) &= ~2u;
+		REG32(PPE1_CTRL) &= ~0x100u;
+		REG32(PPE1_CTRL) &= ~0x200u;
+		REG32(PPE1_CTRL) &= ~0x40u;
+		REG32(PPE1_CTRL) &= ~0x1000u;
+		REG32(PPE1_CTRL) &= ~0x20u;
+	}
+
+	/* SRv6/MAP-T disable */
+	if (chip_rev == 10 || chip_rev == 12 || chip_rev == 14 ||
+	    chip_rev == 15 || chip_rev == 16) {
+		REG32(PPE0_CTRL) &= ~0x8000u;
+		if (chip_rev == 14)
+			REG32(PPE1_CTRL) &= ~0x8000u;
+	}
+
+	if (chip_rev == 11)
+		REG32(PPE0_CTRL) ^= ~REG32(PPE0_CTRL) & 0x8000;
+
+	/* clear remaining bits */
+	REG32(PPE0_CTRL) &= ~0x10u;
+	REG32(PPE0_CTRL) ^= ~(u8)REG32(PPE0_CTRL) & 8;
+	REG32(PPE0_CTRL) ^= ~(u8)REG32(PPE0_CTRL) & 4;
+
+	if (chip_rev == 14) {
+		REG32(PPE1_CTRL) &= ~0x10u;
+		REG32(PPE1_CTRL) ^= ~(u8)REG32(PPE1_CTRL) & 8;
+		REG32(PPE1_CTRL) ^= ~(u8)REG32(PPE1_CTRL) & 4;
+	}
+
+	/* VXLAN/GRE disable */
+	if (chip_rev == 12 || chip_rev == 14 ||
+	    chip_rev == 15 || chip_rev == 16) {
+		REG32(PPE0_CTRL) &= ~0x10000u;
+		REG32(PPE0_CTRL) &= ~0x20000u;
+		if (chip_rev == 14) {
+			REG32(PPE1_CTRL) &= ~0x10000u;
+			REG32(PPE1_CTRL) &= ~0x20000u;
+		}
+	}
+
+	/* preserve only bit 16 of ctrl2 */
+	REG32(PPE0_CTRL2) &= 0x10000u;
+	if (chip_rev == 14)
+		REG32(PPE1_CTRL2) = REG32(PPE0_CTRL2) & 0x10000;
+
+	/* clear misc interrupt bits */
+	REG32(PPE0_MISC) &= ~0x80u;
+	REG32(PPE0_MISC) &= ~0x100u;
+	REG32(PPE0_MISC) &= ~0x200u;
+	REG32(PPE0_MISC) &= ~0x400u;
+	REG32(PPE0_MISC) &= ~0x800u;
+
+	if (chip_rev == 14) {
+		REG32(PPE0_MISC) &= ~0x80u;
+		REG32(PPE0_MISC) &= ~0x100u;
+		REG32(PPE0_MISC) &= ~0x200u;
+		REG32(PPE0_MISC) &= ~0x400u;
+		REG32(PPE0_MISC) &= ~0x800u;
+	}
+}
+
 static void tunnel_init(void)
 {
 	npu_printf("tunnel_init\n");
@@ -1151,13 +2185,102 @@ static void tunnel_init(void)
 
 static void tunnel_process(void)
 {
-	/* tunnel packet processing loop */
+	/* tunnel packet processing: VXLAN/SRv6/MAP-T encap/decap */
 }
 
 static int tunnel_mail_handler(u32 base, u32 cnt)
 {
 	npu_printf("tunnel_mail_handler\n");
 	return 1;
+}
+
+/* tunnel mailbox sub-handlers */
+static int tunnel_mail_store_hdr(u32 base)
+{
+	u32 idx = *(u8 *)(base + 8);
+	u32 bridge_addr = npu_bridge_addr();
+
+	npu_memcpy((void *)(bridge_addr + idx * 128), (void *)(base + 9), 50);
+	return 1;
+}
+
+static int tunnel_mail_store_srv6(u32 base)
+{
+	u32 idx = *(u8 *)(base + 8);
+	u32 len = *(u8 *)(base + 9);
+	u32 bridge_addr = npu_bridge_addr();
+
+	if (idx > 7) {
+		npu_printf("invalid idx %d in %s,%d\n",
+			   idx, "tunnel_mail_npu_store_srv6_hdr", 107);
+		return 1;
+	}
+
+	npu_memcpy((void *)(bridge_addr + (idx + 20) * 128),
+		   (void *)(base + 10), len);
+	tunnel_srv6_hdr_len[idx] = (u8)len;
+	return 1;
+}
+
+static int tunnel_mail_set_srv6_addr(u32 base)
+{
+	npu_memcpy(srv6_my_ipv6, (void *)(base + 8), 16);
+	npu_printf("set srv6 my ipv6: %02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X\n",
+		   srv6_my_ipv6[0], srv6_my_ipv6[1], srv6_my_ipv6[2], srv6_my_ipv6[3],
+		   srv6_my_ipv6[4], srv6_my_ipv6[5], srv6_my_ipv6[6], srv6_my_ipv6[7],
+		   srv6_my_ipv6[8], srv6_my_ipv6[9], srv6_my_ipv6[10], srv6_my_ipv6[11],
+		   srv6_my_ipv6[12], srv6_my_ipv6[13], srv6_my_ipv6[14], srv6_my_ipv6[15]);
+	return 1;
+}
+
+static int tunnel_mail_l4s_stub(u32 base)
+{
+	(void)base;
+	npu_printf("L4S not support!!!\n");
+	return 1;
+}
+
+static int tunnel_mail_reset(void)
+{
+	tunnel_ppe_reset();
+	return 1;
+}
+
+/* hwnat mail dispatcher: receives raw data from host, dispatches by funcId */
+static int hwnat_mail_dispatch(u32 raw_ptr)
+{
+	u32 addr = (raw_ptr & 0x3FFFFFFF) | 0x40000000;
+	u32 func_type = *(volatile u32 *)addr;
+	u32 func_id;
+
+	if (func_type != 1) {
+		u32 i;
+
+		npu_printf("not support unknow funcType\n");
+		for (i = 0; i < 28; i += 4)
+			npu_printf("Offset: %08zx, Value: 0x%08x\n",
+				   i, *(volatile u32 *)(addr + i));
+		return 0;
+	}
+
+	func_id = *(volatile u32 *)(addr + 4);
+	if (func_id < 1 || func_id > 5) {
+		npu_printf("Error: invalid funcId! hwnat_mail_data->funcType=%u hwnat_mail_data->funcId=%u\n",
+			   1, func_id);
+		return 0;
+	}
+
+	/* dispatch through function table at mbox_ext_handlers */
+	if (mbox_ext_handlers[func_id + 4] == NULL)
+		return 0;
+
+	{
+		int result = mbox_ext_handlers[func_id + 4](addr, 0);
+
+		if (result == 0)
+			npu_printf("hwnat_mail_set_wait_operation fail !\n");
+		return result;
+	}
 }
 
 #endif /* HAS_TUNNEL */
@@ -1221,7 +2344,6 @@ static void tr471_main_init(void)
 
 static void core0_main(void)
 {
-	/* init TDMA and SRAM alloc, then buffer manager */
 	tdma_init();
 
 #ifdef WIFI_KITE
@@ -1230,10 +2352,8 @@ static void core0_main(void)
 	buf_mgr_init();
 #endif
 
-	/* WiFi bridge init */
+	npu_bridge_buf_init();
 	core0_wifi_init_wrapper();
-
-	/* register debug counter ISR on PLIC source 59 */
 	plic_register_isr(59, dbg_cnt_isr);
 
 	npu_printf("%s\n", "core0_main");
