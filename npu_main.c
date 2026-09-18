@@ -126,6 +126,9 @@ static void tdma_tx_init(void);
 #ifdef HAS_TUNNEL
 static int tunnel_mail_handler(u32 base, u32 cnt);
 static int hwnat_mail_dispatch(u32 raw_ptr);
+static s32 chip_cap_query(u32 idx, u32 query);
+static void l4s_ecn_process(u32 port);
+static int l4s_set_config(u32 cmd, u32 arg);
 #endif
 
 /* DBA handlers */
@@ -332,6 +335,19 @@ static u32 wifi_state[256];
 
 #ifdef HAS_TUNNEL
 static u8 tunnel_srv6_hdr_len[8];
+static volatile u32 tunnel_ecn_enabled;
+static u32 l4s_debug_enable;
+static u32 l4s_pkt_count;
+static u32 l4s_log_phase;
+static u32 l4s_skip_count;
+static u32 l4s_cached_qthresh;
+static u32 l4s_qid;
+static u32 l4s_qlen;
+static u32 ppe_module_idx;
+static u8 ppe_module_ver;
+static u32 gdm_fwd_mode;
+static u32 vlan_aware_mode;
+static u32 fragment_mtu[4];
 #endif
 
 /* DBA state */
@@ -4816,10 +4832,227 @@ static void __attribute__((noreturn)) wifi_pipeline_worker(void)
 
 /* PPE register bases for tunnel offload */
 #define PPE0_CTRL       0x1FB50E00
-#define PPE1_CTRL       0x1FB51E00
 #define PPE0_CTRL2      0x1FB50E04
+#define PPE1_CTRL       0x1FB51E00
 #define PPE1_CTRL2      0x1FB51E04
 #define PPE0_MISC       0x1FB50E1C
+#define PPE1_MISC       0x1FB51E1C
+#define PPE0_PARSER     0x1FB50E88
+#define PPE1_PARSER     0x1FB51E88
+#define PPE0_SHAPER     0x1FB50E28
+#define PPE0_ENABLE     0x1FB50E50
+#define PPE1_ENABLE     0x1FB51E50
+#define GDM_BASE        0x1FB50000
+#define GDM_PARSE0      0x1FB50280
+#define PPE_QDMA0       0x1FB50500
+#define PPE_QDMA1       0x1FB51500
+#define PPE_QDMA2       0x1FB52500
+#define PPE_QDMA_EXTRA  0x1FB51100
+#define PPE0_FLT_BASE   0x1FB50F00
+#define PPE1_FLT_BASE   0x1FB51F00
+
+#define CHIP_FAMILY     (REG32(CHIP_ID_REG) >> 16)
+#define CHIP_REV5       (((REG32(CHIP_VARIANT_REG) >> 3) & 0x10) | \
+			 (REG32(CHIP_VARIANT_REG) & 0xF))
+
+static s32 chip_cap_query(u32 idx, u32 query)
+{
+	struct { u32 match; u8 caps; } tbl[32];
+	u32 fam = CHIP_FAMILY;
+	u32 rev = CHIP_REV5;
+
+	npu_memset(tbl, 0, sizeof(tbl));
+
+	tbl[ 0] = (__typeof__(tbl[0])){ fam == 14 && rev ==  0, 0x1F };
+	tbl[ 1] = (__typeof__(tbl[0])){ fam == 14 && rev ==  1, 0x1E };
+	tbl[ 2] = (__typeof__(tbl[0])){ fam == 14 && rev ==  2, 0x1B };
+	tbl[ 3] = (__typeof__(tbl[0])){ fam == 14 && (rev == 3 || rev == 13), 0x13 };
+	tbl[ 4] = (__typeof__(tbl[0])){ fam == 14 && rev ==  4, 0x1B };
+	tbl[ 5] = (__typeof__(tbl[0])){ fam == 14 && rev ==  5, 0x1B };
+	tbl[ 6] = (__typeof__(tbl[0])){ fam == 14 && rev ==  6, 0x03 };
+	tbl[ 7] = (__typeof__(tbl[0])){ fam == 14 && rev ==  7, 0x1F };
+	tbl[ 8] = (__typeof__(tbl[0])){ fam == 14 && rev ==  8, 0x1B };
+	tbl[ 9] = (__typeof__(tbl[0])){ fam == 14 && rev ==  9, 0x13 };
+	tbl[10] = (__typeof__(tbl[0])){ fam == 14 && rev == 10, 0x1F };
+	tbl[11] = (__typeof__(tbl[0])){ fam == 14 && rev == 11, 0x1A };
+	tbl[12] = (__typeof__(tbl[0])){ fam == 14 && rev == 12, 0x1B };
+	tbl[13] = (__typeof__(tbl[0])){ fam == 16 && rev ==  0, 0x1F };
+	tbl[14] = (__typeof__(tbl[0])){ fam == 16 && rev ==  1, 0x1F };
+	tbl[15] = (__typeof__(tbl[0])){ fam == 16 && rev ==  2, 0x1F };
+	tbl[16] = (__typeof__(tbl[0])){ fam == 16 && rev ==  3, 0x1F };
+	tbl[17] = (__typeof__(tbl[0])){ fam == 16 && rev ==  5, 0x01 };
+	tbl[18] = (__typeof__(tbl[0])){ fam == 16 && rev ==  6, 0x1F };
+	tbl[19] = (__typeof__(tbl[0])){ fam == 16 && rev ==  7, 0x1F };
+	tbl[20] = (__typeof__(tbl[0])){ fam == 16 && rev ==  8, 0x1F };
+	tbl[21] = (__typeof__(tbl[0])){ fam == 16 && rev ==  9, 0x1F };
+	tbl[22] = (__typeof__(tbl[0])){ fam == 16 && rev == 10, 0x1F };
+	tbl[23] = (__typeof__(tbl[0])){ fam == 16 && rev == 11, 0x1F };
+	tbl[24] = (__typeof__(tbl[0])){ fam == 16 && rev == 12, 0x1F };
+	tbl[25] = (__typeof__(tbl[0])){ fam == 16 && rev == 13, 0x1F };
+	tbl[26] = (__typeof__(tbl[0])){ fam == 16 && rev == 16, 0x1F };
+	tbl[27] = (__typeof__(tbl[0])){ fam == 16 && rev == 18, 0x1F };
+	tbl[28] = (__typeof__(tbl[0])){ fam == 16 && rev == 28, 0x1F };
+	tbl[29] = (__typeof__(tbl[0])){ fam == 16 && rev == 21, 0x01 };
+	tbl[30] = (__typeof__(tbl[0])){ fam == 16 && rev == 22, 0x1F };
+	tbl[31].match = (u32)-1;
+
+	if (idx > 31)
+		return -1;
+
+	switch (query) {
+	case 0:  return (s32)tbl[idx].match;
+	case 1:  return  tbl[idx].caps & 1;
+	case 2:  return (tbl[idx].caps >> 1) & 1;
+	case 3:  return (tbl[idx].caps >> 2) & 1;
+	case 4:  return (tbl[idx].caps >> 3) & 1;
+	case 5:  return (tbl[idx].caps >> 4) & 1;
+	default: return (s32)tbl[idx].match;
+	}
+}
+
+static int l4s_set_config(u32 cmd, u32 arg)
+{
+	switch (cmd) {
+	case 0:
+		tunnel_ecn_enabled = 0;
+		l4s_debug_enable = 0;
+		npu_printf("L4S_SET_DISABLE!!!\n");
+		break;
+	case 1:
+		tunnel_ecn_enabled = 1;
+		npu_printf("L4S_SET_ENABLE!!!\n");
+		break;
+	case 2:
+		tunnel_ecn_enabled = 1;
+		l4s_debug_enable = arg;
+		npu_printf("L4S_SET_DEBUG_%s!!!\n",
+			   arg ? "ENABLE" : "DISABLE");
+		break;
+	case 3:
+		l4s_qid = arg;
+		npu_printf("L4S_SET_QID: %u\n", arg);
+		break;
+	default:
+		npu_printf("L4S_SET_CMD_ERROR!!!\n");
+		break;
+	}
+	return 0;
+}
+
+static void l4s_ecn_process(u32 port)
+{
+	volatile u32 *ring_stat = (volatile u32 *)(0x1EC12050 + 4 * port);
+	u32 desc_remaining;
+	u32 tx_credits;
+	u32 ring_base, desc_out, doorbell, trigger;
+	u32 port_cmd, port_idx;
+	u32 desc_ptr, uncached;
+	u32 hdr_field, pkt_len, desc_w0, ecn_byte;
+	u32 band_sel, band_idx;
+	u32 pkt_data, total;
+	u32 qthresh;
+
+	desc_remaining = (u8)(*ring_stat);
+	if (desc_remaining == 0 || !tunnel_ecn_enabled)
+		return;
+
+	ring_base = 0x1EC12080 + 16 * port;
+	desc_out  = 0x1EC12100 + 32 * port;
+	doorbell  = 0x1EC12104 + 32 * port;
+	trigger   = 0x1EC12108 + 32 * port;
+	port_cmd  = port | 0xC0000000;
+	port_idx  = 16 * port;
+	tx_credits = 0;
+
+	while (1) {
+		desc_ptr = REG32(ring_base);
+		uncached = desc_ptr | 0x20000000;
+
+		hdr_field = *(volatile u16 *)(uncached + 0x12);
+		pkt_len   = *(volatile u32 *)(uncached + 0x04) & 0x3FFFF;
+		desc_w0   = *(volatile u32 *)(uncached);
+		ecn_byte  = *(volatile u8  *)(uncached + 0x14);
+
+		npu_memset((void *)(uncached + 4), 0, 28);
+
+		band_sel = hdr_field >> 5;
+		band_idx = hdr_field >> 11;
+
+		*(volatile u32 *)(uncached + 0x10) =
+			(pkt_len << 14) | 0x3800 | (band_idx << 3);
+		*(volatile u32 *)(uncached + 0x14) =
+			0x7F0007FF
+			| ((u32)((hdr_field & 0x200) != 0) << 14)
+			| ((hdr_field & 0x1F) << 15)
+			| ((band_sel & 0xF) << 20);
+
+		*(volatile u32 *)(uncached + 0x10) =
+			(pkt_len << 14) | 0x3800 | (band_idx << 3) |
+			(l4s_qid & 7);
+		*(volatile u32 *)(uncached) = port_idx;
+
+		pkt_data = ((u16)desc_w0 + 32) << 16;
+		--desc_remaining;
+
+		if (ecn_byte != 0)
+			ecn_byte |= 0x40;
+
+		total = ++l4s_pkt_count;
+		*(volatile u8 *)(uncached + 0x1B) = ecn_byte;
+
+		if (total % 10 == 0)
+			goto query_hw;
+
+		if (l4s_qlen >= l4s_cached_qthresh)
+			goto submit;
+		++l4s_skip_count;
+		goto submit;
+
+query_hw:
+		if ((band_sel & 7) == 1) {
+			REG32(0x1FB55100) = (band_idx << 3) |
+					    l4s_qid | 0x1000000;
+			qthresh = (u16)REG32(0x1FB55104);
+		} else if ((band_sel & 0xF) == 2) {
+			REG32(0x1FB57100) = (band_idx << 3) |
+					    l4s_qid | 0x1000000;
+			qthresh = (u16)REG32(0x1FB57104);
+		} else {
+			qthresh = 0;
+		}
+		l4s_cached_qthresh = qthresh;
+
+		if (l4s_qlen < qthresh)
+			++l4s_skip_count;
+
+submit:
+		if (tx_credits == 0) {
+			while (1) {
+				tx_credits = ((volatile u8 *)ring_stat)[1];
+				if (tx_credits != 0)
+					break;
+			}
+		}
+
+		REG32(doorbell) = pkt_data;
+		--tx_credits;
+		REG32(trigger) = port_cmd;
+		REG32(desc_out) = desc_ptr;
+
+		if (desc_remaining == 0)
+			return;
+	}
+}
+
+static int tunnel_mail_frag_mtu(u32 base)
+{
+	u32 idx = *(u8 *)(base + 8);
+	u32 mtu = *(u32 *)(base + 12);
+
+	fragment_mtu[idx] = mtu;
+	npu_printf("set fragment mtu-%d: %d\n", idx, mtu);
+	return 1;
+}
 
 static void tunnel_ppe_reset(void)
 {
@@ -4899,21 +5132,276 @@ static void tunnel_ppe_reset(void)
 	}
 }
 
+static void ppe_qdma_config(u32 dir)
+{
+	u32 chip_rev = CHIP_FAMILY;
+	u32 v1;
+
+	if (dir == 0) {
+		v1 = (vlan_aware_mode == 0) ? 5 : 3;
+		REG32(PPE_QDMA0) = (REG32(PPE_QDMA0) & 0xFFFFFF00) |
+				    (v1 & 0xF) | 64;
+		REG32(PPE_QDMA0) = (REG32(PPE_QDMA0) & 0xFFFF00FF) |
+				    1024 | 0x4000;
+		return;
+	}
+
+	v1 = 3;
+	if (vlan_aware_mode == 0) {
+		v1 = 4;
+		if (chip_rev == 14)
+			v1 = ((REG32(PPE1_CTRL) & 1) == 0) ? 4 : 8;
+	}
+
+	REG32(PPE_QDMA0) = (REG32(PPE_QDMA0) & 0xFFFFFF00) |
+			    (v1 & 0xF) | 4 | 64;
+	REG32(PPE_QDMA0) = (REG32(PPE_QDMA0) & 0xFFFF00FF) |
+			    1024 | 0x4000;
+
+	if (gdm_fwd_mode != 1 && (vlan_aware_mode | ppe_module_idx) == 0) {
+		REG32(PPE_QDMA1) = (v1 | (REG32(PPE_QDMA1) & 0xFFFFFFF0));
+		REG32(PPE_QDMA1) = ((16 * v1) | (REG32(PPE_QDMA1) & 0xFFFFFF0F));
+		REG32(PPE_QDMA1) = ((v1 << 8) & 0xFFFF0FFF) |
+				    (REG32(PPE_QDMA1) & 0xFFFF00FF) |
+				    (v1 << 12);
+	}
+	if (chip_rev == 10) {
+		REG32(PPE_QDMA_EXTRA) = (REG32(PPE_QDMA_EXTRA) & 0xFFFFFFF0) | 4;
+		REG32(PPE_QDMA_EXTRA) = (REG32(PPE_QDMA_EXTRA) & 0xFFFF000F) |
+					(4 << 12) | (4 << 8) | (4 << 4);
+	}
+	if (chip_rev == 14 || chip_rev == 16) {
+		u32 v5 = 4;
+		REG32(PPE_QDMA2) = (v5 | (REG32(PPE_QDMA2) & 0xFFFFFFF0));
+		REG32(PPE_QDMA2) = ((16 * v5) | (REG32(PPE_QDMA2) & 0xFFFFFF0F));
+		REG32(PPE_QDMA2) = ((v5 << 8) | (REG32(PPE_QDMA2) & 0xFFFFF0FF));
+		REG32(PPE_QDMA2) = ((v5 << 12) | (REG32(PPE_QDMA2) & 0xFFFF0FFF));
+	}
+
+	if (vlan_aware_mode != 0) {
+		REG32(0x1FB50E48) = 349440;
+		if (chip_rev == 14)
+			REG32(0x1FB51E48) = 349440;
+	} else {
+		REG32(0x1FB50E48) = 1280;
+		if (chip_rev == 14)
+			REG32(0x1FB51E48) = 1280;
+	}
+}
+
+static void ppe_filter_config(void)
+{
+	u32 chip_rev = CHIP_FAMILY;
+
+	REG32(PPE0_FLT_BASE + 0x04) = 131336144;
+	REG32(PPE0_FLT_BASE + 0x08) = 131860440;
+	REG32(PPE0_FLT_BASE + 0x0C) = 132384736;
+	REG32(PPE0_FLT_BASE + 0x10) = 2024;
+
+	if (chip_rev == 14) {
+		REG32(PPE1_FLT_BASE + 0x04) = 131336144;
+		REG32(PPE1_FLT_BASE + 0x08) = 131860440;
+		REG32(PPE1_FLT_BASE + 0x0C) = 132384736;
+		REG32(PPE1_FLT_BASE + 0x10) = 2024;
+	}
+
+	if (ppe_module_ver != 0)
+		REG32(0x1FB50514) |= 0x0FA80000;
+	else
+		REG32(0x1FB50514) |= 0x06A40000;
+}
+
+static void ppe_enable_config(void)
+{
+	u32 chip_rev = CHIP_FAMILY;
+
+	if (chip_rev == 10 || chip_rev == 12 || chip_rev == 14 ||
+	    chip_rev == 15 || chip_rev == 16) {
+		if (chip_rev == 12 || chip_rev == 15) {
+			REG32(PPE0_ENABLE) |= 1u;
+			REG32(PPE0_ENABLE) |= 0x10000u;
+			REG32(PPE0_ENABLE) |= 0x1000000u;
+		} else {
+			REG32(PPE0_ENABLE) |= 1u;
+			REG32(PPE0_ENABLE) &= ~0x10000u;
+			if (chip_rev == 14) {
+				REG32(PPE1_ENABLE) |= 1u;
+				REG32(PPE1_ENABLE) &= ~0x10000u;
+			}
+		}
+		REG32(PPE0_ENABLE) |= 0x100u;
+		if (chip_rev == 14)
+			REG32(PPE1_ENABLE) |= 0x100u;
+
+		REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xF8FFFFFF) | 0x3000000;
+		if (chip_rev == 14 && (REG32(PPE1_CTRL) & 1)) {
+			REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xF8FFFFFF) |
+					   0x2000000;
+			REG32(PPE1_MISC) = (REG32(PPE1_MISC) & 0xF8FFFFFF) |
+					   0x2000000;
+		}
+	}
+
+	REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xFFFFFFF8) | 4;
+	REG32(0x1FB50E44) = 0x12345678;
+	if (chip_rev == 14)
+		REG32(0x1FB51E44) = 0x12345678;
+}
+
 static void tunnel_init(void)
 {
+	u32 i, chip_rev;
+
 	npu_printf("tunnel_init\n");
 	npu_memset(tunnel_ctx, 0, sizeof(tunnel_ctx));
+
+	for (i = 0; ; i++) {
+		if (chip_cap_query(i, 0) == -1) {
+			npu_printf("unknown chipid, module load fail!\n");
+			ppe_module_idx = i;
+			break;
+		}
+		if (chip_cap_query(i, 0) != 0) {
+			ppe_module_idx = i;
+			break;
+		}
+	}
+
+	chip_cap_query(i, 2);
+	chip_cap_query(i, 3);
+	chip_cap_query(i, 4);
+	chip_cap_query(i, 5);
+
+	chip_rev = CHIP_FAMILY;
+
+	if (chip_rev == 10 || chip_rev == 12)
+		REG32(0x1FB50FF0) &= 0xFF7FF080;
+
+	if (chip_rev == 10 || chip_rev == 12 || chip_rev == 14 ||
+	    chip_rev == 15 || chip_rev == 16) {
+		REG32(PPE0_CTRL) |= 0x40u;
+		REG32(PPE0_MISC) |= 0x3000u;
+		REG32(PPE0_MISC) &= ~0x10000000u;
+		if (chip_rev == 10)
+			REG32(0x1FB50FF0) &= ~1u;
+		if (chip_rev == 14) {
+			REG32(PPE1_CTRL) |= 0x40u;
+			REG32(PPE1_MISC) |= 0x3000u;
+			REG32(PPE1_MISC) &= ~0x10000000u;
+			REG32(PPE1_MISC) |= 0x8000000u;
+		}
+	}
+
+	/* parser config */
+	{
+		u32 parser = 0x7F | 0xF00;
+		if (chip_rev == 12 || chip_rev == 14 ||
+		    chip_rev == 15 || chip_rev == 16)
+			parser |= 0x100000;
+		REG32(PPE0_PARSER) = parser;
+		if (chip_rev == 14)
+			REG32(PPE1_PARSER) = parser;
+
+		if (chip_rev == 10 || chip_rev == 12 || chip_rev == 14 ||
+		    chip_rev == 15 || chip_rev == 16) {
+			REG32(PPE0_PARSER) &= ~0x20000u;
+			if (chip_rev == 14)
+				REG32(PPE1_PARSER) &= ~0x20000u;
+			REG32(PPE0_PARSER) |= 0x10000u;
+			if (chip_rev == 14)
+				REG32(PPE1_PARSER) |= 0x10000u;
+			if (chip_rev == 12 || chip_rev == 14 ||
+			    chip_rev == 15 || chip_rev == 16) {
+				REG32(PPE0_PARSER) |= 0xC0000u;
+				if (chip_rev == 14)
+					REG32(PPE1_PARSER) |= 0xC0000u;
+			}
+		}
+	}
+
+	ppe_filter_config();
+
+	/* GDM egress config */
+	{
+		u32 egr = REG32(PPE0_CTRL2) & 0x10000;
+		if (gdm_fwd_mode == 1)
+			egr |= 0x8000;
+		else if (gdm_fwd_mode == 3)
+			egr |= 0x6A0F7C0;
+		else
+			egr |= 0x620B0C0;
+		REG32(PPE0_CTRL2) = egr;
+		if (chip_rev == 14)
+			REG32(PPE1_CTRL2) = egr;
+	}
+
+	ppe_enable_config();
+
+	if (chip_rev == 11) {
+		REG32(0x1FB50EF4) = 3146112;
+		REG32(0x1FB50EF0) = 268445184;
+	}
+
+	/* PPE forwarding control bits */
+	REG32(PPE0_CTRL) ^= ~(u8)REG32(PPE0_CTRL) & 2;
+	REG32(PPE0_CTRL) ^= ~(u16)REG32(PPE0_CTRL) & 0x100;
+	REG32(PPE0_CTRL) ^= ~(u16)REG32(PPE0_CTRL) & 0x200;
+	REG32(PPE0_CTRL) ^= ~(u8)REG32(PPE0_CTRL) & 0x40;
+	REG32(PPE0_CTRL) ^= ~REG32(PPE0_CTRL) & 0x1000;
+	REG32(PPE0_CTRL) &= ~0x3Cu;
+	if (chip_rev == 14) {
+		REG32(PPE1_CTRL) ^= ~(u8)REG32(PPE1_CTRL) & 2;
+		REG32(PPE1_CTRL) ^= ~(u16)REG32(PPE1_CTRL) & 0x100;
+		REG32(PPE1_CTRL) ^= ~(u16)REG32(PPE1_CTRL) & 0x200;
+		REG32(PPE1_CTRL) ^= ~(u8)REG32(PPE1_CTRL) & 0x40;
+		REG32(PPE1_CTRL) = (~REG32(PPE1_CTRL) & 0x1000 ^
+				    REG32(PPE1_CTRL)) & 0xFFFFFFC3;
+	}
+
+	if (chip_rev == 10 || chip_rev == 12 || chip_rev == 14 ||
+	    chip_rev == 15 || chip_rev == 16) {
+		REG32(PPE0_CTRL) ^= ~REG32(PPE0_CTRL) & 0x8000;
+		if (chip_rev == 14)
+			REG32(PPE1_CTRL) ^= ~REG32(PPE1_CTRL) & 0x8000;
+	}
+
+	if (chip_rev == 11)
+		REG32(PPE0_CTRL) ^= ~REG32(PPE0_CTRL) & 0x8000;
+
+	REG32(PPE0_CTRL) ^= (REG32(PPE0_CTRL) & 1) == 0;
+	REG32(PPE0_CTRL2) ^= ~REG32(PPE0_CTRL2) & 0x100000;
+	REG32(PPE0_CTRL2) ^= ~REG32(PPE0_CTRL2) & 0x80000;
+	if (chip_rev == 14) {
+		REG32(PPE1_CTRL) ^= (REG32(PPE1_CTRL) & 1) == 0;
+		REG32(PPE1_CTRL2) ^= ~(~REG32(PPE1_CTRL2) & 0x100000 ^
+				       REG32(PPE1_CTRL2)) & 0x80000 ^
+				     ~REG32(PPE1_CTRL2) & 0x100000;
+	}
+
+	if (chip_rev == 12 || chip_rev == 14 ||
+	    chip_rev == 15 || chip_rev == 16) {
+		REG32(PPE0_CTRL) ^= ~REG32(PPE0_CTRL) & 0x10000;
+		REG32(PPE0_CTRL) ^= ~REG32(PPE0_CTRL) & 0x20000;
+		if (chip_rev == 14) {
+			REG32(PPE1_CTRL) ^= ~(~REG32(PPE1_CTRL) & 0x10000 ^
+					      REG32(PPE1_CTRL)) & 0x20000 ^
+					    ~REG32(PPE1_CTRL) & 0x10000;
+		}
+	}
+
+	REG32(PPE0_CTRL2) &= ~0x200C0u;
+	if (chip_rev == 14)
+		REG32(PPE1_CTRL2) &= ~0x200C0u;
+
+	if (chip_rev == 15 || chip_rev == 16)
+		REG32(0x1FB50E58) = 0x01406082;
+
+	ppe_qdma_config(1);
 }
 
 static void tunnel_process(void)
 {
 	/* tunnel packet processing: VXLAN/SRv6/MAP-T encap/decap */
-}
-
-static int tunnel_mail_handler(u32 base, u32 cnt)
-{
-	npu_printf("tunnel_mail_handler\n");
-	return 1;
 }
 
 /* tunnel mailbox sub-handlers */
@@ -4966,6 +5454,30 @@ static int tunnel_mail_reset(void)
 {
 	tunnel_ppe_reset();
 	return 1;
+}
+
+static int tunnel_mail_handler(u32 base, u32 cnt)
+{
+	u32 addr = (base & 0x3FFFFFFF) | 0x40000000;
+	u32 cmd = *(volatile u32 *)(addr + 4);
+
+	switch (cmd) {
+	case 1:
+		return tunnel_mail_store_hdr(addr);
+	case 2:
+		return tunnel_mail_store_srv6(addr);
+	case 3:
+		return tunnel_mail_set_srv6_addr(addr);
+	case 4:
+		return tunnel_mail_l4s_stub(addr);
+	case 5:
+		return tunnel_mail_reset();
+	case 6:
+		return tunnel_mail_frag_mtu(addr);
+	default:
+		npu_printf("tunnel_mail_handler: unknown cmd %d\n", cmd);
+		return 1;
+	}
 }
 
 /* hwnat mail dispatcher: receives raw data from host, dispatches by funcId */
@@ -5234,8 +5746,12 @@ static void core7_main(void)
 	tr471_main_init();
 #endif
 
-	/* tunnel processing loop */
+	/* tunnel processing loop with L4S/ECN tagging */
 	while (1) {
+		while (tunnel_ecn_enabled) {
+			l4s_ecn_process(1);
+			l4s_ecn_process(2);
+		}
 		tunnel_process();
 	}
 #else
