@@ -92,6 +92,15 @@
 #define NPU_BRIDGE_BASE         0x1EC0C000
 #define BRIDGE_CH_BASE(ch)      (NPU_BRIDGE_BASE + ((ch) * 0x40))
 
+/* PLIC interrupt sources for BME/BMGR (per-SoC) */
+#if defined(AN7552)
+#define INTR_BME_DONE           24
+#define INTR_BMGR               25
+#else
+#define INTR_BME_DONE           32
+#define INTR_BMGR               33
+#endif
+
 /* BME (Buffer Move Engine) - AN7552 and AN7583 (with WiFi) */
 #if defined(AN7552)
 #define BME_BASE                0x1EC08000

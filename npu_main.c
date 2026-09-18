@@ -2066,8 +2066,8 @@ static void tdma_bme_init(void)
 	REG32(BME_BASE + 0x008) = 0;
 
 	/* register BME done ISR on PLIC source 32 */
-	plic_register_isr(32, bme_done_isr);
-	npu_printf("bme plic register done, INTR_BUFID_MOVE_ENGINE(%d)\n", 32);
+	plic_register_isr(INTR_BME_DONE, bme_done_isr);
+	npu_printf("bme plic register done, INTR_BUFID_MOVE_ENGINE(%d)\n", INTR_BME_DONE);
 
 	/* configure BME: interrupt mode + SRAM mode, ID threshold */
 	REG32(BME_CSR_CTRL) = (REG32(BME_CSR_CTRL) & 0xFFFF0000) | 0x10;
@@ -2116,7 +2116,7 @@ static void tdma_bmgr_init(void)
 #endif
 		;
 
-	plic_enable_wrapper(33);
+	plic_enable_wrapper(INTR_BMGR);
 }
 #endif /* HAS_BME */
 
