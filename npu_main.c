@@ -400,6 +400,10 @@ static u32 plic_isr_init_done;
 static u32 plic_cfg2;
 static u32 plic_state;
 
+/* UART debug console */
+static u32 uart_cmd_idx;
+static u8 uart_cmd_buf[32];
+
 /* npu_init sync */
 static u32 mib12_snapshot;
 static u32 core_sync_flag;
@@ -911,6 +915,78 @@ static void uart_puts_raw(const char *s)
 static void printf_enable(int enable)
 {
 	npu_printf_prefix = (u32)enable;
+}
+
+static const char *uart_debug_cmd(char c)
+{
+	u32 idx = uart_cmd_idx;
+
+	if (idx > 31) {
+		uart_cmd_idx = 0;
+		return "Error: exceed max_char_num:%d ... reset char_idx\n\n";
+	}
+
+	uart_cmd_buf[idx] = (u8)c;
+	if (c != '\r') {
+		uart_cmd_idx = idx + 1;
+		return NULL;
+	}
+
+	if (uart_cmd_buf[0] != 'r' && uart_cmd_buf[0] != 'w') {
+		goto bad_cmd;
+	}
+	if (uart_cmd_buf[0] == 'r' && uart_cmd_buf[1] != 'd')
+		goto bad_cmd;
+	if (uart_cmd_buf[0] == 'w' && uart_cmd_buf[1] != 't')
+		goto bad_cmd;
+
+	{
+		u32 is_write = (uart_cmd_buf[0] == 'w');
+		u32 addr = 0, val = 0;
+		u32 pos = 3, digit;
+		u8 ch;
+
+		for (; pos <= 10; pos++) {
+			ch = uart_cmd_buf[pos];
+			if (ch >= '0' && ch <= '9')
+				digit = ch - '0';
+			else if (ch >= 'A' && ch <= 'F')
+				digit = ch - 'A' + 10;
+			else if (ch >= 'a' && ch <= 'f')
+				digit = ch - 'a' + 10;
+			else
+				break;
+			addr = (addr << 4) | digit;
+		}
+
+		if (is_write) {
+			if (pos == 11)
+				pos = 12;
+			for (; pos <= 19; pos++) {
+				ch = uart_cmd_buf[pos];
+				if (ch >= '0' && ch <= '9')
+					digit = ch - '0';
+				else if (ch >= 'A' && ch <= 'F')
+					digit = ch - 'A' + 10;
+				else if (ch >= 'a' && ch <= 'f')
+					digit = ch - 'a' + 10;
+				else
+					break;
+				val = (val << 4) | digit;
+			}
+			*(volatile u32 *)addr = val;
+			uart_cmd_idx = 0;
+			return "wt(0x%x)==0x%x\n";
+		}
+
+		uart_cmd_idx = 0;
+		return "rd(0x%x)==0x%x\n";
+	}
+
+bad_cmd:
+	uart_cmd_buf[idx] = 0;
+	uart_cmd_idx = 0;
+	return "Correct Cmd: 'rd regAddr' or 'wt regAddr val'\n";
 }
 
 int npu_printf(const char *fmt, ...)
@@ -2686,7 +2762,7 @@ direct_fwd:
 		}
 
 		phys_addr = (buf_id << 12) +
-			    (wifi_buf_id_base & 0x3FFFFFFF | 0x40000000) +
+			    ((wifi_buf_id_base & 0x3FFFFFFF) | 0x40000000) +
 			    2 + amsdu;
 		ret = bme_send_pkt(buf_id, adj_size, phys_addr, band);
 		if (ret != 0)
@@ -2997,7 +3073,7 @@ static u32 ba_state_update(u32 sn, u32 check_type, u32 entry_addr)
 static int wifi_pkt_hdr_len(u32 buf_id, u32 band)
 {
 	u32 desc = (buf_id << 12) +
-		   (wifi_buf_id_base & 0x3FFFFFFF | 0x40000000);
+		   ((wifi_buf_id_base & 0x3FFFFFFF) | 0x40000000);
 	u32 flags;
 	int len;
 
@@ -3203,7 +3279,7 @@ static int wifi_pkt_classify(u32 buf_id, u32 pkt_len, u32 iface)
 
 	/* extract fields from descriptor */
 	u32 desc_addr = (buf_id << 12) +
-			(wifi_buf_id_base & 0x3FFFFFFF | 0x40000000);
+			((wifi_buf_id_base & 0x3FFFFFFF) | 0x40000000);
 	u16 pkt_buf_id = *(u16 *)(desc_addr);
 	u16 orig_len = *(u16 *)(desc_addr + 2);
 	u16 seq_num;
@@ -3569,7 +3645,7 @@ forward_pkt:
 
 static int wifi_pkt_forward_single(u32 buf_id, u16 pkt_len, u8 amsdu)
 {
-	u32 desc = (wifi_buf_id_base & 0x3FFFFFFF | 0x40000000) +
+	u32 desc = ((wifi_buf_id_base & 0x3FFFFFFF) | 0x40000000) +
 		   (buf_id << 12);
 
 	return pkt_forward(buf_id,
@@ -3710,8 +3786,8 @@ static u32 wifi_multi_desc_handler(u32 band, u32 start_idx, u32 size,
 							*(u16 *)(desc_addr +
 								 6) & 0x4000;
 						u32 phy =
-							(wifi_buf_id_base &
-							 0x3FFFFFFF |
+							((wifi_buf_id_base &
+							  0x3FFFFFFF) |
 							 0x40000000) +
 							(new_buf_id << 12);
 
@@ -3797,13 +3873,13 @@ scatter_fail:
 
 		if (count != 0) {
 			u32 coalesce_off = 0;
-			u32 dst = (wifi_buf_id_base & 0x3FFFFFFF |
+			u32 dst = ((wifi_buf_id_base & 0x3FFFFFFF) |
 				   0x40000000) + (new_buf_id << 12);
 
 			for (i = 0; i < count; i++) {
 				u32 d = ring_base + idx * 16;
 				u16 old_id = *(s16 *)(bufid_tbl + (u32)idx);
-				u32 src = (wifi_buf_id_base & 0x3FFFFFFF |
+				u32 src = ((wifi_buf_id_base & 0x3FFFFFFF) |
 					   0x40000000) +
 					  ((u32)old_id << 12);
 				u16 frag_len = *(u16 *)(d + 6) & 0x3FFF;
@@ -3897,8 +3973,8 @@ static int wifi_init_rxd_5g(u32 ring_size, u32 band)
 		rxd_5g_bufid_table[i] = (u16)new_buf_id;
 		old_val = *(u16 *)(desc_addr + 6);
 		*(u32 *)desc_addr =
-			((new_buf_id << 12) + wifi_buf_id_base) &
-			0x3FFFFFFF | 0x80000000;
+			(((new_buf_id << 12) + wifi_buf_id_base) &
+			 0x3FFFFFFF) | 0x80000000;
 		*(u16 *)(desc_addr + 6) = (old_val & 0x4000) | 0xDAC;
 	}
 
@@ -3951,8 +4027,8 @@ static int wifi_init_rxd_2g(u32 ring_size, u32 band)
 		*(u16 *)(rxd_2g_bufid_base + 2 * i) = (u16)new_buf_id;
 		old_val = *(u16 *)(desc_addr + 6);
 		*(u32 *)desc_addr =
-			((new_buf_id << 12) + wifi_buf_id_base) &
-			0x3FFFFFFF | 0x80000000;
+			(((new_buf_id << 12) + wifi_buf_id_base) &
+			 0x3FFFFFFF) | 0x80000000;
 		*(u16 *)(desc_addr + 6) = (old_val & 0x4000) | 0xDAC;
 	}
 
@@ -4134,7 +4210,7 @@ static void wifi_rx_process(void)
 
 		/* update descriptor with new buffer physical address */
 		*(volatile u32 *)desc_addr =
-			((new_buf_id << 12) + wifi_buf_id_base) & 0x3FFFFFFF | 0x80000000;
+			(((new_buf_id << 12) + wifi_buf_id_base) & 0x3FFFFFFF) | 0x80000000;
 		*(volatile u16 *)(desc_addr + 6) =
 			(*(volatile u16 *)(desc_addr + 6) & 0x4000) | 0xDAC;
 
@@ -4259,7 +4335,7 @@ static void wifi_tx_process(void)
 
 	old_buf_id = wifi_tx_bufid_table[ridx];
 	*(volatile u32 *)desc_addr =
-		((new_buf_id << 12) + wifi_buf_id_base) & 0x3FFFFFFF | 0x80000000;
+		(((new_buf_id << 12) + wifi_buf_id_base) & 0x3FFFFFFF) | 0x80000000;
 	wifi_tx_bufid_table[ridx] = (u16)new_buf_id;
 	*(volatile u16 *)(desc_addr + 6) =
 		(*(volatile u16 *)(desc_addr + 6) & 0x4000) | 0xDAC;
@@ -5939,7 +6015,7 @@ static void tunnel_init(void)
 		REG32(PPE1_CTRL) ^= ~(u16)REG32(PPE1_CTRL) & 0x100;
 		REG32(PPE1_CTRL) ^= ~(u16)REG32(PPE1_CTRL) & 0x200;
 		REG32(PPE1_CTRL) ^= ~(u8)REG32(PPE1_CTRL) & 0x40;
-		REG32(PPE1_CTRL) = (~REG32(PPE1_CTRL) & 0x1000 ^
+		REG32(PPE1_CTRL) = ((~REG32(PPE1_CTRL) & 0x1000) ^
 				    REG32(PPE1_CTRL)) & 0xFFFFFFC3;
 	}
 
@@ -5958,9 +6034,9 @@ static void tunnel_init(void)
 	REG32(PPE0_CTRL2) ^= ~REG32(PPE0_CTRL2) & 0x80000;
 	if (chip_rev == 14) {
 		REG32(PPE1_CTRL) ^= (REG32(PPE1_CTRL) & 1) == 0;
-		REG32(PPE1_CTRL2) ^= ~(~REG32(PPE1_CTRL2) & 0x100000 ^
-				       REG32(PPE1_CTRL2)) & 0x80000 ^
-				     ~REG32(PPE1_CTRL2) & 0x100000;
+		REG32(PPE1_CTRL2) ^= (~((~REG32(PPE1_CTRL2) & 0x100000) ^
+				       REG32(PPE1_CTRL2)) & 0x80000) ^
+				     (~REG32(PPE1_CTRL2) & 0x100000);
 	}
 
 	if (chip_rev == 12 || chip_rev == 14 ||
@@ -5968,9 +6044,9 @@ static void tunnel_init(void)
 		REG32(PPE0_CTRL) ^= ~REG32(PPE0_CTRL) & 0x10000;
 		REG32(PPE0_CTRL) ^= ~REG32(PPE0_CTRL) & 0x20000;
 		if (chip_rev == 14) {
-			REG32(PPE1_CTRL) ^= ~(~REG32(PPE1_CTRL) & 0x10000 ^
-					      REG32(PPE1_CTRL)) & 0x20000 ^
-					    ~REG32(PPE1_CTRL) & 0x10000;
+			REG32(PPE1_CTRL) ^= (~((~REG32(PPE1_CTRL) & 0x10000) ^
+					       REG32(PPE1_CTRL)) & 0x20000) ^
+					    (~REG32(PPE1_CTRL) & 0x10000);
 		}
 	}
 
