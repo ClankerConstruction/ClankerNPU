@@ -148,7 +148,12 @@ static int tunnel_mail_dispatch(u32 base, u32 cnt);
 
 /* tunnel handlers */
 #ifdef HAS_TUNNEL
-static int tunnel_mail_handler(u32 base, u32 cnt);
+static int tunnel_mail_store_hdr(u32 base, u32 cnt);
+static int tunnel_mail_store_srv6(u32 base, u32 cnt);
+static int tunnel_mail_set_srv6_addr(u32 base, u32 cnt);
+static int tunnel_mail_frag_mtu(u32 base, u32 cnt);
+static int tunnel_mail_reset(u32 base, u32 cnt);
+static int tunnel_mail_l4s_stub(u32 base, u32 cnt);
 static int hwnat_mail_dispatch(u32 base, u32 cnt);
 static s32 chip_cap_query(u32 idx, u32 query);
 static void l4s_ecn_process(u32 port);
@@ -1209,6 +1214,12 @@ static void mailbox_init(void)
 
 #ifdef HAS_TUNNEL
 	callbacks[5] = (u32)(void *)hwnat_mail_dispatch;
+	tunnel_func_table[0] = tunnel_mail_store_hdr;
+	tunnel_func_table[3] = tunnel_mail_store_srv6;
+	tunnel_func_table[4] = tunnel_mail_set_srv6_addr;
+	tunnel_func_table[5] = tunnel_mail_frag_mtu;
+	tunnel_func_table[6] = tunnel_mail_reset;
+	tunnel_func_table[8] = tunnel_mail_l4s_stub;
 #endif
 
 #ifdef HAS_DBA
@@ -5901,11 +5912,12 @@ submit:
 	}
 }
 
-static int tunnel_mail_frag_mtu(u32 base)
+static int tunnel_mail_frag_mtu(u32 base, u32 cnt)
 {
 	u32 idx = *(u8 *)(base + 8);
 	u32 mtu = *(u32 *)(base + 12);
 
+	(void)cnt;
 	fragment_mtu[idx] = mtu;
 	npu_printf("set fragment mtu-%d: %d\n", idx, mtu);
 	return 1;
@@ -6885,21 +6897,23 @@ static s32 tunnel_offload_handler(u32 port, u32 pkt_len, u32 *desc)
 }
 
 /* tunnel mailbox sub-handlers */
-static int tunnel_mail_store_hdr(u32 base)
+static int tunnel_mail_store_hdr(u32 base, u32 cnt)
 {
 	u32 idx = *(u8 *)(base + 8);
 	u32 bridge_addr = npu_bridge_addr();
 
+	(void)cnt;
 	npu_memcpy((void *)(bridge_addr + idx * 128), (void *)(base + 9), 50);
 	return 1;
 }
 
-static int tunnel_mail_store_srv6(u32 base)
+static int tunnel_mail_store_srv6(u32 base, u32 cnt)
 {
 	u32 idx = *(u8 *)(base + 8);
 	u32 len = *(u8 *)(base + 9);
 	u32 bridge_addr = npu_bridge_addr();
 
+	(void)cnt;
 	if (idx > 7) {
 		npu_printf("invalid idx %d in %s,%d\n",
 			   idx, "tunnel_mail_npu_store_srv6_hdr", 107);
@@ -6912,8 +6926,9 @@ static int tunnel_mail_store_srv6(u32 base)
 	return 1;
 }
 
-static int tunnel_mail_set_srv6_addr(u32 base)
+static int tunnel_mail_set_srv6_addr(u32 base, u32 cnt)
 {
+	(void)cnt;
 	npu_memcpy(srv6_my_ipv6, (void *)(base + 8), 16);
 	npu_printf("set srv6 my ipv6: %02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X\n",
 		   srv6_my_ipv6[0], srv6_my_ipv6[1], srv6_my_ipv6[2], srv6_my_ipv6[3],
@@ -6923,41 +6938,18 @@ static int tunnel_mail_set_srv6_addr(u32 base)
 	return 1;
 }
 
-static int tunnel_mail_l4s_stub(u32 base)
+static int tunnel_mail_l4s_stub(u32 base, u32 cnt)
 {
-	(void)base;
+	(void)base; (void)cnt;
 	npu_printf("L4S not support!!!\n");
 	return 1;
 }
 
-static int tunnel_mail_reset(void)
+static int tunnel_mail_reset(u32 base, u32 cnt)
 {
+	(void)base; (void)cnt;
 	tunnel_ppe_reset();
 	return 1;
-}
-
-static int tunnel_mail_handler(u32 base, u32 cnt)
-{
-	u32 addr = (base & 0x3FFFFFFF) | 0x40000000;
-	u32 cmd = *(volatile u32 *)(addr + 4);
-
-	switch (cmd) {
-	case 1:
-		return tunnel_mail_store_hdr(addr);
-	case 2:
-		return tunnel_mail_store_srv6(addr);
-	case 3:
-		return tunnel_mail_set_srv6_addr(addr);
-	case 4:
-		return tunnel_mail_l4s_stub(addr);
-	case 5:
-		return tunnel_mail_reset();
-	case 6:
-		return tunnel_mail_frag_mtu(addr);
-	default:
-		npu_printf("tunnel_mail_handler: unknown cmd %d\n", cmd);
-		return 1;
-	}
 }
 
 static int hwnat_mail_dispatch(u32 base, u32 cnt)
