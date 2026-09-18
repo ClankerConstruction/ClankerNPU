@@ -3090,7 +3090,7 @@ static int bme_send_pkt(u32 buf_id, u32 pkt_size, u32 phys_addr, u32 band)
 	if (desc_base == 0)
 		return -1;
 
-	hw_idx = REG32(0x1EC0B808);
+	hw_idx = REG32(BME_BASE + 0x008);
 	idx = tdma_bme_dscp_idx;
 
 	if (((idx + 1) & 0x1FF) == hw_idx)
@@ -3102,7 +3102,7 @@ static int bme_send_pkt(u32 buf_id, u32 pkt_size, u32 phys_addr, u32 band)
 		(pkt_size & 0x3FFF) | ((band & 3) << 14) | (buf_id << 16);
 
 	tdma_bme_dscp_idx = (idx + 1) & 0x1FF;
-	REG32(0x1EC0B804) = tdma_bme_dscp_idx;
+	REG32(BME_BASE + 0x004) = tdma_bme_dscp_idx;
 
 	return 0;
 }
