@@ -126,6 +126,7 @@ static void rxnode_drain(u32 band);
 
 /* WiFi handlers - forward declared for mailbox_init */
 #ifdef HAS_WIFI
+static int wifi_mail_dispatch(u32 base, u32 cnt);
 static int wifi_mail_set_wait(u32 base, u32 cnt);
 #endif
 #ifdef WIFI_KITE
@@ -1194,7 +1195,7 @@ static void mailbox_init(void)
 	/* register handlers into core 0's callback slots */
 	callbacks = (u32 *)&mbox_dispatch[0][48];
 #ifdef HAS_WIFI
-	callbacks[0] = (u32)(void *)wifi_mail_set_wait;
+	callbacks[0] = (u32)(void *)wifi_mail_dispatch;
 #endif
 	callbacks[1] = (u32)(void *)tunnel_mail_dispatch;
 
@@ -4666,7 +4667,7 @@ static u8 wifi_get_band_cap(u8 model)
 }
 
 /* WiFi NPU init: main WiFi subsystem init called from mailbox */
-static void wifi_npu_init(u32 dbdc)
+static void __attribute__((noinline)) wifi_npu_init(u32 dbdc)
 {
 #ifdef HAS_WIFI
 	u32 desc_type1, desc_type2;
@@ -5424,8 +5425,30 @@ static int wifi_mbox_cmd_dispatch(u32 *msg)
 	return 0;
 }
 
+#ifdef HAS_WIFI
+/* WiFi funcType dispatch (callback[0] — MFUNC_WIFI)
+ * Host sends funcType in msg[0] bits [7:4] (from WIFI_MAIL_Data_t bitfield).
+ * SET_WAIT=1 → wifi_mail_set_wait, SET_NO_WAIT=2 → wifi_mail_set_event. */
+static int wifi_mail_dispatch(u32 base, u32 cnt)
+{
+	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);
+	u32 func_type = (msg[0] >> 4) & 0xF;
+
+	switch (func_type) {
+	case 1:
+		return wifi_mail_set_wait(base, cnt);
+	case 2:
+#ifdef WIFI_KITE
+		return wifi_mail_set_event(base, cnt);
+#endif
+	default:
+		return 0;
+	}
+}
+#endif /* HAS_WIFI */
+
 /* WiFi mail set_wait handler: dispatches sub-commands from host */
-static int wifi_mail_set_wait(u32 base, u32 cnt)
+static int __attribute__((noinline)) wifi_mail_set_wait(u32 base, u32 cnt)
 {
 	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);
 	u32 cmd = msg[1];
@@ -5495,7 +5518,7 @@ static int wifi_mail_set_wait(u32 base, u32 cnt)
 }
 
 /* WiFi mail set_event handler */
-static int wifi_mail_set_event(u32 base, u32 cnt)
+static int __attribute__((noinline)) wifi_mail_set_event(u32 base, u32 cnt)
 {
 	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);
 	u32 cmd = msg[1];
