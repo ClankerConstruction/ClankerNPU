@@ -1,6 +1,9 @@
 #ifndef NPU_CONFIG_H
 #define NPU_CONFIG_H
 
+/* Firmware version reported by the NPU init path of every variant. */
+#define NPU_INIT_VERSION    "TLB7.8.0.0_v003"
+
 /*
  * Build-time variant selection.
  * Define exactly one SoC: AN7552, AN7581, AN7583

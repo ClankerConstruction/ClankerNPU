@@ -94,11 +94,22 @@ static int wifi_pkt_forward_single(u32 buf_id, u16 pkt_len, u8 amsdu);
 static u32 wifi_multi_desc_handler(u32 band, u32 start_idx, u32 size,
 				   u32 count);
 
+/* WiFi init subsystem */
+static void wifi_queue_mutex_init(void);
+static void wifi_pkt_queue_init(u32 band);
+static void wifi_ba_node_init(void);
+static void wifi_pcie_desc_alloc(void);
+static void wifi_npu_init(u32 dbdc);
+
 /* WiFi RXD init */
 static void npu_set_pcie_base(u32 addr, u32 band);
 static int wifi_init_rxd_5g(u32 ring_size, u32 band);
 static int wifi_init_rxd_2g(u32 ring_size, u32 band);
 static void wifi_reset_ba_entry(u32 dir, u32 wcid);
+
+/* WiFi mailbox setters */
+static void npu_set_bar_info(u32 band, u32 packed);
+static void npu_set_ba_entry(u32 band, u32 packed);
 
 /* WiFi handlers - forward declared for data init */
 #ifdef WIFI_KITE
@@ -389,11 +400,7 @@ static u32 wifi_base_cfg_val;
 static u8 wifi_debug_flags;
 static u32 wifi_buf_id_base;
 
-/* WiFi per-port statistics (16 ports × u64 as lo/hi pairs) */
-static u32 wifi_pkt_cnt_2g[32];
-static u32 wifi_byte_cnt_2g[32];
-static u32 wifi_pkt_cnt_5g[32];
-static u32 wifi_byte_cnt_5g[32];
+/* WiFi per-port state (16 ports) */
 static u8 wifi_port_state_2g[16];
 static u8 wifi_port_state_5g[16];
 
@@ -421,6 +428,50 @@ static u32 wifi_rxd_idx_2g;
 static u32 wifi_rxd_idx_5g;
 static u16 *wifi_rxd_bufid_tbl;
 static u8 wifi_retry_limit;
+
+/* WiFi init state */
+static u8 wifi_driver_model;
+static u8 wifi_pcie_port_type;
+static u8 wifi_band_cap;
+static u8 wifi_force_to_cpu;
+static u8 wifi_no_ba_test;
+static u8 wifi_band0_on_cpu;
+static u16 wifi_flushall_timeout;
+static u16 wifi_flushone_timeout;
+static u32 wifi_pkt_buf_addr;
+static u32 wifi_dram_ba_node_addr;
+static u32 wifi_pcie_desc_base;
+
+/* WiFi per-band pkt queue state */
+static u16 pkt_queue_widx_2g;
+static u16 pkt_queue_widx_5g;
+static u32 pkt_queue_base_2g;
+static u32 pkt_queue_base_5g;
+static u16 pkt_queue_rx_widx_2g;
+static u16 pkt_queue_rx_ridx_2g;
+static u32 pkt_queue_rx_base_2g;
+static u32 pkt_queue_rx_base_5g;
+
+/* WiFi per-band queue mutexes */
+static u32 queue_mutex_2g[2];
+static u32 queue_mutex_5g[2];
+static u32 queue_mutex_rx_2g[2];
+static u32 queue_mutex_rx_5g[2];
+
+/* BA node management */
+static u32 ba_node_pool_base;
+
+/* WiFi per-port wait state (16 ports × 2 bands) */
+static u8 wifi_wait_state_2g[16];
+static u8 wifi_wait_state_5g[16];
+
+/* WiFi per-port band assignment */
+static u8 wifi_port_band_2g[16];
+static u8 wifi_port_band_5g[16];
+
+/* WiFi pipeline pkt queue */
+static u32 wifi_pipeline_queue_2g;
+static u32 wifi_pipeline_queue_5g;
 
 /* ================================================================
  * Utility functions
@@ -2377,14 +2428,14 @@ static void wifi_update_stats(u32 dir, u32 port, u8 state, u32 type,
 
 	if (dir != 1) {
 		u32 idx = port * 2;
-		u32 lo = wifi_byte_cnt_2g[idx];
+		u32 lo = stats_bytes_2g[idx];
 
-		wifi_byte_cnt_2g[idx] = lo + byte_cnt;
-		wifi_byte_cnt_2g[idx + 1] += (lo + byte_cnt < lo);
+		stats_bytes_2g[idx] = lo + byte_cnt;
+		stats_bytes_2g[idx + 1] += (lo + byte_cnt < lo);
 
-		lo = wifi_pkt_cnt_2g[idx];
-		wifi_pkt_cnt_2g[idx] = lo + 1;
-		wifi_pkt_cnt_2g[idx + 1] += (lo + 1 < lo);
+		lo = stats_pkts_2g[idx];
+		stats_pkts_2g[idx] = lo + 1;
+		stats_pkts_2g[idx + 1] += (lo + 1 < lo);
 
 		wifi_port_state_2g[port] = state;
 
@@ -2399,14 +2450,14 @@ global_2g:
 		wifi_global_pkts_lo++;
 	} else {
 		u32 idx = port * 2;
-		u32 lo = wifi_byte_cnt_5g[idx];
+		u32 lo = stats_bytes_5g[idx];
 
-		wifi_byte_cnt_5g[idx] = lo + byte_cnt;
-		wifi_byte_cnt_5g[idx + 1] += (lo + byte_cnt < lo);
+		stats_bytes_5g[idx] = lo + byte_cnt;
+		stats_bytes_5g[idx + 1] += (lo + byte_cnt < lo);
 
-		lo = wifi_pkt_cnt_5g[idx];
-		wifi_pkt_cnt_5g[idx] = lo + 1;
-		wifi_pkt_cnt_5g[idx + 1] += (lo + 1 < lo);
+		lo = stats_pkts_5g[idx];
+		stats_pkts_5g[idx] = lo + 1;
+		stats_pkts_5g[idx + 1] += (lo + 1 < lo);
 
 		wifi_port_state_5g[port] = state;
 
@@ -3649,6 +3700,109 @@ static void wifi_tx_process(void)
 #endif
 }
 
+/* WiFi queue mutex init: assigns HW mutex indices to queue/BA mutexes */
+static void wifi_queue_mutex_init(void)
+{
+	npu_printf("[NPU] %s...\n", "queue_mutex_init");
+	queue_mutex_2g[0] = 10;
+	queue_mutex_2g[1] = 0;
+	queue_mutex_5g[0] = 11;
+	queue_mutex_5g[1] = 0;
+	ba_mutex_5g[0] = 5;
+	ba_mutex_5g[1] = 0;
+	ba_mutex_2g[0] = 6;
+	ba_mutex_2g[1] = 0;
+}
+
+/* WiFi pkt queue init: allocate and zero per-band packet queues */
+static void wifi_pkt_queue_init(u32 band)
+{
+	u32 i, count, base, rx_base;
+
+	if (band != 0) {
+		npu_printf("[NPU]%s  %s...\n", "5G", "pkt_queue_init");
+		if (band == 1) {
+			pkt_queue_widx_5g = 0;
+			pinode_widx_5g = 0;
+			pkt_queue_base_5g = sram_buf_alloc(2);
+			pkt_queue_rx_widx_2g = 0;
+			pkt_queue_rx_ridx_2g = 0;
+			pkt_queue_rx_base_5g = sram_buf_alloc(14);
+			count = 512;
+		} else {
+			count = 256;
+		}
+	} else {
+		npu_printf("[NPU]%s  %s...\n", "2.4", "pkt_queue_init");
+		pinode_widx_2g = 0;
+		pkt_queue_widx_2g = 0;
+		pkt_queue_base_2g = sram_buf_alloc(3);
+		rxnode_widx_2g = 0;
+		rxnode_widx_5g = 0;
+		pkt_queue_rx_base_2g = sram_buf_alloc(15);
+		count = 256;
+	}
+
+	for (i = 0; i < count; i++) {
+		if (band != 0)
+			base = pkt_queue_base_5g + i * 16;
+		else
+			base = pkt_queue_base_2g + i * 16;
+		*(u32 *)base = 0xFFFFFFFF;
+		*(u32 *)(base + 4) = 0;
+		*(u16 *)(base + 8) = 0;
+		*(u8 *)(base + 11) = 0;
+		*(u8 *)(base + 10) = 0;
+	}
+
+	for (i = 0; i < 128; i++) {
+		if (band != 0)
+			rx_base = pkt_queue_rx_base_5g + i * 12;
+		else
+			rx_base = pkt_queue_rx_base_2g + i * 12;
+		*(u32 *)rx_base = 0xFFFFFFFF;
+		*(u32 *)(rx_base + 4) = 0;
+		*(u8 *)(rx_base + 8) = 0;
+	}
+}
+
+/* WiFi BA node init: allocate reorder node pools */
+static void wifi_ba_node_init(void)
+{
+	u16 *pool;
+	u32 i;
+
+	npu_printf("[NPU] %s...\n", "ba_node_init");
+	ba_node_pool_base = sram_buf_alloc(4);
+
+	npu_printf("%s\n", "baNode_array_init");
+	reorder_alloc_mutex[0] = 8;
+	reorder_alloc_mutex[1] = 0;
+	reorder_free_mutex[0] = 9;
+	reorder_free_mutex[1] = 0;
+
+	pool = (u16 *)sram_buf_alloc(12);
+	reorder_pri_idx_pool = (u32)pool;
+	for (i = 0; i < REORDER_PRI_POOL_SIZE; i++)
+		pool[i] = (u16)i;
+	reorder_pri_widx = 0;
+	reorder_pri_ridx = 0;
+
+	pool = (u16 *)sram_buf_alloc(13);
+	reorder_sec_idx_pool = (u32)pool;
+	for (i = 0; i < REORDER_SEC_POOL_SIZE; i++)
+		pool[i] = (u16)i;
+	reorder_sec_widx = 0;
+	reorder_sec_ridx = 0;
+}
+
+/* WiFi PCIe desc alloc: allocate PCIe descriptor ring buffer */
+static void wifi_pcie_desc_alloc(void)
+{
+	wifi_pcie_desc_base = sram_buf_alloc(1);
+	npu_printf("PCIE_TOTAL_DESC_BASE=%x\n", wifi_pcie_desc_base);
+}
+
 /* WiFi state init: clear per-band ring state and byte/pkt stats */
 static void wifi_state_init(void)
 {
@@ -3687,6 +3841,11 @@ static void wifi_state_init(void)
 static void wifi_bridge_init(void)
 {
 #ifdef HAS_WIFI
+	wifi_queue_mutex_init();
+	wifi_pkt_queue_init(0);
+	wifi_pkt_queue_init(1);
+	wifi_ba_node_init();
+
 	wifi_state_init();
 
 	/* allocate per-band counter and WCID buffers */
@@ -3698,7 +3857,468 @@ static void wifi_bridge_init(void)
 	wifi_bridge_active = 0;
 	wifi_batch_count = 0;
 	wifi_pipeline_widx = 0;
+
+	mbox_wifi_handler = wifi_mail_set_wait;
+	mbox_wifi_handler2 = wifi_mail_set_event;
 #endif
+}
+
+/* WiFi PCIe BAR descriptor offset: type 1=base, type 2=base+0x6020 */
+static u32 wifi_pcie_desc_offset(u32 base, u32 type)
+{
+	if (type == 2)
+		return base + 0x6020;
+	if (type != 1) {
+		npu_printf("not support type[wificase:%d,wifisubcase:%d]\n",
+			   1, type);
+		return 0;
+	}
+	return base;
+}
+
+/* WiFi get DBDC mode from driver model */
+static u8 wifi_get_dbdc_mode(u8 model)
+{
+	if (model == 1 || model == 2) {
+		npu_printf("DriverModel(%d) %s Support DBDC\n", model, "");
+		return 1;
+	}
+	npu_printf("DriverModel(%d) %s Support DBDC\n", model, "Not");
+	return 0;
+}
+
+/* WiFi get band capability from chip variant registers */
+static u8 wifi_get_band_cap(u8 model)
+{
+	u32 chip_rev = REG32(CHIP_ID_REG) >> 16;
+	u32 variant;
+
+	if (model != 0) {
+		if (chip_rev == 15) {
+			variant = (REG32(CHIP_VARIANT_REG) & 0xF) |
+				  ((REG32(CHIP_VARIANT_REG) >> 3) & 0x10);
+			if (variant == 1) {
+				npu_printf("Chip id(%x) does not support "
+					   "NPU Wifi Offload!!!\n",
+					   REG32(CHIP_VARIANT_REG));
+				return 0;
+			}
+		}
+		npu_printf("Support NPU Wifi Offload\n");
+		return 1;
+	}
+	if (chip_rev == 12) {
+		variant = (REG32(CHIP_VARIANT_REG) & 0xF) |
+			  ((REG32(CHIP_VARIANT_REG) >> 3) & 0x10);
+		if (variant == 0) {
+			npu_printf("Chip id(%x) does not support "
+				   "NPU Wifi Offload!!!\n",
+				   REG32(CHIP_VARIANT_REG));
+			return 0;
+		}
+	}
+	npu_printf("Support NPU Wifi Offload\n");
+	return 1;
+}
+
+/* WiFi NPU init: main WiFi subsystem init called from mailbox */
+static void wifi_npu_init(u32 dbdc)
+{
+#ifdef HAS_WIFI
+	u32 desc_type1, desc_type2;
+	u32 bar_5g, bar_2g;
+
+	npu_printf("[NPU] %s...\n", "npu_init");
+	npu_printf("=======================\n");
+	npu_printf("NPU Version: %s_NPU_%s\n",
+		   wifi_chip_names[wifi_driver_model], NPU_INIT_VERSION);
+	npu_printf("=======================\n");
+
+	wifi_band_cap = wifi_get_band_cap(wifi_driver_model);
+	wifi_dbdc_mode = wifi_get_dbdc_mode(wifi_driver_model);
+
+	desc_type2 = wifi_pcie_desc_offset(wifi_pcie_desc_base, 2);
+	desc_type1 = wifi_pcie_desc_offset(wifi_pcie_desc_base, 1);
+	bar_5g = desc_type2 + 0x6020;
+	bar_2g = desc_type1 + 0x6020;
+
+	switch (wifi_pcie_port_type) {
+	case 1:
+		REG32(0x1FA90038) = desc_type1 & 0x1FFFFFFF;
+		REG32(0x1FA9003C) = bar_5g & 0x1FFFFFFF;
+		break;
+	case 0:
+		REG32(PCIE0_MAC_BASE + 0x8030) = desc_type1 & 0x1FFFFFFF;
+		REG32(PCIE0_MAC_BASE + 0x8034) = bar_5g & 0x1FFFFFFF;
+		if (dbdc != 0)
+			goto alloc_5g;
+		goto alloc_2g;
+	case 2:
+		if (dbdc != 0) {
+			REG32(0x1FA90038) = desc_type1 & 0x1FFFFFFF;
+			REG32(0x1FA9003C) = bar_2g & 0x1FFFFFFF;
+			goto alloc_5g;
+		}
+		REG32(PCIE0_MAC_BASE + 0x8030) = desc_type2 & 0x1FFFFFFF;
+		REG32(PCIE0_MAC_BASE + 0x8034) = bar_5g & 0x1FFFFFFF;
+		goto alloc_2g;
+	case 3:
+		if (dbdc == 0) {
+			REG32(0x1FA90038) = desc_type2 & 0x1FFFFFFF;
+			REG32(0x1FA9003C) = bar_5g & 0x1FFFFFFF;
+			goto alloc_2g;
+		}
+		REG32(PCIE0_MAC_BASE + 0x8030) = desc_type1 & 0x1FFFFFFF;
+		REG32(PCIE0_MAC_BASE + 0x8034) = bar_2g & 0x1FFFFFFF;
+		goto alloc_5g;
+	default:
+		break;
+	}
+	if (dbdc != 0)
+		goto alloc_5g;
+
+alloc_2g:
+	ba_table_a = sram_buf_alloc(8);
+	pinode_widx_5g = 0;
+	pkt_queue_rx_base_2g = sram_buf_alloc(6);
+	wifi_pipeline_queue_2g =
+		wifi_pcie_desc_offset(wifi_pcie_desc_base, 2);
+	goto pipeline_init;
+
+alloc_5g:
+	ba_table_b = sram_buf_alloc(7);
+	pinode_widx_2g = 0;
+	wifi_pipeline_queue_5g =
+		wifi_pcie_desc_offset(wifi_pcie_desc_base, 1);
+
+pipeline_init:
+	npu_printf("[NPU]  %s...\n", "pipeline_pkt_queue_init");
+	{
+		u32 *p;
+		u32 end;
+
+		wifi_pipeline_base = sram_buf_alloc(21);
+		p = (u32 *)wifi_pipeline_base;
+		end = wifi_pipeline_base + 25600;
+		while ((u32)p < end) {
+			*p = 0xFFFFFFFF;
+			*(u16 *)(p + 1) = 0;
+			p = (u32 *)((u8 *)p + 8);
+		}
+	}
+
+	counter_init(dbdc);
+	wcid_counter_init(dbdc);
+#endif
+}
+
+/* WiFi mailbox setters: simple parameter setters called from host */
+static void npu_set_retry_limit(u32 val)
+{
+	wifi_retry_limit = (u16)val;
+	npu_printf("enq_error_retry_times = %d !!!\n", val);
+}
+
+static void npu_set_pcie_port_type(u32 val)
+{
+	wifi_pcie_port_type = (u8)val;
+	npu_printf("PCIe_Port_Type = %d !!!\n", val);
+}
+
+static void npu_set_band_enable(u32 band)
+{
+	if (band > 1) {
+		npu_printf("[ERROR] band_idx is wrong value %d !!!\n", band);
+		return;
+	}
+	*((u8 *)&pipeline_5g_ready + band) = 1;
+}
+
+static void npu_set_force_to_cpu(u8 val)
+{
+	wifi_force_to_cpu = val;
+	npu_printf("isForceToCpu=%s\n", val ? "true" : "false");
+	if (wifi_force_to_cpu > 1)
+		npu_printf("[ERROR] isForceToCpu is wrong value !!!\n");
+}
+
+static void npu_set_flushall_timeout(u32 val)
+{
+	wifi_flushall_timeout = (u16)val;
+	npu_printf("flushall_timeout=%d\n", val);
+}
+
+static void npu_set_flushone_timeout(u32 val)
+{
+	wifi_flushone_timeout = (u16)val;
+	npu_printf("flushone_timeout=%d\n", val);
+}
+
+static void npu_set_no_ba_test(u8 val)
+{
+	wifi_no_ba_test = val;
+	npu_printf("isforTestNoBA=%s\n", val ? "true" : "false");
+	if (wifi_no_ba_test > 1)
+		npu_printf("[ERROR] isforTestNoBA is wrong value !!!\n");
+}
+
+static void npu_set_fast_flag(u8 val)
+{
+	wifi_debug_flags = val;
+	npu_printf("npu_wifi_fast_flag = %d !!!\n", val);
+}
+
+static void npu_set_pkt_buf_addr(u32 val)
+{
+	wifi_pkt_buf_addr = val;
+	npu_printf("pkt_buf_addr=%lx\n", val);
+}
+
+static void npu_set_dram_ba_node_addr(u32 val)
+{
+	wifi_dram_ba_node_addr = (val & 0x3FFFFFFF) | NPU_ADDR_MASK;
+	npu_printf("dramBaNodeAddr=%x\n", val);
+}
+
+static void npu_set_driver_model(u32 val)
+{
+	wifi_driver_model = (u8)val;
+	npu_printf("driverModel=%d\n", val);
+}
+
+static void npu_set_band0_on_cpu(u32 val)
+{
+	wifi_band0_on_cpu = (u8)val;
+	npu_printf("npu_band0_on_cpu_support=%s\n",
+		   val ? "true" : "false");
+}
+
+/* npu_set_bar_info: update BA entry window start for a given WCID/TID */
+static void npu_set_bar_info(u32 band, u32 packed)
+{
+	u32 tid = packed & 7;
+	u32 ssn = (packed << 8) >> 19;
+	u32 wcid = (u8)(packed >> 3);
+	u32 entry_addr;
+
+	if (wcid == 0) {
+		if ((wifi_debug_flags & 4) != 0) {
+			u32 *cnt;
+
+			if (band == 1)
+				cnt = (u32 *)(counter_base_5g + 268);
+			else if (band != 0)
+				cnt = (u32 *)(counter_base_tri + 268);
+			else
+				cnt = (u32 *)(counter_base_2g + 268);
+			(*cnt)++;
+		}
+		npu_printf("ERROR!!!!! npu_set_bar_info() [%s]wcid == 0\n",
+			   (band != 1) ? "2.4G" : "5G");
+		return;
+	}
+
+	if (wifi_dbdc_mode != 0) {
+		if (wcid == 0) {
+			npu_printf("ERROR!!!!! [GET_BA_ENTRY_DBDC_]wcid == 0\n");
+			return;
+		}
+		if (wcid > 150)
+			entry_addr = ba_table_a +
+				     28 * (8 * (wcid - 151) + tid);
+		else
+			entry_addr = ba_table_b +
+				     28 * (8 * (wcid - 1) + tid);
+	} else {
+		u32 off = 28 * (8 * (wcid - 1) + tid);
+
+		if (band != 0)
+			entry_addr = ba_table_b + off;
+		else
+			entry_addr = ba_table_a + off;
+	}
+
+	ba_state_update(ssn & 0xFFFF, 3, entry_addr);
+
+	if ((*(u16 *)(entry_addr + 18) - ssn) & 0x8000) {
+		u16 new_ssn = (ssn != 0) ? ssn - 1 : 4095;
+
+		ba_indicate_le_seq((u32 *)entry_addr, new_ssn);
+
+		if (band == 0) {
+			if (wifi_dbdc_mode != 0)
+				hw_mutex_lock(ba_mutex_5g);
+			else
+				hw_mutex_lock(ba_mutex_2g);
+			*(u16 *)(entry_addr + 18) = new_ssn;
+			if (wifi_dbdc_mode != 0)
+				hw_mutex_unlock(ba_mutex_5g);
+			else
+				hw_mutex_unlock(ba_mutex_2g);
+		} else {
+			hw_mutex_lock(ba_mutex_5g);
+			*(u16 *)(entry_addr + 18) = new_ssn;
+			hw_mutex_unlock(ba_mutex_5g);
+		}
+
+		{
+			u16 scan_result = ba_seq_scan(
+				(u32 *)entry_addr,
+				*(u16 *)(entry_addr + 18));
+
+			if (scan_result != 0xFFFF) {
+				if (band == 0) {
+					if (wifi_dbdc_mode != 0)
+						hw_mutex_lock(ba_mutex_5g);
+					else
+						hw_mutex_lock(ba_mutex_2g);
+				} else {
+					hw_mutex_lock(ba_mutex_5g);
+				}
+				*(u16 *)(entry_addr + 18) = scan_result;
+				if (band == 0) {
+					if (wifi_dbdc_mode != 0)
+						hw_mutex_unlock(ba_mutex_5g);
+					else
+						hw_mutex_unlock(ba_mutex_2g);
+				} else {
+					hw_mutex_unlock(ba_mutex_5g);
+				}
+			}
+		}
+	}
+}
+
+/* npu_set_ba_entry: configure BA reorder window for a WCID/TID */
+static void npu_set_ba_entry(u32 band, u32 packed)
+{
+	u32 tid = packed & 7;
+	u32 win_size = packed >> 20;
+	u32 ssn = (packed >> 11) & 0x1FF;
+	u32 wcid = (u8)(packed >> 3);
+	u32 entry_addr;
+
+	if (wcid == 0) {
+		npu_printf("ERROR!!!!! npu_set_ba_entry() [%s]wcid == 0\n",
+			   (band != 1) ? "2.4G" : "5G");
+		return;
+	}
+
+	if (band != 0) {
+		if (wifi_dbdc_mode != 0) {
+			if (wcid == 0) {
+				npu_printf("ERROR!!!!! "
+					   "[GET_BA_ENTRY_DBDC_]wcid == 0\n");
+				entry_addr = 0;
+			} else if (wcid > 150) {
+				entry_addr = ba_table_a +
+					     28 * (8 * (wcid - 151) + tid);
+			} else {
+				entry_addr = ba_table_b +
+					     28 * (8 * (wcid - 1) + tid);
+			}
+		} else {
+			entry_addr = ba_table_b +
+				     28 * (8 * (wcid - 1) + tid);
+		}
+
+		ba_flush_entry((u32 *)entry_addr);
+		hw_mutex_lock(ba_mutex_5g);
+
+		if (win_size == 0) {
+			*(u8 *)(entry_addr + 25) = (u8)band;
+			*(u32 *)(entry_addr + 16) = 8;
+			*(u32 *)(entry_addr + 20) = 0;
+			*(u8 *)(entry_addr + 24) = 0;
+		} else {
+			*(u16 *)(entry_addr + 16) = (u16)win_size;
+			*(u16 *)(entry_addr + 18) = (u16)ssn;
+			*(u8 *)(entry_addr + 25) = (u8)band;
+			*(u8 *)(entry_addr + 24) = 3;
+		}
+
+		hw_mutex_unlock(ba_mutex_5g);
+	} else {
+		if (wifi_dbdc_mode != 0) {
+			if (wcid == 0) {
+				npu_printf("ERROR!!!!! "
+					   "[GET_BA_ENTRY_DBDC_]wcid == 0\n");
+				entry_addr = 0;
+			} else if (wcid > 150) {
+				entry_addr = ba_table_a +
+					     28 * (8 * (wcid - 151) + tid);
+			} else {
+				entry_addr = ba_table_b +
+					     28 * (8 * (wcid - 1) + tid);
+			}
+		} else {
+			entry_addr = ba_table_a +
+				     28 * (8 * (wcid - 1) + tid);
+		}
+
+		ba_flush_entry((u32 *)entry_addr);
+
+		if (wifi_dbdc_mode != 0)
+			hw_mutex_lock(ba_mutex_5g);
+		else
+			hw_mutex_lock(ba_mutex_2g);
+
+		if (win_size == 0) {
+			*(u32 *)(entry_addr + 16) = 8;
+			*(u32 *)(entry_addr + 20) = 0;
+			*(u16 *)(entry_addr + 24) = 0;
+		} else {
+			*(u16 *)(entry_addr + 16) = (u16)win_size;
+			*(u16 *)(entry_addr + 18) = (u16)ssn;
+			*(u16 *)(entry_addr + 24) = 3;
+		}
+
+		if (wifi_dbdc_mode != 0)
+			hw_mutex_unlock(ba_mutex_5g);
+		else
+			hw_mutex_unlock(ba_mutex_2g);
+	}
+}
+
+/* npu_set_wait_state: set per-port wait state and update force_to_cpu */
+static void npu_set_wait_state(u32 port, u8 state)
+{
+	u32 i;
+
+	if (port <= 15) {
+		wifi_wait_state_2g[port] = state;
+		wifi_band0_on_cpu = state;
+	} else {
+		wifi_wait_state_5g[port - 16] = state;
+		wifi_force_to_cpu = state;
+	}
+
+	for (i = 0; i < 16; i++) {
+		if (wifi_wait_state_2g[i] != 0 ||
+		    wifi_wait_state_5g[i] != 0) {
+			wifi_force_to_cpu = 1;
+			return;
+		}
+	}
+	wifi_force_to_cpu = 0;
+	npu_printf("set wait!  not Force to CPU \n");
+}
+
+/* WiFi RXD init thunk: dispatches to band-specific init */
+static void npu_set_rxd_init(u32 band, u32 ring_size)
+{
+	if (band == 1)
+		wifi_init_rxd_5g(ring_size, 1);
+	else
+		wifi_init_rxd_2g(ring_size, 0);
+}
+
+/* WiFi get pipeline queue base for a given band */
+static u32 npu_get_pipeline_queue(u32 band)
+{
+	if (band == 1)
+		return wifi_pipeline_queue_5g & 0x1FFFFFFF;
+	return wifi_pipeline_queue_2g & 0x1FFFFFFF;
 }
 
 /* ================================================================
@@ -3857,6 +4477,93 @@ static int wifi_mbox_cmd_dispatch(u32 *msg)
 		return wifi_mbox_handlers[cmd_idx]((u32)msg, 0);
 #endif
 	return 0;
+}
+
+/* WiFi mail set_wait handler: dispatches sub-commands from host */
+static int wifi_mail_set_wait(u32 base, u32 cnt)
+{
+	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);
+	u32 cmd = msg[1];
+	u32 band = msg[0] & 0xF;
+	u32 val = msg[2];
+
+	switch (cmd) {
+	case 0:
+		npu_set_driver_model(val);
+		break;
+	case 1:
+		npu_set_pcie_port_type(val);
+		break;
+	case 2:
+		npu_set_retry_limit(val);
+		break;
+	case 3:
+		npu_set_force_to_cpu((u8)val);
+		break;
+	case 4:
+		npu_set_flushall_timeout(val);
+		break;
+	case 5:
+		npu_set_flushone_timeout(val);
+		break;
+	case 6:
+		npu_set_no_ba_test((u8)val);
+		break;
+	case 7:
+		npu_set_fast_flag((u8)val);
+		break;
+	case 8:
+		npu_set_pkt_buf_addr(val);
+		break;
+	case 9:
+		npu_set_dram_ba_node_addr(val);
+		break;
+	case 10:
+		npu_set_band0_on_cpu(val);
+		break;
+	case 11:
+		npu_set_bar_info(band, val);
+		break;
+	case 12:
+		npu_set_ba_entry(band, val);
+		break;
+	case 13:
+		wifi_reset_ba_entry(band, val);
+		break;
+	case 14:
+		npu_set_pcie_base(val, band);
+		break;
+	case 15:
+		npu_set_rxd_init(band, val);
+		break;
+	case 16:
+		npu_set_band_enable(band);
+		break;
+	case 17:
+		npu_set_wait_state(val, (u8)(msg[3]));
+		break;
+	default:
+		npu_printf("wifi_mail_set_wait: unknown cmd %d\n", cmd);
+		break;
+	}
+	return 1;
+}
+
+/* WiFi mail set_event handler */
+static int wifi_mail_set_event(u32 base, u32 cnt)
+{
+	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);
+	u32 cmd = msg[1];
+
+	switch (cmd) {
+	case 0:
+		wifi_npu_init(msg[0] & 0xF);
+		break;
+	default:
+		wifi_mbox_cmd_dispatch(msg);
+		break;
+	}
+	return 1;
 }
 
 /* Core0 WiFi init wrapper */
