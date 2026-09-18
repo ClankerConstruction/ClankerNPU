@@ -7038,7 +7038,7 @@ static void tr471_main_init(void)
  * Per-core main functions
  * ================================================================ */
 
-static void core0_main(void)
+static void __attribute__((noinline)) core0_main(void)
 {
 	tdma_init();
 
@@ -7055,7 +7055,7 @@ static void core0_main(void)
 	npu_printf("%s\n", "core0_main");
 }
 
-static void core1_main(void)
+static void __attribute__((noinline)) core1_main(void)
 {
 	npu_printf("%s\n", "core1_main");
 #ifdef HAS_WIFI
@@ -7067,14 +7067,13 @@ static void core1_main(void)
 }
 
 #if MAX_CORE_NUM > 2
-static void core2_main(void)
+static void __attribute__((noinline)) core2_main(void)
 {
 	npu_printf("%s\n", "core2_main");
-	/* register timer ISR on PLIC source 18 */
 	plic_register_isr(18, timer_isr);
 }
 
-static void core3_main(void)
+static void __attribute__((noinline)) core3_main(void)
 {
 	npu_printf("%s\n", "core3_main");
 
@@ -7090,13 +7089,13 @@ static void core4_wifi_init_wrapper(void)
 #endif
 }
 
-static void core4_main(void)
+static void __attribute__((noinline)) core4_main(void)
 {
 	npu_printf("%s\n", "core4_main");
 	core4_wifi_init_wrapper();
 }
 
-static void core5_main(void)
+static void __attribute__((noinline)) core5_main(void)
 {
 #if defined(HAS_DBA)
 	npu_printf("%s: start\n", "core5_dba_main");
@@ -7125,7 +7124,7 @@ static void core6_wifi_init_wrapper(void)
 #endif
 }
 
-static void core6_main(void)
+static void __attribute__((noinline)) core6_main(void)
 {
 	npu_printf("%s\n", "core6_main");
 	core6_wifi_init_wrapper();
@@ -7138,7 +7137,7 @@ static void core7_wifi_init_wrapper(void)
 #endif
 }
 
-static void core7_main(void)
+static void __attribute__((noinline)) core7_main(void)
 {
 #ifdef HAS_TUNNEL
 	u32 pkt_len = 0, desc_ptr = 0;
