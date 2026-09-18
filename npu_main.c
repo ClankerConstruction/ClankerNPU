@@ -135,17 +135,17 @@ static int wifi_mail_print_stats_2g(u32 base, u32 cnt);
 static int wifi_mail_get_counter_base(u32 base, u32 cnt);
 static int wifi_mail_get_wcid_counter_base(u32 base, u32 cnt);
 static void tdma_tx_init(void);
+static int kite_wifi_config(u32 base, u32 cnt);
 #endif
 #ifdef WIFI_EAGLE
 static int eagle_mail_set_event(u32 base, u32 cnt);
 static int eagle_wifi_config(u32 base, u32 cnt);
-static int eagle_hwnat_mail_handler(u32 base, u32 cnt);
 #endif
 
 /* tunnel handlers */
 #ifdef HAS_TUNNEL
 static int tunnel_mail_handler(u32 base, u32 cnt);
-static int hwnat_mail_dispatch(u32 raw_ptr);
+static int hwnat_mail_dispatch(u32 base, u32 cnt);
 static s32 chip_cap_query(u32 idx, u32 query);
 static void l4s_ecn_process(u32 port);
 static int l4s_set_config(u32 cmd, u32 arg);
@@ -542,11 +542,14 @@ static u32 wifi_pipeline_queue_2g;
 static u32 wifi_pipeline_queue_5g;
 
 #ifdef WIFI_EAGLE
-/* Eagle RRO/MSDU config state (funcType 1-6 from host) */
 static volatile u32 eagle_rro_cfg[26];
 static volatile u32 eagle_rro_active;
 static mbox_handler_t eagle_event_table[4];
-static mbox_handler_t eagle_hwnat_table[6];
+#endif
+
+#if defined(WIFI_KITE) && defined(HAS_TR471)
+static volatile u32 kite_wifi_cfg[26];
+static volatile u32 kite_test_active;
 #endif
 
 /* ================================================================
@@ -1184,14 +1187,32 @@ static void mailbox_init(void)
 
 	/* register handlers into core 0's callback slots */
 	callbacks = (u32 *)&mbox_dispatch[0][48];
-#ifdef WIFI_KITE
+#ifdef HAS_WIFI
 	callbacks[0] = (u32)(void *)wifi_mail_set_wait;
+#ifdef WIFI_KITE
 	callbacks[1] = (u32)(void *)wifi_mail_set_event;
 #elif defined(WIFI_EAGLE)
-	callbacks[0] = (u32)(void *)wifi_mail_set_wait;
 	callbacks[1] = (u32)(void *)eagle_mail_set_event;
+#endif
+#endif
+
+#ifdef HAS_TR471
+#ifdef WIFI_KITE
+	callbacks[4] = (u32)(void *)kite_wifi_config;
+#elif defined(WIFI_EAGLE)
 	callbacks[4] = (u32)(void *)eagle_wifi_config;
-	callbacks[5] = (u32)(void *)eagle_hwnat_mail_handler;
+#endif
+#endif
+
+#ifdef HAS_TUNNEL
+	callbacks[5] = (u32)(void *)hwnat_mail_dispatch;
+#endif
+
+#ifdef HAS_DBA
+	{
+		u32 *dba_cb = (u32 *)&mbox_dispatch[5][48];
+		dba_cb[3] = (u32)(void *)dba_mail_handler;
+	}
 #endif
 }
 
@@ -5288,6 +5309,49 @@ static int wifi_mail_print_stats_2g(u32 base, u32 cnt)
 	return 1;
 }
 
+#ifdef HAS_TR471
+static int kite_wifi_config(u32 base, u32 cnt)
+{
+	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);
+	u32 func_type = msg[0];
+	u32 sz;
+
+	(void)cnt;
+	switch (func_type) {
+	case 1:
+		kite_wifi_cfg[0] = msg[1];
+		sz = msg[2];
+		if (sz > 1450)
+			sz = 1450;
+		kite_wifi_cfg[1] = sz;
+		kite_wifi_cfg[2] = msg[3];
+		sz = msg[4];
+		if (sz > 1450)
+			sz = 1450;
+		kite_wifi_cfg[3] = sz;
+		kite_wifi_cfg[4] = msg[5];
+		break;
+	case 5:
+		npu_printf("FUNC_TYPE_START_TEST\n");
+		kite_wifi_cfg[9] = msg[2];
+		kite_wifi_cfg[10] = msg[1];
+		kite_wifi_cfg[8] = 1;
+		kite_test_active = 1;
+		break;
+	case 6:
+		npu_memset((void *)kite_wifi_cfg, 0, sizeof(kite_wifi_cfg));
+		kite_test_active = 0;
+		break;
+	case 10:
+		npu_printf("FUNC_TYPE_SET_BUFF_ADDR\n");
+		break;
+	default:
+		break;
+	}
+	return 0;
+}
+#endif /* HAS_TR471 */
+
 #endif /* WIFI_KITE */
 
 #ifdef WIFI_EAGLE
@@ -5342,37 +5406,6 @@ static int eagle_wifi_config(u32 base, u32 cnt)
 		break;
 	}
 	return 1;
-}
-
-static int eagle_hwnat_mail_handler(u32 base, u32 cnt)
-{
-	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);
-	u32 func_type = msg[0];
-	u32 func_id = msg[1];
-	u32 i, ret;
-
-	(void)cnt;
-	if (func_type != 1) {
-		npu_printf("not support unknow funcType\n");
-		for (i = 0; i < 7; i++)
-			npu_printf("Offset: %08zx, Value: 0x%08x\n",
-				   i * 4, msg[i]);
-		return 0;
-	}
-
-	if (func_id < 1 || func_id > 5) {
-		npu_printf("Error: invalid funcId! hwnat_mail_data->funcType=%u hwnat_mail_data->funcId=%u\n",
-			   func_type, func_id);
-		return 0;
-	}
-
-	if (!eagle_hwnat_table[func_id])
-		return 0;
-
-	ret = (u32)eagle_hwnat_table[func_id](base, cnt);
-	if (ret == 0)
-		npu_printf("hwnat_mail_set_wait_operation fail !\n");
-	return (int)ret;
 }
 
 #endif /* WIFI_EAGLE */
@@ -6883,41 +6916,38 @@ static int tunnel_mail_handler(u32 base, u32 cnt)
 	}
 }
 
-/* hwnat mail dispatcher: receives raw data from host, dispatches by funcId */
-static int hwnat_mail_dispatch(u32 raw_ptr)
+static int hwnat_mail_dispatch(u32 base, u32 cnt)
 {
-	u32 addr = (raw_ptr & 0x3FFFFFFF) | 0x40000000;
+	u32 addr = (base & 0x3FFFFFFF) | NPU_ADDR_MASK;
 	u32 func_type = *(volatile u32 *)addr;
 	u32 func_id;
+	int result;
 
+	(void)cnt;
 	if (func_type != 1) {
 		u32 i;
 
 		npu_printf("not support unknow funcType\n");
-		for (i = 0; i < 28; i += 4)
+		for (i = 0; i < 7; i++)
 			npu_printf("Offset: %08zx, Value: 0x%08x\n",
-				   i, *(volatile u32 *)(addr + i));
+				   i * 4, *(volatile u32 *)(addr + i * 4));
 		return 0;
 	}
 
 	func_id = *(volatile u32 *)(addr + 4);
 	if (func_id < 1 || func_id > 5) {
 		npu_printf("Error: invalid funcId! hwnat_mail_data->funcType=%u hwnat_mail_data->funcId=%u\n",
-			   1, func_id);
+			   func_type, func_id);
 		return 0;
 	}
 
-	/* dispatch through function table at mbox_ext_handlers */
 	if (mbox_ext_handlers[func_id + 4] == NULL)
 		return 0;
 
-	{
-		int result = mbox_ext_handlers[func_id + 4](addr, 0);
-
-		if (result == 0)
-			npu_printf("hwnat_mail_set_wait_operation fail !\n");
-		return result;
-	}
+	result = mbox_ext_handlers[func_id + 4](addr, 0);
+	if (result == 0)
+		npu_printf("hwnat_mail_set_wait_operation fail !\n");
+	return result;
 }
 
 #endif /* HAS_TUNNEL */
