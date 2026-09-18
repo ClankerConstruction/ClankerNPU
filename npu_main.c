@@ -124,15 +124,22 @@ static void pinode_drain(u32 band);
 static void rxnode_drain(u32 band);
 #endif
 
-/* WiFi handlers - forward declared for data init */
-#ifdef WIFI_KITE
+/* WiFi handlers - forward declared for mailbox_init */
+#ifdef HAS_WIFI
 static int wifi_mail_set_wait(u32 base, u32 cnt);
+#endif
+#ifdef WIFI_KITE
 static int wifi_mail_set_event(u32 base, u32 cnt);
 static int wifi_mail_print_stats_5g(u32 base, u32 cnt);
 static int wifi_mail_print_stats_2g(u32 base, u32 cnt);
 static int wifi_mail_get_counter_base(u32 base, u32 cnt);
 static int wifi_mail_get_wcid_counter_base(u32 base, u32 cnt);
 static void tdma_tx_init(void);
+#endif
+#ifdef WIFI_EAGLE
+static int eagle_mail_set_event(u32 base, u32 cnt);
+static int eagle_wifi_config(u32 base, u32 cnt);
+static int eagle_hwnat_mail_handler(u32 base, u32 cnt);
 #endif
 
 /* tunnel handlers */
@@ -529,6 +536,14 @@ static u8 wifi_port_band_5g[16];
 /* WiFi pipeline pkt queue */
 static u32 wifi_pipeline_queue_2g;
 static u32 wifi_pipeline_queue_5g;
+
+#ifdef WIFI_EAGLE
+/* Eagle RRO/MSDU config state (funcType 1-6 from host) */
+static volatile u32 eagle_rro_cfg[26];
+static volatile u32 eagle_rro_active;
+static mbox_handler_t eagle_event_table[4];
+static mbox_handler_t eagle_hwnat_table[6];
+#endif
 
 /* ================================================================
  * Utility functions
@@ -1071,11 +1086,6 @@ static int boot_printf(const char *fmt, ...)
 /* mailbox dispatch table: 6 cores x 80 bytes */
 static u8 mbox_dispatch[MAX_CORE_NUM][80];
 
-/* mailbox handler slots registered during init */
-static mbox_handler_t mbox_wifi_handler;
-static mbox_handler_t mbox_wifi_handler2;
-static mbox_handler_t mbox_notify_handler;
-static mbox_handler_t mbox_cfg_handler;
 
 static void mbox_isr(int src)
 {
@@ -1154,15 +1164,17 @@ static void mailbox_init(void)
 	for (i = 0; i < MAX_CORE_NUM; i++)
 		npu_memset(mbox_dispatch[i], 0, 80);
 
-	/* register default handlers into core 0's callback slots */
+	/* register handlers into core 0's callback slots */
 	callbacks = (u32 *)&mbox_dispatch[0][48];
-	callbacks[0] = (u32)(void *)mbox_wifi_handler;
-	callbacks[1] = (u32)(void *)mbox_wifi_handler2;
-	callbacks[5] = (u32)(void *)mbox_cfg_handler;
-
-	/* register handler in last core's callback slot */
-	callbacks = (u32 *)&mbox_dispatch[MAX_CORE_NUM - 1][48];
-	callbacks[3] = (u32)(void *)mbox_notify_handler;
+#ifdef WIFI_KITE
+	callbacks[0] = (u32)(void *)wifi_mail_set_wait;
+	callbacks[1] = (u32)(void *)wifi_mail_set_event;
+#elif defined(WIFI_EAGLE)
+	callbacks[0] = (u32)(void *)wifi_mail_set_wait;
+	callbacks[1] = (u32)(void *)eagle_mail_set_event;
+	callbacks[4] = (u32)(void *)eagle_wifi_config;
+	callbacks[5] = (u32)(void *)eagle_hwnat_mail_handler;
+#endif
 }
 
 /* notify host via mailbox queue 8 */
@@ -4547,9 +4559,6 @@ static void wifi_bridge_init(void)
 	wifi_pipeline_widx = 0;
 
 #ifdef WIFI_KITE
-	mbox_wifi_handler = wifi_mail_set_wait;
-	mbox_wifi_handler2 = wifi_mail_set_event;
-
 	wifi_mbox_handlers[0] = wifi_mail_print_stats_5g;
 	wifi_mbox_handlers[1] = wifi_mail_print_stats_2g;
 	wifi_mbox_handlers[2] = wifi_mail_get_counter_base;
@@ -5263,6 +5272,93 @@ static int wifi_mail_print_stats_2g(u32 base, u32 cnt)
 }
 
 #endif /* WIFI_KITE */
+
+#ifdef WIFI_EAGLE
+
+static int eagle_mail_set_event(u32 base, u32 cnt)
+{
+	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);
+	u32 evt = msg[0];
+
+	(void)cnt;
+	if (evt < 4 && eagle_event_table[evt])
+		return eagle_event_table[evt](base, cnt);
+	return 0;
+}
+
+static int eagle_wifi_config(u32 base, u32 cnt)
+{
+	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);
+	u32 func_type = msg[0];
+	u32 sz;
+
+	(void)cnt;
+	switch (func_type) {
+	case 1:
+		eagle_rro_cfg[0] = msg[1];
+		sz = msg[2];
+		if (sz > 1450)
+			sz = 1450;
+		eagle_rro_cfg[1] = sz;
+		eagle_rro_cfg[2] = msg[3];
+		sz = msg[4];
+		if (sz > 1450)
+			sz = 1450;
+		eagle_rro_cfg[3] = sz;
+		eagle_rro_cfg[4] = msg[5];
+		break;
+	case 5:
+		npu_printf("FUNC_TYPE_START_TEST\n");
+		eagle_rro_cfg[9] = msg[2];
+		eagle_rro_cfg[10] = msg[1];
+		eagle_rro_cfg[8] = 1;
+		eagle_rro_active = 1;
+		break;
+	case 6:
+		npu_memset((void *)eagle_rro_cfg, 0, sizeof(eagle_rro_cfg));
+		eagle_rro_active = 0;
+		break;
+	case 10:
+		npu_printf("FUNC_TYPE_SET_BUFF_ADDR\n");
+		break;
+	default:
+		break;
+	}
+	return 1;
+}
+
+static int eagle_hwnat_mail_handler(u32 base, u32 cnt)
+{
+	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);
+	u32 func_type = msg[0];
+	u32 func_id = msg[1];
+	u32 i, ret;
+
+	(void)cnt;
+	if (func_type != 1) {
+		npu_printf("not support unknow funcType\n");
+		for (i = 0; i < 7; i++)
+			npu_printf("Offset: %08zx, Value: 0x%08x\n",
+				   i * 4, msg[i]);
+		return 0;
+	}
+
+	if (func_id < 1 || func_id > 5) {
+		npu_printf("Error: invalid funcId! hwnat_mail_data->funcType=%u hwnat_mail_data->funcId=%u\n",
+			   func_type, func_id);
+		return 0;
+	}
+
+	if (!eagle_hwnat_table[func_id])
+		return 0;
+
+	ret = (u32)eagle_hwnat_table[func_id](base, cnt);
+	if (ret == 0)
+		npu_printf("hwnat_mail_set_wait_operation fail !\n");
+	return (int)ret;
+}
+
+#endif /* WIFI_EAGLE */
 
 /* WiFi mailbox command dispatcher: lookup and call handler by cmd index */
 static int wifi_mbox_cmd_dispatch(u32 *msg)
