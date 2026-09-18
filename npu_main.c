@@ -115,6 +115,10 @@ static void npu_set_ba_entry(u32 band, u32 packed);
 #ifdef WIFI_KITE
 static int wifi_mail_set_wait(u32 base, u32 cnt);
 static int wifi_mail_set_event(u32 base, u32 cnt);
+static int wifi_mail_print_stats_5g(u32 base, u32 cnt);
+static int wifi_mail_print_stats_2g(u32 base, u32 cnt);
+static int wifi_mail_get_counter_base(u32 base, u32 cnt);
+static int wifi_mail_get_wcid_counter_base(u32 base, u32 cnt);
 static void tdma_tx_init(void);
 #endif
 
@@ -3884,6 +3888,11 @@ static void wifi_bridge_init(void)
 
 	mbox_wifi_handler = wifi_mail_set_wait;
 	mbox_wifi_handler2 = wifi_mail_set_event;
+
+	wifi_mbox_handlers[0] = wifi_mail_print_stats_5g;
+	wifi_mbox_handlers[1] = wifi_mail_print_stats_2g;
+	wifi_mbox_handlers[2] = wifi_mail_get_counter_base;
+	wifi_mbox_handlers[3] = wifi_mail_get_wcid_counter_base;
 #endif
 }
 
@@ -4407,6 +4416,74 @@ static u32 npu_mbox_get_rxdesc_base(u32 band)
 	return 1111;
 }
 
+static u32 wcid_counter_base_get(u32 band)
+{
+	return sram_buf_alloc((band != 1) + 19) & 0x1FFFFFFF;
+}
+
+static u32 counter_base_get(u32 band)
+{
+	if (band == 1)
+		return sram_buf_alloc(9) & 0x1FFFFFFF;
+	return sram_buf_alloc((band != 0) + 10) & 0x1FFFFFFF;
+}
+
+static void npu_mbox_get_counter(u32 port, u64 *bytes_2g, u64 *pkts_2g,
+				 u64 *bytes_5g, u64 *pkts_5g,
+				 u8 *omac_2g, u8 *omac_5g)
+{
+	if (port > 15) {
+		npu_printf("[ERROR]%s() invalid input value:%d \n",
+			   "npu_mbox_get_wait_counter_wrapper", port);
+		*bytes_2g = 0;
+		*pkts_2g = 0;
+		*bytes_5g = 0;
+		*pkts_5g = 0;
+		*omac_2g = 0;
+		*omac_5g = 0;
+		return;
+	}
+
+	*bytes_2g = ((u64 *)stats_bytes_2g)[port];
+	*pkts_2g = ((u64 *)stats_pkts_2g)[port];
+	*bytes_5g = ((u64 *)stats_bytes_5g)[port];
+	*pkts_5g = ((u64 *)stats_pkts_5g)[port];
+	*omac_2g = wifi_port_band_2g[port];
+	*omac_5g = wifi_port_band_5g[port];
+}
+
+static void wifi_print_stats_5g(void)
+{
+	u32 i;
+
+	for (i = 0; i < 16; i++) {
+		npu_printf("ReceivedPktCount5G[%d]=%lu\n",
+			   i, stats_pkts_5g[i * 2], stats_pkts_5g[i * 2 + 1]);
+		npu_printf("ReceivedByteCount5G[%d]=%llu(%lluMiB)\n",
+			   i, stats_bytes_5g[i * 2], stats_bytes_5g[i * 2 + 1],
+			   (stats_bytes_5g[i * 2 + 1] << 12) |
+			   (stats_bytes_5g[i * 2] >> 20),
+			   stats_bytes_5g[i * 2 + 1] >> 20);
+		npu_printf("omacIdx5G[%d]=%u\n", i, wifi_port_band_5g[i]);
+	}
+}
+
+static void wifi_print_stats_2g(void)
+{
+	u32 i;
+
+	for (i = 0; i < 16; i++) {
+		npu_printf("ReceivedPktCount2G[%d]=%lu\n",
+			   i, stats_pkts_2g[i * 2], stats_pkts_2g[i * 2 + 1]);
+		npu_printf("ReceivedByteCount2G[%d]=%llu(%lluMiB)\n",
+			   i, stats_bytes_2g[i * 2], stats_bytes_2g[i * 2 + 1],
+			   (stats_bytes_2g[i * 2 + 1] << 12) |
+			   (stats_bytes_2g[i * 2] >> 20),
+			   stats_bytes_2g[i * 2 + 1] >> 20);
+		npu_printf("omacIdx2G[%d]=%u\n", i, wifi_port_band_2g[i]);
+	}
+}
+
 static void npu_mbox_get_npu_info(void)
 {
 	npu_printf("%s L%d do nothing\n",
@@ -4486,6 +4563,36 @@ static int wifi_mail_get_rxdesc_base(u32 *msg)
 		npu_printf("%s: not support\n", "wifi_mail_get_wait_rxdesc_base");
 		msg[2] = 1111;
 	}
+	return 1;
+}
+
+static int wifi_mail_get_counter_base(u32 base, u32 cnt)
+{
+	u32 *msg = (u32 *)base;
+	(void)cnt;
+	msg[2] = counter_base_get(msg[0] & 0xF);
+	return 1;
+}
+
+static int wifi_mail_get_wcid_counter_base(u32 base, u32 cnt)
+{
+	u32 *msg = (u32 *)base;
+	(void)cnt;
+	msg[2] = wcid_counter_base_get(msg[0] & 0xF);
+	return 1;
+}
+
+static int wifi_mail_print_stats_5g(u32 base, u32 cnt)
+{
+	(void)base; (void)cnt;
+	wifi_print_stats_5g();
+	return 1;
+}
+
+static int wifi_mail_print_stats_2g(u32 base, u32 cnt)
+{
+	(void)base; (void)cnt;
+	wifi_print_stats_2g();
 	return 1;
 }
 
@@ -4642,6 +4749,20 @@ do_tx:
 	while (1)
 		;
 #endif
+}
+
+static int npu_wifi_tx_kick_out_wrapper(void)
+{
+	npu_printf("%s() error! func not support\n",
+		   "npu_wifi_tx_kick_out_wrapper");
+	return 0;
+}
+
+static int npu_tdma_2_wifi_fast_path_wrapper(void)
+{
+	npu_printf("%s() error! func not support\n",
+		   "npu_tdma_2_wifi_fast_path_wrapper");
+	return 0;
 }
 
 /* WiFi pipeline 5G worker: runs on core1, dequeues from pipeline ring */
@@ -5044,12 +5165,17 @@ static void core3_main(void)
 	core3_wifi_init_wrapper();
 }
 
+static void core4_wifi_init_wrapper(void)
+{
+#ifdef HAS_WIFI
+	npu_printf("%s core 4 do nothing\n", "core4_wifi_init_wrapper");
+#endif
+}
+
 static void core4_main(void)
 {
 	npu_printf("%s\n", "core4_main");
-#ifdef HAS_WIFI
-	/* WiFi handler - variant-specific */
-#endif
+	core4_wifi_init_wrapper();
 }
 
 static void core5_main(void)
@@ -5074,11 +5200,23 @@ static void core5_main(void)
 #endif /* MAX_CORE_NUM > 2 */
 
 #if MAX_CORE_NUM > 6
+static void core6_wifi_init_wrapper(void)
+{
+#ifdef HAS_WIFI
+	npu_printf("%s core 6 do nothing\n", "core6_wifi_init_wrapper");
+#endif
+}
+
 static void core6_main(void)
 {
 	npu_printf("%s\n", "core6_main");
+	core6_wifi_init_wrapper();
+}
+
+static void core7_wifi_init_wrapper(void)
+{
 #ifdef HAS_WIFI
-	/* AN7581 core6: WiFi handler */
+	npu_printf("%s core 7 do nothing\n", "core7_wifi_init_wrapper");
 #endif
 }
 
