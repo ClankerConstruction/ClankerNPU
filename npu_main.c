@@ -373,7 +373,6 @@ static u32 ba_table_a;
 static u32 ba_table_b;
 
 /* Bridge/BME state */
-static u8 bridge_pipeline_mode;
 static u8 bme_path_enable;
 static u8 pipeline_5g_ready;
 static u8 pipeline_2g_ready;
@@ -1301,6 +1300,30 @@ static u32 counter_base_tri;
 static u32 wcid_counter_base_2g;
 static u32 wcid_counter_base_5g;
 
+/* buf_id recycle ring (return freed IDs to alloc pool) */
+static u32 bufid_free_mutex[2];
+static u16 bufid_free_widx;
+static u32 bufid_free_base;
+static u32 bufid_free_count;
+
+static void bufid_ring_mutex_init(void)
+{
+	bufid_free_mutex[0] = 13;
+	bufid_free_mutex[1] = 0;
+}
+
+static void buf_id_return(u16 buf_id)
+{
+	hw_mutex_lock(bufid_free_mutex);
+	*(u16 *)(bufid_free_base + 2 * bufid_free_widx) = buf_id;
+	bufid_free_count++;
+	if ((wifi_debug_flags & 4) && counter_base_tri)
+		(*(u32 *)(counter_base_tri + 0x18))++;
+	bufid_free_widx = (bufid_free_widx + 1 == 5600) ?
+		0 : bufid_free_widx + 1;
+	hw_mutex_unlock(bufid_free_mutex);
+}
+
 static void counter_init(u32 band)
 {
 	u32 *base;
@@ -1996,7 +2019,7 @@ static int pkt_enqueue_bridge(u32 buf_id, u32 pkt_len, u32 amsdu,
 	}
 
 	/* pipeline mode: check if band pipeline is ready */
-	if (bridge_pipeline_mode != 0) {
+	if (wifi_debug_flags & 1) {
 		if (band == 1 && pipeline_5g_ready == 1)
 			goto direct_fwd;
 		if (band == 0 && pipeline_2g_ready == 1)
@@ -3842,6 +3865,7 @@ static void wifi_bridge_init(void)
 {
 #ifdef HAS_WIFI
 	wifi_queue_mutex_init();
+	bufid_ring_mutex_init();
 	wifi_pkt_queue_init(0);
 	wifi_pkt_queue_init(1);
 	wifi_ba_node_init();
@@ -4620,6 +4644,49 @@ do_tx:
 #endif
 }
 
+/* WiFi pipeline 5G worker: runs on core1, dequeues from pipeline ring */
+static void __attribute__((noreturn)) wifi_pipeline_worker(void)
+{
+#ifdef HAS_WIFI
+	u16 ridx = 0;
+
+	npu_printf("[NPU1]  %s...\n", "npu_offload_5G_2");
+
+	while (wifi_tx_pending == 0)
+		;
+
+	while (1) {
+		u32 *slot = (u32 *)(wifi_pipeline_base + ridx * 8);
+		u32 buf_id = *slot;
+		u16 pkt_len;
+		int ret;
+
+		if (buf_id == (u32)-1)
+			continue;
+
+		pkt_len = *(u16 *)(wifi_pipeline_base + ridx * 8 + 4);
+		ridx++;
+		if (ridx == 3200)
+			ridx = 0;
+
+		*slot = (u32)-1;
+		*(u16 *)(slot + 1) = 0;
+
+		ret = wifi_pkt_classify(buf_id & 0xFFFF, pkt_len, 1);
+		if (ret != -1 &&
+		    pkt_forward(buf_id & 0xFFFF, pkt_len, 0, 0,
+				1, 1, pkt_len, ret, 0) != 0) {
+			buf_id_return(buf_id);
+			if ((wifi_debug_flags & 4) && counter_base_5g)
+				(*(u32 *)(counter_base_5g + 0x20))++;
+		}
+	}
+#else
+	while (1)
+		;
+#endif
+}
+
 /* ================================================================
  * Tunnel offload (AN758X)
  * ================================================================ */
@@ -4953,8 +5020,10 @@ static void core1_main(void)
 {
 	npu_printf("%s\n", "core1_main");
 #ifdef HAS_WIFI
-	/* WiFi slow path handler loop (sub_840135A8) */
-	wifi_bridge_loop();
+	if (wifi_debug_flags & 1)
+		wifi_pipeline_worker();
+	else
+		wifi_bridge_loop();
 #endif
 }
 
