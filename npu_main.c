@@ -102,14 +102,14 @@ static void wifi_pcie_desc_alloc(void);
 static void wifi_npu_init(u32 dbdc);
 
 /* WiFi RXD init */
-static void npu_set_pcie_base(u32 addr, u32 band);
+static void __attribute__((noinline)) npu_set_pcie_base(u32 addr, u32 band);
 static int wifi_init_rxd_5g(u32 ring_size, u32 band);
 static int wifi_init_rxd_2g(u32 ring_size, u32 band);
-static void wifi_reset_ba_entry(u32 dir, u32 wcid);
+static void __attribute__((noinline)) wifi_reset_ba_entry(u32 dir, u32 wcid);
 
 /* WiFi mailbox setters */
-static void npu_set_bar_info(u32 band, u32 packed);
-static void npu_set_ba_entry(u32 band, u32 packed);
+static void __attribute__((noinline)) npu_set_bar_info(u32 band, u32 packed);
+static void __attribute__((noinline)) npu_set_ba_entry(u32 band, u32 packed);
 
 /* DMA copy engine + host ring drain pipeline */
 #ifdef WIFI_KITE
@@ -4023,7 +4023,7 @@ update_idx:
  * WiFi RXD/TXD initialization
  * ================================================================ */
 
-static void npu_set_pcie_base(u32 addr, u32 band)
+static void __attribute__((noinline)) npu_set_pcie_base(u32 addr, u32 band)
 {
 	npu_printf("[NPU] %s, addr=%lx, band_idx=%d \n",
 		   "npu_set_pcie_base", addr, band);
@@ -4149,7 +4149,7 @@ static int wifi_init_rxd_2g(u32 ring_size, u32 band)
 	return 0;
 }
 
-static void wifi_reset_ba_entry(u32 dir, u32 wcid)
+static void __attribute__((noinline)) wifi_reset_ba_entry(u32 dir, u32 wcid)
 {
 	u32 i, entry_addr;
 
@@ -4856,20 +4856,21 @@ pipeline_init:
 #endif
 }
 
-/* WiFi mailbox setters: simple parameter setters called from host */
-static void npu_set_retry_limit(u32 val)
+/* WiFi mailbox setters: simple parameter setters called from host.
+ * noinline: blob has these as separate callees, not inlined into handlers. */
+static void __attribute__((noinline)) npu_set_retry_limit(u32 val)
 {
 	wifi_retry_limit = (u16)val;
 	npu_printf("enq_error_retry_times = %d !!!\n", val);
 }
 
-static void npu_set_pcie_port_type(u32 val)
+static void __attribute__((noinline)) npu_set_pcie_port_type(u32 val)
 {
 	wifi_pcie_port_type = (u8)val;
 	npu_printf("PCIe_Port_Type = %d !!!\n", val);
 }
 
-static void npu_set_band_enable(u32 band)
+static void __attribute__((noinline)) npu_set_band_enable(u32 band)
 {
 	if (band > 1) {
 		npu_printf("[ERROR] band_idx is wrong value %d !!!\n", band);
@@ -4878,7 +4879,7 @@ static void npu_set_band_enable(u32 band)
 	*((u8 *)&pipeline_5g_ready + band) = 1;
 }
 
-static void npu_set_force_to_cpu(u8 val)
+static void __attribute__((noinline)) npu_set_force_to_cpu(u8 val)
 {
 	wifi_force_to_cpu = val;
 	npu_printf("isForceToCpu=%s\n", val ? "true" : "false");
@@ -4886,19 +4887,19 @@ static void npu_set_force_to_cpu(u8 val)
 		npu_printf("[ERROR] isForceToCpu is wrong value !!!\n");
 }
 
-static void npu_set_flushall_timeout(u32 val)
+static void __attribute__((noinline)) npu_set_flushall_timeout(u32 val)
 {
 	wifi_flushall_timeout = (u16)val;
 	npu_printf("flushall_timeout=%d\n", val);
 }
 
-static void npu_set_flushone_timeout(u32 val)
+static void __attribute__((noinline)) npu_set_flushone_timeout(u32 val)
 {
 	wifi_flushone_timeout = (u16)val;
 	npu_printf("flushone_timeout=%d\n", val);
 }
 
-static void npu_set_no_ba_test(u8 val)
+static void __attribute__((noinline)) npu_set_no_ba_test(u8 val)
 {
 	wifi_no_ba_test = val;
 	npu_printf("isforTestNoBA=%s\n", val ? "true" : "false");
@@ -4906,39 +4907,38 @@ static void npu_set_no_ba_test(u8 val)
 		npu_printf("[ERROR] isforTestNoBA is wrong value !!!\n");
 }
 
-static void npu_set_fast_flag(u8 val)
+static void __attribute__((noinline)) npu_set_fast_flag(u8 val)
 {
 	wifi_debug_flags = val;
 	npu_printf("npu_wifi_fast_flag = %d !!!\n", val);
 }
 
-static void npu_set_pkt_buf_addr(u32 val)
+static void __attribute__((noinline)) npu_set_pkt_buf_addr(u32 val)
 {
 	wifi_pkt_buf_addr = val;
 	npu_printf("pkt_buf_addr=%lx\n", val);
 }
 
-static void npu_set_dram_ba_node_addr(u32 val)
+static void __attribute__((noinline)) npu_set_dram_ba_node_addr(u32 val)
 {
 	wifi_dram_ba_node_addr = (val & 0x3FFFFFFF) | NPU_ADDR_MASK;
 	npu_printf("dramBaNodeAddr=%x\n", val);
 }
 
-static void npu_set_driver_model(u32 val)
+static void __attribute__((noinline)) npu_set_driver_model(u32 val)
 {
 	wifi_driver_model = (u8)val;
 	npu_printf("driverModel=%d\n", val);
 }
 
-static void npu_set_band0_on_cpu(u32 val)
+static void __attribute__((noinline)) npu_set_band0_on_cpu(u32 val)
 {
 	wifi_band0_on_cpu = (u8)val;
 	npu_printf("npu_band0_on_cpu_support=%s\n",
 		   val ? "true" : "false");
 }
 
-/* npu_set_bar_info: update BA entry window start for a given WCID/TID */
-static void npu_set_bar_info(u32 band, u32 packed)
+static void __attribute__((noinline)) npu_set_bar_info(u32 band, u32 packed)
 {
 	u32 tid = packed & 7;
 	u32 ssn = (packed << 8) >> 19;
@@ -5033,8 +5033,7 @@ static void npu_set_bar_info(u32 band, u32 packed)
 	}
 }
 
-/* npu_set_ba_entry: configure BA reorder window for a WCID/TID */
-static void npu_set_ba_entry(u32 band, u32 packed)
+static void __attribute__((noinline)) npu_set_ba_entry(u32 band, u32 packed)
 {
 	u32 tid = packed & 7;
 	u32 win_size = packed >> 20;
@@ -5124,8 +5123,7 @@ static void npu_set_ba_entry(u32 band, u32 packed)
 	}
 }
 
-/* npu_set_wait_state: set per-port wait state and update force_to_cpu */
-static void npu_set_wait_state(u32 port, u8 state)
+static void __attribute__((noinline)) npu_set_wait_state(u32 port, u8 state)
 {
 	u32 i;
 
@@ -5148,8 +5146,7 @@ static void npu_set_wait_state(u32 port, u8 state)
 	npu_printf("set wait!  not Force to CPU \n");
 }
 
-/* WiFi RXD init thunk: dispatches to band-specific init */
-static void npu_set_rxd_init(u32 ring_size, u32 band)
+static void __attribute__((noinline)) npu_set_rxd_init(u32 ring_size, u32 band)
 {
 	if (band == 1)
 		wifi_init_rxd_5g(ring_size, 1);
