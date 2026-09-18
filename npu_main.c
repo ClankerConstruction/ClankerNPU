@@ -80,8 +80,11 @@ static u32 ba_state_update(u32 sn, u32 check_type, u32 entry_addr);
 static int pkt_enqueue_bridge(u32 buf_id, u32 pkt_len, u32 amsdu,
 			      u32 band, u32 fwd_type);
 
-/* BME send */
+/* BME send / TDMA TX init */
 static int bme_send_pkt(u32 buf_id, u32 pkt_size, u32 phys_addr, u32 band);
+#ifdef HAS_BME
+static void tdma_tx_init(void);
+#endif
 
 /* WiFi packet classification */
 static int wifi_pkt_hdr_len(u32 buf_id, u32 band);
@@ -172,7 +175,6 @@ static int wifi_mail_set_pcie_swap(u32 *msg);
 static int wifi_mail_set_ratelimit(u32 *msg);
 static int wifi_mail_set_arht_chip_info(u32 *msg);
 static int wifi_mail_set_event(u32 base, u32 cnt);
-static void tdma_tx_init(void);
 static int kite_wifi_config(u32 base, u32 cnt);
 #endif
 #ifdef WIFI_EAGLE
@@ -2118,7 +2120,7 @@ static void tdma_bmgr_init(void)
 }
 #endif /* HAS_BME */
 
-#ifdef WIFI_KITE
+#ifdef HAS_BME
 /* TDMA TX init: configure TX descriptor rings */
 static void tdma_tx_init(void)
 {
@@ -2276,7 +2278,7 @@ static int __attribute__((noinline)) tdma_tx_submit(u32 port, u32 pkt_len,
 	tdma_tx_sw_idx[band + 3] = next;
 	return 0;
 }
-#endif /* WIFI_KITE */
+#endif /* HAS_BME */
 
 /* Software buffer manager init (non-TDMA path) */
 static void buf_mgr_init(void)
@@ -6144,7 +6146,7 @@ static void core0_wifi_init_wrapper(void)
 #ifdef HAS_WIFI
 	int result;
 
-#ifdef WIFI_KITE
+#ifdef HAS_BME
 	tdma_tx_init();
 #endif
 	wifi_bridge_init();
