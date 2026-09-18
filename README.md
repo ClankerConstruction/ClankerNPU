@@ -137,6 +137,7 @@ set from core entry points.
 - HW mutex (SCU spinlock) acquire/release
 - npu_printf with %d/%u/%x/%s/%llu/%lld/%llx and width/pad support
 - CPU clock readout, delay_us/delay_ms, timer tick counters
+- Timer extensions: watchdog, multi-bank (AN7581), CPU timer init
 - UART debug console
 
 ### What's Missing
