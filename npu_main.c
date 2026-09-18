@@ -142,6 +142,9 @@ static int eagle_mail_set_event(u32 base, u32 cnt);
 static int eagle_wifi_config(u32 base, u32 cnt);
 #endif
 
+/* tunnel dispatch (callback[1] in all variants) */
+static int tunnel_mail_dispatch(u32 base, u32 cnt);
+
 /* tunnel handlers */
 #ifdef HAS_TUNNEL
 static int tunnel_mail_handler(u32 base, u32 cnt);
@@ -363,6 +366,9 @@ static u32 sram_buf_pad2[8];
 
 /* WiFi state */
 static u32 wifi_state[256];
+
+/* tunnel funcId dispatch table (callback[1] — all variants) */
+static mbox_handler_t tunnel_func_table[10];
 
 #ifdef HAS_TUNNEL
 static u8 tunnel_srv6_hdr_len[8];
@@ -1189,12 +1195,8 @@ static void mailbox_init(void)
 	callbacks = (u32 *)&mbox_dispatch[0][48];
 #ifdef HAS_WIFI
 	callbacks[0] = (u32)(void *)wifi_mail_set_wait;
-#ifdef WIFI_KITE
-	callbacks[1] = (u32)(void *)wifi_mail_set_event;
-#elif defined(WIFI_EAGLE)
-	callbacks[1] = (u32)(void *)eagle_mail_set_event;
 #endif
-#endif
+	callbacks[1] = (u32)(void *)tunnel_mail_dispatch;
 
 #ifdef HAS_TR471
 #ifdef WIFI_KITE
@@ -5635,6 +5637,25 @@ static void __attribute__((noreturn)) wifi_pipeline_worker(void)
 	while (1)
 		;
 #endif
+}
+
+/* ================================================================
+ * Tunnel funcId dispatch (callback[1] — MFUNC_TUNNEL)
+ *
+ * All variants register this at callback[1]. The table is pre-
+ * initialized in the blob's .data section; entries point to
+ * individual tunnel handler functions. Tunnel messages are in
+ * SRAM so base_ptr is accessed without DMA translation.
+ * ================================================================ */
+
+static int tunnel_mail_dispatch(u32 base, u32 cnt)
+{
+	u32 func_id = *(volatile u32 *)base;
+
+	(void)cnt;
+	if (tunnel_func_table[func_id])
+		return tunnel_func_table[func_id](base, cnt);
+	return 0;
 }
 
 /* ================================================================
