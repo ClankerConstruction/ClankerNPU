@@ -597,6 +597,16 @@ static u32 ratelimit_table[32];
 static u32 arht_chip_info[6];
 static u32 arht_phy_tx_gpio;
 static u32 arht_chip_info_valid;
+
+/* per-entry rx stats: [band][entry], 128 entries per band, stored as u32 pairs (u64) */
+static u32 npu_rx_bytes_entry[2][256];
+static u32 npu_rx_pkts_entry[2][256];
+
+/* apcli aggregate counters (u64 stored as u32 pairs) */
+static u32 apcli_count_2g[2];
+static u32 apcli_count_5g[2];
+static u32 apcli_byte_count_2g[2];
+static u32 apcli_byte_count_5g[2];
 #endif
 
 #ifdef WIFI_EAGLE
@@ -5267,6 +5277,34 @@ static void npu_mbox_get_counter(u32 port, u64 *bytes_2g, u64 *pkts_2g,
 	*omac_5g = wifi_port_band_5g[port];
 }
 
+static void npu_mbox_get_counter_apcli(u32 *apcli_out, u32 *rx_bytes_dst,
+					u32 *rx_pkts_dst)
+{
+	u32 i;
+
+	apcli_out[0] = apcli_count_2g[0];
+	apcli_out[1] = apcli_count_2g[1];
+	apcli_out[2] = apcli_count_5g[0];
+	apcli_out[3] = apcli_count_5g[1];
+	apcli_out[4] = apcli_byte_count_2g[0];
+	apcli_out[5] = apcli_byte_count_2g[1];
+	apcli_out[6] = apcli_byte_count_5g[0];
+	apcli_out[7] = apcli_byte_count_5g[1];
+
+	for (i = 0; i < 128; i++) {
+		/* band 0 */
+		rx_bytes_dst[i * 2] = npu_rx_bytes_entry[0][i * 2];
+		rx_bytes_dst[i * 2 + 1] = npu_rx_bytes_entry[0][i * 2 + 1];
+		rx_pkts_dst[i * 2] = npu_rx_pkts_entry[0][i * 2];
+		rx_pkts_dst[i * 2 + 1] = npu_rx_pkts_entry[0][i * 2 + 1];
+		/* band 1 */
+		rx_bytes_dst[256 + i * 2] = npu_rx_bytes_entry[1][i * 2];
+		rx_bytes_dst[256 + i * 2 + 1] = npu_rx_bytes_entry[1][i * 2 + 1];
+		rx_pkts_dst[256 + i * 2] = npu_rx_pkts_entry[1][i * 2];
+		rx_pkts_dst[256 + i * 2 + 1] = npu_rx_pkts_entry[1][i * 2 + 1];
+	}
+}
+
 static void wifi_print_stats_5g(void)
 {
 	u32 i;
@@ -5586,6 +5624,7 @@ static int wifi_mail_get_counter(u32 *msg)
 	u8 *v3 = (u8 *)&msg[132];
 	u64 bytes_2g, pkts_2g, bytes_5g, pkts_5g;
 	u8 omac_2g, omac_5g;
+	u32 apcli[8];
 	u32 i;
 
 	msg[2] = 0;
@@ -5606,6 +5645,18 @@ static int wifi_mail_get_counter(u32 *msg)
 		v2 += 2;
 		v3++;
 	}
+
+	npu_mbox_get_counter_apcli(apcli, &msg[660], &msg[148]);
+
+	msg[140] = apcli[0];
+	msg[141] = apcli[1];
+	msg[142] = apcli[2];
+	msg[143] = apcli[3];
+	msg[144] = apcli[4];
+	msg[145] = apcli[5];
+	msg[146] = apcli[6];
+	msg[147] = apcli[7];
+
 	return 1;
 }
 
