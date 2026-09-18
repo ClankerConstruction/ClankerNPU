@@ -138,6 +138,12 @@
 #define NPU_CPU_TIMER_BASE      0x1EC10120
 #define NPU_TIMER_CTRL          0x1EC10100
 #define NPU_TIMER_CTRL2         0x1EC10108
+#define NPU_TIMER_WDT_RELOAD    (NPU_TIMER0_BASE + 0x34)
+#define NPU_TIMER_BANK_CTRL(b)  (NPU_TIMER0_BASE + ((b) << 8))
+#define NPU_TIMER_BANK_PRESCALE(b) (NPU_TIMER0_BASE + 0x2C + ((b) << 8))
+#define NPU_TIMER_BANK_RELOAD(b) (NPU_TIMER0_BASE + 0x34 + ((b) << 8))
+#define CPU_TIMER_RELOAD(idx)   (0x1EC10904 + ((idx) << 3))
+#define CPU_TIMER_COUNTER(idx)  (0x1EC10908 + ((idx) << 3))
 
 /* PCIe bases per SoC */
 #if defined(AN7583)

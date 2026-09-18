@@ -31,6 +31,11 @@ static void core7_main(void);
 /* subsystem init */
 static void plic_init(void);
 static void timer_init(int timer, int enable, int period);
+static void watchdog_timer_init(int enable, int period);
+static void cpu_timer_init(int idx, int enable, int period);
+#ifdef AN7581
+static void multi_bank_timer_init(int enable, int prescale, int period, int bank);
+#endif
 static void mailbox_init(void);
 
 /* PLIC */
@@ -986,6 +991,55 @@ static u32 cpu_clock_div4(void)
 	if (sim_mode_flag != 0)
 		return 25;
 	return cpu_clock_get() >> 2;
+}
+
+static void watchdog_timer_init(int enable, int period)
+{
+	if (!enable)
+		return;
+#if defined(AN7583)
+	REG32(NPU_TIMER_WDT_RELOAD) = 50000 * (u32)period;
+#else
+	REG32(NPU_TIMER_WDT_RELOAD) = 1000 * (u32)period * cpu_clock_div4();
+#endif
+	REG32(NPU_TIMER0_BASE) &= ~0x20u;
+	REG32(NPU_TIMER0_BASE) |= 0x2000020u;
+}
+
+#ifdef AN7581
+static void multi_bank_timer_init(int enable, int prescale, int period, int bank)
+{
+	if (!enable) {
+		REG32(NPU_TIMER_BANK_CTRL(bank)) &= 0xFDFFFFDFu;
+		return;
+	}
+	REG32(NPU_TIMER_BANK_PRESCALE(bank)) = (prescale != -1 && prescale != 1)
+		? 25000 * (u32)prescale : (u32)prescale;
+	REG32(NPU_TIMER_BANK_RELOAD(bank)) = 1000 * (u32)period * cpu_clock_div4();
+	REG32(NPU_TIMER_BANK_CTRL(bank)) &= ~0x20u;
+	REG32(NPU_TIMER_BANK_CTRL(bank)) |= 0x2000020u;
+}
+#endif
+
+static void cpu_timer_init(int idx, int enable, int period)
+{
+	u32 bit = 1u << idx;
+
+	if (idx > 2)
+		npu_printf("%s cpu_tmr:%d is wrong, should be 0 or 1\n",
+			   "cpu_timer_init", idx);
+	if (enable) {
+#if defined(AN7583)
+		REG32(CPU_TIMER_RELOAD(idx)) = 50000 * (u32)period;
+#else
+		REG32(CPU_TIMER_RELOAD(idx)) = 1000 * (u32)period *
+			(sim_mode_flag ? 50u : 200u);
+#endif
+		REG32(CPU_TIMER_COUNTER(idx)) = 0;
+		REG32(NPU_CPU_TIMER_BASE) |= bit;
+	} else {
+		REG32(NPU_CPU_TIMER_BASE) &= ~bit;
+	}
 }
 
 static void delay_us(u32 us)
