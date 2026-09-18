@@ -161,6 +161,13 @@
 /* FTTR (GPON DBA) - AN7583 only */
 #define NPU_FTTR_BASE           0x1FBE4000
 
+/* DMA copy engine (bridge DMA for host ring packets) */
+#define DMA_COPY_BASE           0x1FB30000
+#define DMA_COPY_SRC(ch)        (DMA_COPY_BASE + (ch) * 16)
+#define DMA_COPY_DST(ch)        (DMA_COPY_BASE + (ch) * 16 + 4)
+#define DMA_COPY_CTRL(ch)       (DMA_COPY_BASE + (ch) * 16 + 8)
+#define DMA_COPY_STATUS         (DMA_COPY_BASE + 0x204)
+
 /* NPU bridge debug */
 #define NPU_BRIDGE_DBG_BASE     0x1EC12290
 
