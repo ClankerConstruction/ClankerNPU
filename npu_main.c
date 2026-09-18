@@ -2017,15 +2017,45 @@ static void wifi_tx_process(void)
 #endif
 }
 
-/* WiFi bridge init: state init and ring setup */
-static void wifi_bridge_init(void)
+/* WiFi state init: clear per-band ring state and byte/pkt stats */
+static void wifi_state_init(void)
 {
 #ifdef HAS_WIFI
 	u32 i;
 
 	wifi_bridge_report = 0;
 	wifi_bridge_enabled = 1;
-	wifi_bridge_ch_count = 3;
+	wifi_retry_limit = 3;
+
+	/* clear 5G band stats */
+	for (i = 0; i < 16; i++) {
+		stats_bytes_5g[i * 2] = 0;
+		stats_bytes_5g[i * 2 + 1] = 0;
+		stats_pkts_5g[i * 2] = 0;
+		stats_pkts_5g[i * 2 + 1] = 0;
+	}
+
+	/* clear 2.4G band stats */
+	for (i = 0; i < 16; i++) {
+		stats_bytes_2g[i * 2] = 0;
+		stats_bytes_2g[i * 2 + 1] = 0;
+		stats_pkts_2g[i * 2] = 0;
+		stats_pkts_2g[i * 2 + 1] = 0;
+	}
+
+	/* allocate tri-band counters */
+	counter_init(2);
+
+	wifi_rx_pending = 0;
+	wifi_tx_pending = 0;
+#endif
+}
+
+/* WiFi bridge init: state init and ring setup */
+static void wifi_bridge_init(void)
+{
+#ifdef HAS_WIFI
+	wifi_state_init();
 
 	/* allocate per-band counter and WCID buffers */
 	counter_init(0);
@@ -2034,11 +2064,167 @@ static void wifi_bridge_init(void)
 	wcid_counter_init(1);
 
 	wifi_bridge_active = 0;
-	wifi_rx_pending = 0;
-	wifi_tx_pending = 0;
 	wifi_batch_count = 0;
 	wifi_pipeline_widx = 0;
 #endif
+}
+
+/* ================================================================
+ * WiFi mailbox command wrappers (kite path)
+ *
+ * These are the host-side mailbox command handlers. On the kite
+ * (MT7916/MT7996) path, most return "not support on 791X".
+ * The eagle path has full implementations.
+ * ================================================================ */
+
+#ifdef WIFI_KITE
+
+static void npu_mbox_txrx_ring_size_get(u32 dir, u32 band, u32 *size)
+{
+	npu_printf("%s L%d not support on 791X\n",
+		   "npu_mbox_txrx_ring_ring_size_get_wrapper", 3995);
+	(void)dir; (void)band; (void)size;
+}
+
+static u32 npu_mbox_txrx_ring_dma_addr_get(u32 dir, u32 band)
+{
+	npu_printf("%s L%d not support on 791X\n",
+		   "npu_mbox_txrx_ring_dma_addr_get_wrapper", 4001);
+	return 0;
+}
+
+static void npu_mbox_pcie_swap_set(u32 val)
+{
+	npu_printf("%s L%d not support on 791X\n",
+		   "npu_mbox_pcie_swap_set_wrapper", 4007);
+	(void)val;
+}
+
+static void npu_mbox_stop_set(u32 band)
+{
+	npu_printf("%s L%d not support on 791X\n",
+		   "npu_mbox_stop_set_wrapper", 4013);
+	(void)band;
+}
+
+static void npu_mbox_rx_hw_cfg_set(u32 band, u32 a, u32 b)
+{
+	npu_printf("%s L%d not support on 791X\n",
+		   "npu_mbox_rx_hw_cfg_set_wrapper", 4019);
+	(void)band; (void)a; (void)b;
+}
+
+static void npu_mbox_set_debug_flag(u32 band, u32 flag)
+{
+	npu_printf("%s L%d not support on 791X\n",
+		   "npu_mbox_set_debug_flag_wrapper", 4025);
+	(void)band; (void)flag;
+}
+
+static u32 npu_mbox_get_rxdesc_base(u32 band)
+{
+	if (band == 1)
+		return wifi_tx_ring_base_5g & 0x1FFFFFFF;
+	else if (wifi_rx_ring_base_2g != 0)
+		return wifi_rx_ring_base_2g & 0x1FFFFFFF;
+	npu_printf("%s: not support\n", "wifi_mail_get_wait_rxdesc_base");
+	return 1111;
+}
+
+static void npu_mbox_get_npu_info(void)
+{
+	npu_printf("%s L%d do nothing\n",
+		   "npu_mbox_get_wait_npu_info_wrapper", 3794);
+}
+
+/* WiFi mail handler callbacks (registered in dispatch table) */
+static int wifi_mail_set_debug_flag(u32 *msg)
+{
+	u32 flag = msg[2];
+	u32 band = msg[0] & 0xF;
+
+	npu_mbox_set_debug_flag(band, flag);
+	return 1;
+}
+
+static int wifi_mail_set_wait_inode_cfg(u32 *msg)
+{
+	u32 a = ((u8 *)msg)[8];
+	u32 b = ((u8 *)msg)[9];
+	u32 band = msg[0] & 0xF;
+
+	npu_mbox_rx_hw_cfg_set(band, a, b);
+	return 1;
+}
+
+static int wifi_mail_set_wait_inode_stop(u32 *msg)
+{
+	u32 band = msg[0] & 0xF;
+
+	npu_mbox_stop_set(band);
+	return 1;
+}
+
+static int wifi_mail_set_pcie_swap(u32 *msg)
+{
+	u32 val = msg[2];
+
+	npu_mbox_pcie_swap_set(val);
+	return 1;
+}
+
+static int wifi_mail_get_dma_addr(u32 *msg)
+{
+	u32 dir = msg[2];
+	u32 band = msg[0] & 0xF;
+	u32 addr;
+
+	addr = npu_mbox_txrx_ring_dma_addr_get(dir, band);
+	msg[2] = addr;
+	npu_printf("get dma addr. band=%d dir=%d addr=%x\n", band, dir, addr);
+	return 1;
+}
+
+static int wifi_mail_get_ring_size(u32 *msg)
+{
+	u32 dir = msg[2];
+	u32 band = msg[0] & 0xF;
+	u32 size = 0;
+
+	npu_mbox_txrx_ring_size_get(dir, band, &size);
+	msg[2] = size;
+	npu_printf("%s get wait size =%d\n",
+		   "wifi_mail_get_wait_ring_size", size);
+	return 1;
+}
+
+static int wifi_mail_get_rxdesc_base(u32 *msg)
+{
+	u32 band = msg[0] & 0xF;
+	u32 base;
+
+	base = npu_mbox_get_rxdesc_base(band);
+	if (base != 0)
+		msg[2] = base;
+	else {
+		npu_printf("%s: not support\n", "wifi_mail_get_wait_rxdesc_base");
+		msg[2] = 1111;
+	}
+	return 1;
+}
+
+#endif /* WIFI_KITE */
+
+/* WiFi mailbox command dispatcher: lookup and call handler by cmd index */
+static int wifi_mbox_cmd_dispatch(u32 *msg)
+{
+#ifdef WIFI_KITE
+	u32 cmd_idx = *msg;
+
+	if (cmd_idx < 10 && wifi_mbox_handlers[cmd_idx])
+		return wifi_mbox_handlers[cmd_idx]((u32)msg, 0);
+#endif
+	return 0;
 }
 
 /* Core0 WiFi init wrapper */
@@ -2073,16 +2259,25 @@ static void core3_wifi_init_wrapper(void)
 #endif
 }
 
-/* WiFi bridge main loop (runs on dedicated core) */
-static void wifi_bridge_loop(void)
+/* WiFi bridge main loop: runs on core1, dispatches RX/TX */
+static void __attribute__((noreturn)) wifi_bridge_loop(void)
 {
 #ifdef HAS_WIFI
 	while (1) {
 		if (wifi_tx_pending != 0)
-			wifi_tx_process();
-		if (wifi_rx_pending != 0 && wifi_bridge_enabled)
+			goto do_tx;
+
+		while (wifi_rx_pending != 0 && wifi_bridge_enabled) {
 			wifi_rx_process();
+			if (wifi_tx_pending != 0) {
+do_tx:
+				wifi_tx_process();
+			}
+		}
 	}
+#else
+	while (1)
+		;
 #endif
 }
 
@@ -2295,32 +2490,88 @@ static void dba_init(void)
 {
 	npu_printf("dba_init\n");
 	npu_memset(dba_state, 0, sizeof(dba_state));
+
 	npu_fttr_base = NPU_FTTR_BASE;
 	npu_printf("npu_fttr_base=%x\n", npu_fttr_base);
+
+	dba_band_switch = 0;
+	dba_bwmap_switch = 0;
+	npu_memset(dba_alloc_state, 0, sizeof(dba_alloc_state));
+}
+
+static void dba_alloc_process(void)
+{
+	u32 i;
+	u32 base = npu_fttr_base;
+
+	if (base == 0)
+		return;
+
+	/* process bandwidth allocation for each T-CONT */
+	for (i = 0; i < dba_max_alloc_ids; i++) {
+		u32 report = REG32(base + 0x100 + i * 4);
+
+		if (report == 0)
+			continue;
+		/* update allocation state based on report */
+		dba_alloc_state[i % 20] += report;
+	}
 }
 
 static void dba_main_loop(void)
 {
-	/* DBA processing loop */
+	if (npu_fttr_base == 0) {
+		npu_printf("error, npu_fttr_base is not init\n");
+		return;
+	}
+
+	npu_printf("dba_main_loop start, fttr_base=%x\n", npu_fttr_base);
+
 	while (1) {
-		if (npu_fttr_base == 0) {
-			npu_printf("error, npu_fttr_base is not init\n");
-			return;
+		if (dba_band_switch)
+			dba_alloc_process();
+
+		/* check for DBA events from FTTR hardware */
+		if (REG32(npu_fttr_base + 0x000) & 1) {
+			REG32(npu_fttr_base + 0x000) = 1;
+			dba_alloc_process();
 		}
-		/* process DBA events */
-		break;
 	}
 }
 
 static int dba_mail_handler(u32 base, u32 cnt)
 {
-	npu_printf("dba_mail_handler\n");
+	u32 cmd;
+
+	cmd = *(volatile u32 *)((base & 0x3FFFFFFF) | 0x40000000);
+	npu_printf("dba_mail_handler cmd=%x\n", cmd);
+
+	switch (cmd) {
+	case 0:
+		dba_band_switch = 1;
+		break;
+	case 1:
+		dba_band_switch = 0;
+		break;
+	case 2:
+		dba_bwmap_switch = (u8)cnt;
+		break;
+	default:
+		npu_printf("dba unknown cmd %d\n", cmd);
+		break;
+	}
 	return 1;
 }
 
 static void dba_timer_handler(int src)
 {
-	/* DBA timer interrupt handler */
+	u32 bit = timer_get_bit((u32)src);
+	u32 base = NPU_TIMER0_BASE;
+
+	REG32(base) |= (1u << bit);
+	REG32(base) &= ~(1u << bit);
+
+	dba_timer0_snap = REG32(NPU_TIMER0_BASE + 0x10);
 }
 
 #endif /* HAS_DBA */
@@ -2398,18 +2649,16 @@ static void core5_main(void)
 #if defined(HAS_DBA)
 	npu_printf("%s: start\n", "core5_dba_main");
 
-	npu_memset(dba_state, 0, sizeof(dba_state));
-	get_hartid();
-	npu_fttr_base = NPU_FTTR_BASE;
-	npu_printf("npu_fttr_base=%x\n", npu_fttr_base);
+	dba_init();
 
-	/* register DBA mailbox ISR */
-	plic_register_isr(8 + 5, mbox_isr);
+	/* register DBA timer ISR on PLIC source 24 */
+	plic_register_isr(24, dba_timer_handler);
 
+	/* DBA main processing loop (never returns) */
 	dba_main_loop();
 #elif defined(AN7581) && defined(HAS_WIFI)
 	npu_printf("%s\n", "core5_main");
-	/* AN7581 core5: WiFi handler */
+	wifi_bridge_loop();
 #else
 	npu_printf("%s\n", "core5_main");
 #endif
