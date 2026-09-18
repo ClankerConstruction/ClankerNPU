@@ -4546,6 +4546,7 @@ static void wifi_bridge_init(void)
 	wifi_batch_count = 0;
 	wifi_pipeline_widx = 0;
 
+#ifdef WIFI_KITE
 	mbox_wifi_handler = wifi_mail_set_wait;
 	mbox_wifi_handler2 = wifi_mail_set_event;
 
@@ -4553,6 +4554,7 @@ static void wifi_bridge_init(void)
 	wifi_mbox_handlers[1] = wifi_mail_print_stats_2g;
 	wifi_mbox_handlers[2] = wifi_mail_get_counter_base;
 	wifi_mbox_handlers[3] = wifi_mail_get_wcid_counter_base;
+#endif
 #endif
 }
 
@@ -4623,8 +4625,12 @@ static void wifi_npu_init(u32 dbdc)
 
 	npu_printf("[NPU] %s...\n", "npu_init");
 	npu_printf("=======================\n");
+#ifdef WIFI_KITE
 	npu_printf("NPU Version: %s_NPU_%s\n",
 		   wifi_chip_names[wifi_driver_model], NPU_INIT_VERSION);
+#else
+	npu_printf("NPU init Version: %s\n", NPU_INIT_VERSION);
+#endif
 	npu_printf("=======================\n");
 
 	wifi_band_cap = wifi_get_band_cap(wifi_driver_model);
@@ -6905,9 +6911,12 @@ static void dba_timer_handler(int src)
 
 #ifdef HAS_TR471
 
+static u32 tr471_stats[15];
+
 static void tr471_main_init(void)
 {
-	npu_printf("tr471_main_init\n");
+	npu_memset(tr471_stats, 0, sizeof(tr471_stats));
+	npu_printf("%s init %d done\n", "tr471_main_init", 727);
 }
 
 #endif
