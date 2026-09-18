@@ -748,59 +748,108 @@ static int boot_printf(const char *fmt, ...)
 
 /* ================================================================
  * Mailbox communication
+ *
+ * 80 bytes per core in dispatch table:
+ *   [0..63]  = raw data DWORDs (16 slots, indexed by func_id)
+ *   [32..63] = raw data WORDs (overlaps with above)
+ *   [48..79] = callback function pointers (8 slots)
  * ================================================================ */
+
+/* mailbox dispatch table: 6 cores x 80 bytes */
+static u8 mbox_dispatch[MAX_CORE_NUM][80];
+
+/* mailbox handler slots registered during init */
+static mbox_handler_t mbox_wifi_handler;
+static mbox_handler_t mbox_wifi_handler2;
+static mbox_handler_t mbox_notify_handler;
+static mbox_handler_t mbox_cfg_handler;
 
 static void mbox_isr(int src)
 {
-	u32 core_id = (u32)src - 8;
-	u32 max_cnt, rptr, base_ptr;
-	u32 func_idx, status;
+	u32 mbox_idx = (u32)src - 8;
+	u32 rptr, base_ptr, max_cnt, func_idx;
+	mbox_handler_t handler;
 
-	/* clear interrupt */
-	REG32(MBOX_INT_STS) = (1u << core_id);
+	if ((u8)mbox_idx != mbox_idx) {
+		npu_printf("Error: core_id:%d != mbox_idx:%d\n",
+			   mbox_idx, (u8)mbox_idx);
+		return;
+	}
+
+	/* clear interrupt (write-1-to-clear) */
+	REG32(MBOX_INT_STS) = (1u << mbox_idx);
 
 	/* verify clear */
-	if (REG32(MBOX_INT_STS) & (1u << core_id))
+	if ((REG32(MBOX_INT_STS) >> mbox_idx) & 1) {
+		npu_printf("Error(%s): cleaning mbox intr isn't done (mbox_status:0x%x, mbox_idx:%d)\n",
+			   "mBox_isr", REG32(MBOX_INT_STS), (u8)mbox_idx);
 		return;
+	}
 
-	/* read queue pointers */
-	base_ptr = REG32(MBQ_BASE_PTR(core_id));
-	max_cnt = REG32(MBQ_MAX_CNT(core_id));
-	rptr = REG32(MBQ_RPTR(core_id));
+	/* read queue registers */
+	base_ptr = REG32(MBQ_BASE_PTR(mbox_idx));
+	max_cnt = REG32(MBQ_MAX_CNT(mbox_idx));
+	rptr = REG32(MBQ_RPTR(mbox_idx));
 
+	/* set response status if not already set */
 	if (!(rptr & 1)) {
-		/* set response status */
-		status = rptr | 0xE1;
-		REG32(MBQ_RPTR(core_id)) = status | 0x6;
+		rptr = (rptr & 0xFFFFFF00u) | (rptr & 0xE1) | 0x6;
+		REG32(MBQ_RPTR(mbox_idx)) = rptr;
 	}
 
 	func_idx = (rptr >> 11) & 0xF;
 
 	if (rptr & 0x20) {
-		/* raw data path */
-		if (func_idx < 6)
-			mbox_core_handlers[func_idx] = (mbox_handler_t)(void *)base_ptr;
+		/* raw data path: store base_ptr and max_cnt */
+		u32 *data = (u32 *)&mbox_dispatch[mbox_idx][0];
+		u16 *cnt = (u16 *)&mbox_dispatch[mbox_idx][32];
+
+		data[func_idx] = base_ptr;
+		cnt[func_idx] = (u16)max_cnt;
 	} else {
-		/* dispatch to handler */
-		if (mbox_core_handlers[func_idx])
-			mbox_core_handlers[func_idx](base_ptr, max_cnt);
+		/* callback path: dispatch to handler */
+		u32 *callbacks = (u32 *)&mbox_dispatch[mbox_idx][48];
+
+		handler = (mbox_handler_t)(void *)callbacks[func_idx];
+		if (handler) {
+			u32 ret = (u32)handler(base_ptr, max_cnt);
+			rptr = (rptr & 0xFFFFFFE3u) | ((ret & 7) << 2);
+		}
+
+		/* signal completion */
+		if (rptr & 1)
+			REG32(MBQ_RPTR(mbox_idx)) = (rptr & ~2u) | 2;
 	}
 }
 
 static void mailbox_init(void)
 {
 	u32 i;
+	u32 *callbacks;
 
-	/* set up mailbox interrupts */
+	/* enable per-core mailbox interrupts */
 	for (i = 0; i < MAX_CORE_NUM; i++) {
-		REG32(NPU_MBOX_BASE + 0x008 + i * 4) = 0;
+		REG32(NPU_MBOX_BASE + 0x008 + i * 4) = (1u << i);
 		plic_register_isr(8 + i, mbox_isr);
 	}
 
 	REG32(MBOX_INT_MASK0) = 256;
+	plic_cfg[0] = 14;
+	plic_state = 0;
 
-	/* zero handler tables */
-	npu_memset(mbox_core_handlers, 0, sizeof(mbox_core_handlers));
+	/* zero all dispatch tables */
+	for (i = 0; i < MAX_CORE_NUM; i++)
+		npu_memset(mbox_dispatch[i], 0, 80);
+
+	/* register default handlers into core 0's callback slots */
+	callbacks = (u32 *)&mbox_dispatch[0][48];
+	callbacks[0] = (u32)(void *)mbox_wifi_handler;
+	callbacks[1] = (u32)(void *)mbox_wifi_handler2;
+	callbacks[5] = (u32)(void *)mbox_cfg_handler;
+
+	/* register handler in last core's callback slot */
+	callbacks = (u32 *)&mbox_dispatch[MAX_CORE_NUM - 1][48];
+	callbacks[3] = (u32)(void *)mbox_notify_handler;
 }
 
 /* notify host via mailbox queue 8 */
@@ -816,7 +865,6 @@ static int mbox_notify_host(u32 base_ptr, u32 max_cnt, u32 func_id)
 	REG32(MBQ_RPTR(8)) = (func_id << 11) | 1;
 	REG32(MBQ_WPTR(8)) = 1;
 
-	/* poll for response */
 	while (timeout--) {
 		rptr = REG32(MBQ_RPTR(8));
 		if (rptr & 2)
@@ -858,37 +906,41 @@ static void npu_reboot(void)
 }
 
 /* ================================================================
- * Buffer management
+ * SRAM buffer management
+ *
+ * 512KB SRAM at 0x3E800000, bump-allocated with alignment.
+ * Alloc table: 100 entries of {u16 addr_type, u16 pad, u32 base}.
+ * Layout descriptors in .rodata (dword_84020BC4).
  * ================================================================ */
 
-static void sram_buf_init(void)
+/* SRAM alloc table entry: 8 bytes (u16 type + pad + u32 addr) */
+#define SRAM_BASE         0x3E800000
+#define SRAM_END          0x3E87FFFE
+#define SRAM_SIZE         0x80000
+#define SRAM_MAX_ENTRIES  100
+#define SRAM_ERROR_ADDR   0x3E880000
+
+static u32 sram_alloc_offset;
+static u32 sram_alloc_count;
+static u32 sram_alloc_calls;
+static u16 sram_alloc_table[SRAM_MAX_ENTRIES * 4];
+
+static void sram_buf_dump(void)
 {
-	hw_mutex_lock(sram_buf_mutex);
-	sram_buf_max_use = 0;
-	sram_buf_cur_idx = 0;
-	npu_memset(sram_buf_entries, 0, sizeof(sram_buf_entries));
-	hw_mutex_unlock(sram_buf_mutex);
-}
+	u32 i;
+	u16 *entry = sram_alloc_table;
 
-static u32 sram_buf_alloc(u32 addr_type, u32 size)
-{
-	u32 addr;
+	npu_printf("base:%x,total size:%x,current max use size:%x\n",
+		   SRAM_BASE, SRAM_SIZE, sram_alloc_offset);
+	for (i = 0; i < SRAM_MAX_ENTRIES; i++) {
+		u32 addr = *(u32 *)(entry + 2);
 
-	hw_mutex_lock(sram_buf_mutex);
-
-	if (sram_buf_max_use >= 0x80000 && sram_buf_cur_idx > 99) {
-		hw_mutex_unlock(sram_buf_mutex);
-		npu_printf("sram is over the max!!current para:AddrType=%d,idx=%d,tmp_restore_index=%d\n",
-			   addr_type, sram_buf_max_use, sram_buf_cur_idx);
-		return 0x3E800000;
+		if (addr == 0)
+			break;
+		npu_printf("Idx=%d,AddrType=%d,baseaddr=%x\n",
+			   i, (u32)entry[0], addr);
+		entry += 4;
 	}
-
-	addr = 0x3E800000 + sram_buf_max_use;
-	sram_buf_max_use += size;
-	sram_buf_cur_idx++;
-
-	hw_mutex_unlock(sram_buf_mutex);
-	return addr;
 }
 
 /* ================================================================
@@ -917,18 +969,87 @@ static void dbg_cnt_isr(int src)
 }
 
 /* ================================================================
+ * TDMA / Buffer Manager initialization
+ * ================================================================ */
+
+/* Buffer manager state (software free-list path) */
+static u32 buf_mgr_alloc_cfg;
+static u32 buf_mgr_alloc_idx;
+static u32 buf_mgr_free_cfg;
+static u32 buf_mgr_free_idx;
+static u32 buf_mgr_id_base;
+static u16 buf_mgr_alloc_widx;
+static u16 buf_mgr_free_widx;
+
+/* TDMA init: zero 512KB SRAM, clear alloc table */
+static void tdma_init(void)
+{
+	npu_memset((void *)SRAM_BASE, 0, SRAM_SIZE);
+	npu_memset(sram_alloc_table, 0, sizeof(u16) * 4 * SRAM_MAX_ENTRIES);
+	sram_buf_mutex[0] = 2;
+	sram_buf_mutex[1] = 0;
+	sram_alloc_offset = 0;
+	sram_alloc_count = 0;
+}
+
+#ifdef WIFI_KITE
+/* TDMA BME init: hardware buffer-ID allocator path */
+static void tdma_bmgr_init(void)
+{
+	u32 buf_base;
+
+	npu_printf("do tdma_bmgr_init\n");
+
+	/* allocate 5600-entry buffer ID pool from SRAM */
+	/* buf_base = sram_buf_alloc(138); -- simplified */
+	buf_base = SRAM_BASE + sram_alloc_offset;
+	sram_alloc_offset += 5600 * 2;
+
+	REG32(BMGR_BUF_ID_BASE) = buf_base;
+	REG32(BMGR_BASE + 0x004) = 0;
+	REG32(BMGR_BASE + 0x008) = 5600;
+	REG32(BMGR_BASE + 0x00C) = 2;
+	REG32(BMGR_BASE + 0x010) = 2;
+	REG32(BMGR_BASE + 0x028) = 15;
+	REG32(BMGR_BASE + 0x030) = 7;
+	REG32(BMGR_INIT) = 1;
+
+	/* poll for HW init completion */
+	while (!(REG32(BMGR_BASE + 0x02C) & 1))
+		;
+
+	/* register BME done ISR on PLIC source 33 */
+	plic_enable_wrapper(33);
+}
+#endif
+
+/* Software buffer manager init (non-TDMA path) */
+static void buf_mgr_init(void)
+{
+	u16 *pool;
+	u32 i;
+
+	buf_mgr_alloc_cfg = 12;
+	buf_mgr_alloc_idx = 0;
+	buf_mgr_free_cfg = 13;
+	buf_mgr_free_idx = 0;
+
+	pool = (u16 *)(SRAM_BASE + sram_alloc_offset);
+	sram_alloc_offset += 5600 * 2;
+	buf_mgr_id_base = (u32)pool;
+
+	for (i = 0; i < 5600; i++)
+		pool[i] = (u16)i;
+
+	buf_mgr_alloc_widx = 0;
+	buf_mgr_free_widx = 0;
+}
+
+/* ================================================================
  * WiFi subsystem
  * ================================================================ */
 
 #ifdef WIFI_KITE
-
-static void tdma_bmgr_init(void)
-{
-	npu_printf("do tdma_bmgr_init\n");
-	/* TDMA buffer manager initialization */
-	npu_memset((void *)0x3E800000, 0, 0x80000);
-}
-
 static int wifi_get_chip_name(u32 idx, char *name)
 {
 	if (idx >= 5)
@@ -936,37 +1057,83 @@ static int wifi_get_chip_name(u32 idx, char *name)
 	npu_memcpy(name, wifi_chip_names[idx], 8);
 	return 0;
 }
+#endif
 
-#endif /* WIFI_KITE */
+/* WiFi bridge state */
+static u8 wifi_bridge_enabled;
+static u16 wifi_bridge_ch_count;
+static u8 wifi_bridge_report;
+static u8 wifi_bridge_active;
+static u32 wifi_tx_pending;
+static u32 wifi_rx_pending;
 
-#ifdef WIFI_EAGLE
-
-static void eagle_rx_init(void)
-{
-	npu_printf("eagle RX init\n");
-}
-
-#endif /* WIFI_EAGLE */
-
-/* WiFi init wrapper called from core0 */
-static void core0_wifi_init(void)
+/* WiFi bridge init */
+static void wifi_bridge_init(void)
 {
 #ifdef HAS_WIFI
-	npu_printf("core0_wifi_init\n");
-#ifdef WIFI_KITE
-	tdma_bmgr_init();
-#endif
-#ifdef WIFI_EAGLE
-	eagle_rx_init();
-#endif
+	u32 i;
+
+	wifi_bridge_report = 0;
+	wifi_bridge_enabled = 1;
+	wifi_bridge_ch_count = 3;
+
+	/* clear TX ring state */
+	for (i = 0; i < 16; i++) {
+		/* zero ring descriptors, stats, set seq = 0xFF */
+	}
+
+	/* clear RX ring state */
+	for (i = 0; i < 16; i++) {
+		/* zero ring descriptors, stats, set seq = 0xFF */
+	}
+
+	wifi_bridge_active = 0;
+	wifi_rx_pending = 0;
+	wifi_tx_pending = 0;
 #endif
 }
 
-/* WiFi init wrapper called from core3 */
-static void core3_wifi_init(void)
+/* Core0 WiFi init wrapper */
+static void core0_wifi_init_wrapper(void)
 {
 #ifdef HAS_WIFI
-	npu_printf("core3_wifi_init\n");
+	/* sub_84006278: tdma_tx_init - TX ring descriptors */
+	/* sub_84013618: wifi_bridge_init */
+	wifi_bridge_init();
+	npu_printf("%s finish\n", "core0_wifi_init_wrapper");
+	/* sub_840144F4: hostadpt_init check */
+#endif
+}
+
+/* Core3 WiFi init wrapper - polls for init completion */
+static void core3_wifi_init_wrapper(void)
+{
+#ifdef HAS_WIFI
+	/* wait for WiFi init to complete */
+	while (!(wifi_bridge_active & 2)) {
+		if (wifi_tx_pending != 0) {
+			/* process TX */
+		}
+		if (wifi_rx_pending != 0) {
+			/* process RX */
+		}
+	}
+	npu_printf("%s finish\n", "core3_wifi_init_wrapper");
+#endif
+}
+
+/* WiFi bridge main loop (runs on dedicated core) */
+static void wifi_bridge_loop(void)
+{
+#ifdef HAS_WIFI
+	while (1) {
+		if (wifi_tx_pending != 0) {
+			/* sub_84012410: TX processing */
+		}
+		if (wifi_rx_pending != 0 && wifi_bridge_enabled) {
+			/* sub_84012114: RX processing */
+		}
+	}
 #endif
 }
 
@@ -1054,27 +1221,30 @@ static void tr471_main_init(void)
 
 static void core0_main(void)
 {
-	npu_printf("%s\n", "core0_main");
+	/* init TDMA and SRAM alloc, then buffer manager */
+	tdma_init();
 
-	core0_wifi_init();
-
-#ifdef HAS_DBA
-	dba_init();
+#ifdef WIFI_KITE
+	tdma_bmgr_init();
+#else
+	buf_mgr_init();
 #endif
+
+	/* WiFi bridge init */
+	core0_wifi_init_wrapper();
 
 	/* register debug counter ISR on PLIC source 59 */
 	plic_register_isr(59, dbg_cnt_isr);
+
+	npu_printf("%s\n", "core0_main");
 }
 
 static void core1_main(void)
 {
 	npu_printf("%s\n", "core1_main");
-	/* WiFi slow path handler loop */
 #ifdef HAS_WIFI
-	while (1) {
-		/* process WiFi slow path events */
-		__asm__ volatile("wfi");
-	}
+	/* WiFi slow path handler loop (sub_840135A8) */
+	wifi_bridge_loop();
 #endif
 }
 
@@ -1092,35 +1262,36 @@ static void core3_main(void)
 
 	chip_id_query();
 	usb_powerdown();
-	core3_wifi_init();
+	core3_wifi_init_wrapper();
 }
 
 static void core4_main(void)
 {
 	npu_printf("%s\n", "core4_main");
 #ifdef HAS_WIFI
-	/* WiFi handler */
+	/* WiFi handler - variant-specific */
 #endif
 }
 
 static void core5_main(void)
 {
-#ifdef HAS_DBA
+#if defined(HAS_DBA)
 	npu_printf("%s: start\n", "core5_dba_main");
 
 	npu_memset(dba_state, 0, sizeof(dba_state));
 	get_hartid();
+	npu_fttr_base = NPU_FTTR_BASE;
 	npu_printf("npu_fttr_base=%x\n", npu_fttr_base);
 
 	/* register DBA mailbox ISR */
 	plic_register_isr(8 + 5, mbox_isr);
 
 	dba_main_loop();
+#elif defined(AN7581) && defined(HAS_WIFI)
+	npu_printf("%s\n", "core5_main");
+	/* AN7581 core5: WiFi handler */
 #else
 	npu_printf("%s\n", "core5_main");
-#ifdef HAS_WIFI
-	/* WiFi handler (AN7581 core 5) */
-#endif
 #endif
 }
 #endif /* MAX_CORE_NUM > 2 */
@@ -1130,7 +1301,7 @@ static void core6_main(void)
 {
 	npu_printf("%s\n", "core6_main");
 #ifdef HAS_WIFI
-	/* WiFi handler (AN7581 core 6) */
+	/* AN7581 core6: WiFi handler */
 #endif
 }
 
@@ -1151,7 +1322,6 @@ static void core7_main(void)
 	/* tunnel processing loop */
 	while (1) {
 		tunnel_process();
-		__asm__ volatile("wfi");
 	}
 #else
 	npu_printf("%s\n", "core7_main");
