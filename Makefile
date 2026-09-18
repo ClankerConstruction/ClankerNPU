@@ -16,6 +16,7 @@ CFLAGS  := $(ARCH) -Os -ffunction-sections -fdata-sections \
            -Wall -Wno-unused-function \
            -D$(SOC) -D$(WIFI)
 ASFLAGS := $(ARCH) -D$(SOC) -D$(WIFI)
+LIBGCC  := $(shell $(CC) $(ARCH) -print-libgcc-file-name)
 LDFLAGS := -m elf32lriscv -T link.ld -nostdlib --gc-sections --relax \
            --print-memory-usage
 
@@ -45,7 +46,7 @@ $(BUILD)/%.o: %.c npu_config.h npu_regs.h npu_types.h | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(ELF): $(OBJS) link.ld
-	$(LD) $(LDFLAGS) -Map=$(MAP) -o $@ $(OBJS)
+	$(LD) $(LDFLAGS) -Map=$(MAP) -o $@ $(OBJS) $(LIBGCC)
 
 $(BIN): $(ELF)
 	$(OBJCOPY) -O binary -j .text -j .rodata $< $@

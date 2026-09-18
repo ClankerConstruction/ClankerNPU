@@ -255,8 +255,56 @@ static u32 plic_config_ext[16];
 /* 0x180: GET_WAIT function table (indexed by SDK WIFI_MAIL_Get_Wait_Func_t) */
 #ifdef HAS_WIFI
 typedef int (*wifi_mail_fn_t)(u32 *msg);
+#ifdef WIFI_KITE
+static wifi_mail_fn_t get_wait_func_table[10] __attribute__((section(".data"))) = {
+	wifi_mail_get_npu_info,
+	wifi_mail_get_last_rate,
+	wifi_mail_get_counter,
+	wifi_mail_get_dbg_counter,
+	wifi_mail_get_rxdesc_base,
+	wifi_mail_get_wcid_dbg_counter,
+	wifi_mail_get_dma_addr,
+	wifi_mail_get_ring_size,
+	wifi_mail_get_mdc_lock,
+	wifi_mail_get_dump_mapping,
+};
+static wifi_mail_fn_t set_wait_func_table[31] __attribute__((section(".data"))) = {
+	wifi_mail_set_pcie_addr,
+	wifi_mail_set_desc,
+	wifi_mail_set_init_done,
+	wifi_mail_set_tran_to_cpu,
+	wifi_mail_set_ba_win_size,
+	wifi_mail_set_driver_model_cmd,
+	wifi_mail_set_del_sta,
+	wifi_mail_set_dram_ba_node,
+	wifi_mail_set_pkt_buf,
+	wifi_mail_set_test_noba,
+	wifi_mail_set_flushone,
+	wifi_mail_set_flushall,
+	wifi_mail_set_force_cpu,
+	wifi_mail_set_pcie_state,
+	wifi_mail_set_port_type,
+	wifi_mail_set_retry,
+	wifi_mail_set_bar_info_cmd,
+	wifi_mail_set_fast_flag_cmd,
+	wifi_mail_set_band0_cpu,
+	wifi_mail_set_tx_ring_pcie,
+	wifi_mail_set_tx_desc_hw,
+	wifi_mail_set_tx_buf_hw,
+	wifi_mail_set_rx_txdone_hw,
+	wifi_mail_set_tx_pkt_buf,
+	wifi_mail_set_txrx_reg,
+	wifi_mail_set_debug_flag,
+	wifi_mail_set_wait_inode_cfg,
+	wifi_mail_set_wait_inode_stop,
+	wifi_mail_set_pcie_swap,
+	wifi_mail_set_ratelimit,
+	wifi_mail_set_arht_chip_info,
+};
+#else
 static wifi_mail_fn_t get_wait_func_table[10];
 static wifi_mail_fn_t set_wait_func_table[31];
+#endif
 #endif
 
 /* 0x1EC: WiFi chip name table (kite only, 8 bytes per entry) */
@@ -400,6 +448,7 @@ static isr_fn_t plic_isr_table[192];
 /* PLIC config */
 static u32 plic_cfg[3];
 static u32 printf_mutex_desc[2];
+static u32 mbox_notify_mutex[2];
 
 /* SRAM buffer manager */
 static u32 sram_buf_mutex[2];
@@ -413,7 +462,18 @@ static u32 sram_buf_pad2[8];
 static u32 wifi_state[256];
 
 /* tunnel funcId dispatch table (callback[1] — all variants) */
+#ifdef HAS_TUNNEL
+static mbox_handler_t tunnel_func_table[10] __attribute__((section(".data"))) = {
+	[0] = tunnel_mail_store_hdr,
+	[3] = tunnel_mail_store_srv6,
+	[4] = tunnel_mail_set_srv6_addr,
+	[5] = tunnel_mail_frag_mtu,
+	[6] = tunnel_mail_reset,
+	[8] = tunnel_mail_l4s_stub,
+};
+#else
 static mbox_handler_t tunnel_func_table[10];
+#endif
 
 #ifdef HAS_TUNNEL
 static u8 tunnel_srv6_hdr_len[8];
@@ -945,7 +1005,7 @@ static void delay_us(u32 us)
 
 static void delay_ms_mcycle(u32 ms)
 {
-	u32 clk = cpu_clock_div4();
+	u32 clk = cpu_clock_get();
 	u32 target = 1000 * ms * clk;
 	u32 prev = csr_read(mcycle);
 	u32 elapsed = 0;
@@ -970,7 +1030,7 @@ static int npu_vsprintf(char *buf, const char *fmt, u32 *args)
 	char *p = buf;
 	const char *f = fmt;
 	int arg_idx = 0;
-	char tmp[12];
+	char tmp[24];
 	int i, len;
 
 	while (*f) {
@@ -980,65 +1040,131 @@ static int npu_vsprintf(char *buf, const char *fmt, u32 *args)
 		}
 		f++;
 
-		/* flags */
-		int pad_zero = 0, left = 0, width = 0, is_long = 0;
+		int pad_zero = 0, left = 0, width = 0, is_ll = 0;
 
 		if (*f == '-') { left = 1; f++; }
 		if (*f == '0') { pad_zero = 1; f++; }
 		while (*f >= '0' && *f <= '9')
 			width = width * 10 + (*f++ - '0');
-		if (*f == 'l') { is_long = 1; f++; }
-		if (*f == 'l') { f++; } /* ignore ll */
+		if (*f == 'l') {
+			f++;
+			if (*f == 'l') { is_ll = 1; f++; }
+		} else if (*f == 'z') {
+			f++;
+		}
 
 		switch (*f) {
 		case 'd': {
-			s32 v = (s32)args[arg_idx++];
-			int neg = 0;
-			u32 uv;
-
-			if (v < 0) { neg = 1; uv = (u32)(-v); }
-			else uv = (u32)v;
-
-			len = 0;
-			do { tmp[len++] = '0' + (uv % 10); uv /= 10; } while (uv);
-			if (neg) tmp[len++] = '-';
-			for (i = 0; i < width - len; i++)
-				*p++ = pad_zero ? '0' : ' ';
+			if (is_ll) {
+				u64 v64 = args[arg_idx] |
+					  ((u64)args[arg_idx + 1] << 32);
+				arg_idx += 2;
+				s64 sv = (s64)v64;
+				int neg = 0;
+				if (sv < 0) { neg = 1; v64 = (u64)(-sv); }
+				len = 0;
+				do {
+					tmp[len++] = '0' + (u32)(v64 % 10);
+					v64 /= 10;
+				} while (v64);
+				if (neg) tmp[len++] = '-';
+			} else {
+				s32 v = (s32)args[arg_idx++];
+				int neg = 0;
+				u32 uv;
+				if (v < 0) { neg = 1; uv = (u32)(-v); }
+				else uv = (u32)v;
+				len = 0;
+				do {
+					tmp[len++] = '0' + (uv % 10);
+					uv /= 10;
+				} while (uv);
+				if (neg) tmp[len++] = '-';
+			}
+			if (!left)
+				for (i = 0; i < width - len; i++)
+					*p++ = pad_zero ? '0' : ' ';
 			for (i = len - 1; i >= 0; i--)
 				*p++ = tmp[i];
+			if (left)
+				for (i = 0; i < width - len; i++)
+					*p++ = ' ';
 			break;
 		}
 		case 'u': {
-			u32 v = args[arg_idx++];
-
-			len = 0;
-			do { tmp[len++] = '0' + (v % 10); v /= 10; } while (v);
-			for (i = 0; i < width - len; i++)
-				*p++ = pad_zero ? '0' : ' ';
+			if (is_ll) {
+				u64 v64 = args[arg_idx] |
+					  ((u64)args[arg_idx + 1] << 32);
+				arg_idx += 2;
+				len = 0;
+				do {
+					tmp[len++] = '0' + (u32)(v64 % 10);
+					v64 /= 10;
+				} while (v64);
+			} else {
+				u32 v = args[arg_idx++];
+				len = 0;
+				do {
+					tmp[len++] = '0' + (v % 10);
+					v /= 10;
+				} while (v);
+			}
+			if (!left)
+				for (i = 0; i < width - len; i++)
+					*p++ = pad_zero ? '0' : ' ';
 			for (i = len - 1; i >= 0; i--)
 				*p++ = tmp[i];
+			if (left)
+				for (i = 0; i < width - len; i++)
+					*p++ = ' ';
 			break;
 		}
 		case 'x':
 		case 'X': {
-			u32 v = args[arg_idx++];
 			const char *hex = (*f == 'X') ?
 				"0123456789ABCDEF" : "0123456789abcdef";
-
-			len = 0;
-			do { tmp[len++] = hex[v & 0xF]; v >>= 4; } while (v);
-			for (i = 0; i < width - len; i++)
-				*p++ = pad_zero ? '0' : ' ';
+			if (is_ll) {
+				u64 v64 = args[arg_idx] |
+					  ((u64)args[arg_idx + 1] << 32);
+				arg_idx += 2;
+				len = 0;
+				do {
+					tmp[len++] = hex[v64 & 0xF];
+					v64 >>= 4;
+				} while (v64);
+			} else {
+				u32 v = args[arg_idx++];
+				len = 0;
+				do {
+					tmp[len++] = hex[v & 0xF];
+					v >>= 4;
+				} while (v);
+			}
+			if (!left)
+				for (i = 0; i < width - len; i++)
+					*p++ = pad_zero ? '0' : ' ';
 			for (i = len - 1; i >= 0; i--)
 				*p++ = tmp[i];
+			if (left)
+				for (i = 0; i < width - len; i++)
+					*p++ = ' ';
 			break;
 		}
 		case 's': {
 			const char *s = (const char *)args[arg_idx++];
+			int slen;
 
 			if (!s) s = "(null)";
+			slen = 0;
+			while (s[slen]) slen++;
+			if (!left)
+				for (i = 0; i < width - slen; i++)
+					*p++ = ' ';
 			while (*s)
 				*p++ = *s++;
+			if (left)
+				for (i = 0; i < width - slen; i++)
+					*p++ = ' ';
 			break;
 		}
 		case 'c':
@@ -1320,6 +1446,8 @@ static void mailbox_init(void)
 	REG32(MBOX_INT_MASK0) = 256;
 	plic_cfg[0] = 14;
 	plic_state = 0;
+	mbox_notify_mutex[0] = 30;
+	mbox_notify_mutex[1] = 0;
 
 	/* zero all dispatch tables */
 	for (i = 0; i < MAX_CORE_NUM; i++)
@@ -1342,12 +1470,6 @@ static void mailbox_init(void)
 
 #ifdef HAS_TUNNEL
 	callbacks[5] = (u32)(void *)hwnat_mail_dispatch;
-	tunnel_func_table[0] = tunnel_mail_store_hdr;
-	tunnel_func_table[3] = tunnel_mail_store_srv6;
-	tunnel_func_table[4] = tunnel_mail_set_srv6_addr;
-	tunnel_func_table[5] = tunnel_mail_frag_mtu;
-	tunnel_func_table[6] = tunnel_mail_reset;
-	tunnel_func_table[8] = tunnel_mail_l4s_stub;
 #endif
 
 #ifdef HAS_DBA
@@ -1364,7 +1486,7 @@ static int mbox_notify_host(u32 base_ptr, u32 max_cnt, u32 func_id)
 	u32 timeout = 30;
 	u32 rptr;
 
-	hw_mutex_lock_pri(printf_mutex_desc);
+	hw_mutex_lock_pri(mbox_notify_mutex);
 
 	REG32(MBQ_BASE_PTR(8)) = base_ptr;
 	REG32(MBQ_MAX_CNT(8)) = max_cnt;
@@ -1377,7 +1499,7 @@ static int mbox_notify_host(u32 base_ptr, u32 max_cnt, u32 func_id)
 			break;
 	}
 
-	hw_mutex_unlock_pri(printf_mutex_desc);
+	hw_mutex_unlock_pri(mbox_notify_mutex);
 	return (rptr & 2) ? 0 : -1;
 }
 
@@ -1421,10 +1543,10 @@ static void npu_reboot(void)
  * ================================================================ */
 
 #define SRAM_BASE         0x3E800000
-#define SRAM_END          0x3E87FFFE
-#define SRAM_SIZE         0x80000
+#define SRAM_END          0x3E877FFE
+#define SRAM_SIZE         0x78000
 #define SRAM_MAX_ENTRIES  100
-#define SRAM_ERROR_ADDR   0x3E880000
+#define SRAM_ERROR_ADDR   0x3E878000
 
 static u32 sram_alloc_offset;
 static u32 sram_alloc_count;
@@ -3811,7 +3933,7 @@ reorder_insert:
 		*(u32 *)node = 0;
 		*(u32 *)(node + 4) = 0;
 		*(u32 *)(node + 8) = 0;
-		*(u32 *)(node + 32) = counter_base_2g;
+		*(u32 *)(node + 32) = timer_slow_tick;
 
 		/* mutex for linked-list insertion */
 		if (*(u8 *)((u32)entry + 25) | wifi_dbdc_mode)
@@ -4849,50 +4971,6 @@ static void wifi_bridge_init(void)
 	wifi_batch_count = 0;
 	wifi_pipeline_widx = 0;
 
-#ifdef WIFI_KITE
-	get_wait_func_table[0] = wifi_mail_get_npu_info;
-	get_wait_func_table[1] = wifi_mail_get_last_rate;
-	get_wait_func_table[2] = wifi_mail_get_counter;
-	get_wait_func_table[3] = wifi_mail_get_dbg_counter;
-	get_wait_func_table[4] = wifi_mail_get_rxdesc_base;
-	get_wait_func_table[5] = wifi_mail_get_wcid_dbg_counter;
-	get_wait_func_table[6] = wifi_mail_get_dma_addr;
-	get_wait_func_table[7] = wifi_mail_get_ring_size;
-	get_wait_func_table[8] = wifi_mail_get_mdc_lock;
-	get_wait_func_table[9] = wifi_mail_get_dump_mapping;
-
-	set_wait_func_table[0]  = wifi_mail_set_pcie_addr;
-	set_wait_func_table[1]  = wifi_mail_set_desc;
-	set_wait_func_table[2]  = wifi_mail_set_init_done;
-	set_wait_func_table[3]  = wifi_mail_set_tran_to_cpu;
-	set_wait_func_table[4]  = wifi_mail_set_ba_win_size;
-	set_wait_func_table[5]  = wifi_mail_set_driver_model_cmd;
-	set_wait_func_table[6]  = wifi_mail_set_del_sta;
-	set_wait_func_table[7]  = wifi_mail_set_dram_ba_node;
-	set_wait_func_table[8]  = wifi_mail_set_pkt_buf;
-	set_wait_func_table[9]  = wifi_mail_set_test_noba;
-	set_wait_func_table[10] = wifi_mail_set_flushone;
-	set_wait_func_table[11] = wifi_mail_set_flushall;
-	set_wait_func_table[12] = wifi_mail_set_force_cpu;
-	set_wait_func_table[13] = wifi_mail_set_pcie_state;
-	set_wait_func_table[14] = wifi_mail_set_port_type;
-	set_wait_func_table[15] = wifi_mail_set_retry;
-	set_wait_func_table[16] = wifi_mail_set_bar_info_cmd;
-	set_wait_func_table[17] = wifi_mail_set_fast_flag_cmd;
-	set_wait_func_table[18] = wifi_mail_set_band0_cpu;
-	set_wait_func_table[19] = wifi_mail_set_tx_ring_pcie;
-	set_wait_func_table[20] = wifi_mail_set_tx_desc_hw;
-	set_wait_func_table[21] = wifi_mail_set_tx_buf_hw;
-	set_wait_func_table[22] = wifi_mail_set_rx_txdone_hw;
-	set_wait_func_table[23] = wifi_mail_set_tx_pkt_buf;
-	set_wait_func_table[24] = wifi_mail_set_txrx_reg;
-	set_wait_func_table[25] = wifi_mail_set_debug_flag;
-	set_wait_func_table[26] = wifi_mail_set_wait_inode_cfg;
-	set_wait_func_table[27] = wifi_mail_set_wait_inode_stop;
-	set_wait_func_table[28] = wifi_mail_set_pcie_swap;
-	set_wait_func_table[29] = wifi_mail_set_ratelimit;
-	set_wait_func_table[30] = wifi_mail_set_arht_chip_info;
-#endif
 #endif
 }
 
@@ -5863,8 +5941,7 @@ static int wifi_mail_get_mdc_lock(u32 *msg)
 
 static int wifi_mail_get_dump_mapping(u32 *msg)
 {
-	wifi_print_stats_5g();
-	wifi_print_stats_2g();
+	sram_buf_dump();
 	msg[2] = 0;
 	return 1;
 }
@@ -6573,7 +6650,7 @@ static void ppe_filter_config(void)
 	}
 
 	if (ppe_module_ver != 0)
-		REG32(0x1FB50514) |= 0x0FA80000;
+		REG32(0x1FB50514) |= 0x0FA40000;
 	else
 		REG32(0x1FB50514) |= 0x06A40000;
 }
@@ -6600,16 +6677,20 @@ static void ppe_enable_config(void)
 		if (chip_rev == 14)
 			REG32(PPE1_ENABLE) |= 0x100u;
 
-		REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xF8FFFFFF) | 0x3000000;
+		REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xF8FFFFFF) | 0x4000000;
 		if (chip_rev == 14 && (REG32(PPE1_CTRL) & 1)) {
 			REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xF8FFFFFF) |
-					   0x2000000;
+					   0x3000000;
 			REG32(PPE1_MISC) = (REG32(PPE1_MISC) & 0xF8FFFFFF) |
-					   0x2000000;
+					   0x3000000;
+			REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xFFFFFFF8) | 4;
+			REG32(PPE1_MISC) = (REG32(PPE1_MISC) & 0xFFFFFFF8) | 5;
+		} else {
+			REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xFFFFFFF8) | 6;
 		}
+	} else {
+		REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xFFFFFFF8) | 6;
 	}
-
-	REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xFFFFFFF8) | 4;
 	REG32(0x1FB50E44) = 0x12345678;
 	if (chip_rev == 14)
 		REG32(0x1FB51E44) = 0x12345678;
