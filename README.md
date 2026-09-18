@@ -27,7 +27,7 @@ a tight polling loop processing packets from the host kernel driver.
 0x1EC0D100  Host adaptor (DMA ring descriptors)
 0x1FB50000  TDMA engine + PPE filter registers
 0x1FBF0000  UART
-0x3E800000  SRAM (480KB, NPU-local, single-cycle access)
+0x3E800000  SRAM (AN7552=256KB, AN7581=480KB, AN7583=512KB, single-cycle)
 0x84000000  DRAM (firmware code, loaded by kernel driver)
 ```
 

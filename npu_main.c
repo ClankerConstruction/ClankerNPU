@@ -1537,16 +1537,23 @@ static void npu_reboot(void)
 /* ================================================================
  * SRAM buffer management
  *
- * 512KB SRAM at 0x3E800000, bump-allocated with alignment.
- * Alloc table: 100 entries of {u16 addr_type, u16 pad, u32 base}.
- * Size lookup via per-type descriptors in .rodata.
+ * SRAM at 0x3E800000, bump-allocated with alignment.
+ * Size and max alloc entries vary by SoC.
  * ================================================================ */
 
 #define SRAM_BASE         0x3E800000
-#define SRAM_END          0x3E877FFE
+#if defined(AN7552)
+#define SRAM_SIZE         0x40000
+#define SRAM_MAX_ENTRIES  50
+#elif defined(AN7581)
 #define SRAM_SIZE         0x78000
 #define SRAM_MAX_ENTRIES  100
-#define SRAM_ERROR_ADDR   0x3E878000
+#else /* AN7583 */
+#define SRAM_SIZE         0x80000
+#define SRAM_MAX_ENTRIES  100
+#endif
+#define SRAM_END          (SRAM_BASE + SRAM_SIZE - 2)
+#define SRAM_ERROR_ADDR   (SRAM_BASE + SRAM_SIZE)
 
 static u32 sram_alloc_offset;
 static u32 sram_alloc_count;
@@ -1570,7 +1577,7 @@ static u32 sram_buf_alloc_impl(u16 addr_type, u32 size_class)
 
 	hw_mutex_lock(sram_buf_mutex);
 
-	if (sram_alloc_offset >= SRAM_SIZE && sram_alloc_count > 99) {
+	if (sram_alloc_offset >= SRAM_SIZE && sram_alloc_count >= SRAM_MAX_ENTRIES) {
 		hw_mutex_unlock(sram_buf_mutex);
 		npu_printf("sram is over the max!!current para:AddrType=%d,idx=%d,tmp_restore_index=%d\n",
 			   addr_type, sram_alloc_offset, sram_alloc_count);
