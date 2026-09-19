@@ -376,6 +376,7 @@ static void bridge_dma_copy(u32 channel, u32 src, u32 dst, u32 len)
 #define TDMA_TX_RING1_CFG     0x1FB50814
 #define TDMA_TX_RING0_IDX     0x1FB50808
 #define TDMA_TX_RING1_IDX     0x1FB50818
+#define TDMA_TX_RING0_DMA_IDX 0x1FB5080C
 #define TDMA_INT_CFG0         0x1FB50A28
 #define TDMA_INT_CFG1         0x1FB50A2C
 #define TDMA_GLB_CFG          0x1FB50A04
@@ -402,7 +403,6 @@ static u32 tdma_tx_ring0_cnt;
 static u32 tdma_tx_ring1_cnt;
 
 /* TDMA TX ring per-band state */
-static u32 tdma_tx_ring_base[4];
 static u32 tdma_tx_sw_idx[8];
 
 /* BME descriptor state */
@@ -670,27 +670,28 @@ static u32 *tdma_stats_base(u32 band)
 	return (u32 *)counter_base_tri;
 }
 
-static int __attribute__((noinline)) tdma_tx_submit(u32 port, u32 pkt_len,
+/* WiFi -> wired. Eight-byte descriptors, 1024 to a ring: word 0 carries
+ * the frame length in bits 12:0 and the buffer token in 28:14, word 1
+ * the buffer itself. */
+static int __attribute__((noinline)) tdma_tx_submit(u32 token, u32 pkt_len,
 						    u32 buf_addr, u32 band)
 {
-	u32 sw_idx = tdma_tx_sw_idx[band + 3];
-	volatile u32 *hw_idx_reg = (volatile u32 *)(0x1FB5080C + 16 * band);
+	u32 base = (band != 0) ? tdma_tx_ring1_base : tdma_tx_ring0_base;
+	volatile u32 *hw_idx_reg = (volatile u32 *)(TDMA_TX_RING0_DMA_IDX +
+						    16 * band);
+	u32 sw_idx = tdma_tx_sw_idx[band];
 	u32 retries = 5;
-	u32 hw_idx, free_slots;
+	u32 hw_idx, free_slots, next, w0;
 	u32 *desc;
-	u32 next;
 
-	/* TODO AN7581 has TDMA rings of its own but no ring init here yet */
-	if (tdma_tx_ring_base[band] == 0)
+	if (base == 0)
 		return -1;
 
 	while (1) {
 		hw_idx = *hw_idx_reg;
-		if (sw_idx < hw_idx)
-			free_slots = hw_idx - sw_idx - 1;
-		else
-			free_slots = 1023 - sw_idx + hw_idx;
-		if (free_slots > 9)
+		free_slots = (sw_idx < hw_idx) ? (hw_idx - sw_idx - 1)
+					       : (1023 - sw_idx + hw_idx);
+		if (free_slots > 4)
 			break;
 		{ volatile u32 i; for (i = 0; i < 300; i++) ; }
 		if ((wifi_debug_flags & 4))
@@ -702,29 +703,24 @@ static int __attribute__((noinline)) tdma_tx_submit(u32 port, u32 pkt_len,
 		}
 	}
 
-	desc = (u32 *)(tdma_tx_ring_base[band] + 32 * sw_idx);
-	if ((s32)desc[1] >= 0) {
-		if ((wifi_debug_flags & 4))
-			(*(tdma_stats_base(band) + 63))++;
-		npu_printf("tdma tx (%d) full. cpu %d desc word %x\n",
-			   band, sw_idx, desc[1]);
-		return -1;
-	}
-
-	if ((wifi_debug_flags & 4))
-		(*(tdma_stats_base(band) + 79))++;
+	desc = (u32 *)(base + 8 * sw_idx);
+	w0 = (desc[0] & 0x3FFFFFFF) | 0x40000000;
+	w0 = (w0 & 0xC0001FFF) | (token << 14);
 
 	if (pkt_len < 60) {
 		npu_memset((void *)(buf_addr + pkt_len), 0, 60 - pkt_len);
 		pkt_len = 60;
 	}
 
-	next = (sw_idx <= 0x3FE) ? sw_idx + 1 : 0;
-	desc[4] = (port << 14) | 0x80000000;
-	desc[2] = (buf_addr & 0x3FFFFFFF) | 0x80000000;
-	desc[1] = pkt_len;
-	REG32(0x1FB50808 + 16 * band) = next;
-	tdma_tx_sw_idx[band + 3] = next;
+	next = (sw_idx > 0x3FE) ? 0 : sw_idx + 1;
+
+	if ((wifi_debug_flags & 4))
+		(*(tdma_stats_base(band) + 79))++;
+
+	desc[1] = (buf_addr & 0x3FFFFFFF) | 0x80000000;
+	tdma_tx_sw_idx[band] = next;
+	desc[0] = (w0 & 0xFFFFE000) | pkt_len;
+	REG32(TDMA_TX_RING0_IDX + 16 * band) = next;
 	return 0;
 }
 #endif /* HAS_WIFI */
@@ -4679,7 +4675,11 @@ struct eagle_dbg {
 	u32 push[2];	/* descriptors handed to the WiFi tx ring */
 	u32 rxd;	/* rxdmad descriptors parsed */
 	u32 rxq;	/* packets queued for the host */
+	u32 rxfast;	/* packets sent straight to the wired side */
+	u32 rxdrop;	/* packets dropped: queue full or enqueue refused */
+	u32 rxseg;	/* segments of a frame spanning several buffers */
 	u32 rxout;	/* packets handed to the host adaptor */
+	u32 rxoutfail;	/* host adaptor ring full */
 	u32 txdone;	/* tx done reports consumed */
 	u32 refill[2];	/* rx ring descriptors refilled */
 };
@@ -4711,8 +4711,10 @@ static void eagle_dbg_tick(void)
 		   eagle_tx_ring_cpu_idx[0], eagle_tx_ring_cpu_idx[1],
 		   eagle_dma_idx(0), eagle_dma_idx(1), dbg.txdone,
 		   dbg.refill[0], dbg.refill[1]);
-	npu_printf("[NPU]rx rxd=%d q=%d out=%d state=%d/%d/%d\n",
-		   dbg.rxd, dbg.rxq, dbg.rxout, eagle_rx_en, eagle_tx_en,
+	npu_printf("[NPU]rx rxd=%d q=%d fast=%d seg=%d drop=%d\n",
+		   dbg.rxd, dbg.rxq, dbg.rxfast, dbg.rxseg, dbg.rxdrop);
+	npu_printf("[NPU]rxo out=%d full=%d state=%d/%d/%d\n",
+		   dbg.rxout, dbg.rxoutfail, eagle_rx_en, eagle_tx_en,
 		   eagle_txq_state);
 }
 #else
@@ -4779,6 +4781,7 @@ static int eagle_pkt_enqueue(u32 buf_id, u16 seg_len, u16 wcid, u8 info,
 		eagle_mseg_widx[band] = (idx == EAGLE_MSEG_ENTRIES) ? 0 : idx;
 	}
 	ret = 0;
+	dbg.rxq++;
 out:
 	hw_mutex_unlock(eagle_txq_mutex);
 	return ret;
@@ -4844,14 +4847,18 @@ static void eagle_txq_drain(u32 band)
 	flags = *(volatile u8 *)(e + 10);
 
 	if ((s32)buf_id >= 0 && seg_len != 0) {
+		if (dbg.rxout == 0)
+			npu_hexdump("rxpkt", eagle_buf_uncached(buf_id) +
+				    EAGLE_PKT_HEADROOM, 48);
 		dbg.rxout++;
-		host_ring_submit(eagle_buf_phys(buf_id), seg_len, 0,
+		if (host_ring_submit(eagle_buf_phys(buf_id), seg_len, 0,
 				 *(volatile u16 *)(e + 4),
 				 *(volatile u8 *)(e + 11),
 				 flags >> 2,
 				 *(volatile u16 *)(e + 8),
 				 (flags >> 1) & 1,
-				 *(volatile u32 *)eagle_buf_uncached(buf_id));
+				 *(volatile u32 *)eagle_buf_uncached(buf_id)) != 0)
+			dbg.rxoutfail++;
 		buf_id_return((u16)buf_id);
 	}
 
@@ -4910,13 +4917,15 @@ static void eagle_mseg_drain(u32 band)
 	while (segs != 0) {
 		e = base + EAGLE_Q_ENTRY * idx;
 		buf_id = *(volatile u32 *)e;
-		if (ok)
+		if (ok) {
+			dbg.rxout++;
 			host_ring_submit(eagle_buf_phys(buf_id),
 					 *(volatile u16 *)(e + 4), 0, 0, 0,
 					 *(volatile u8 *)(e + 8) >> 2,
 					 *(volatile u16 *)(e + 6),
 					 (*(volatile u8 *)(e + 8) & 2) != 0,
 					 *(volatile u32 *)eagle_buf_uncached(buf_id));
+		}
 		buf_id_return((u16)buf_id);
 		*(volatile u32 *)e = 0xFFFFFFFF;
 		*(volatile u32 *)(e + 4) = 0;
@@ -4994,18 +5003,23 @@ static int eagle_rxdmad_handle(u8 *chaining)
 			if (info & 2) {
 				u32 off = (info >> 16) & 0xFE;
 
+				dbg.rxfast++;
 				if (tdma_tx_submit((u16)buf_id,
 						   (seg_len - off) & 0xFFFF,
 						   buf + EAGLE_PKT_HEADROOM + off,
-						   0) != 0)
+						   0) != 0) {
+					dbg.rxdrop++;
 					buf_id_return((u16)buf_id);
+				}
 			} else if (eagle_pkt_enqueue((u16)buf_id, seg_len, 0, 0,
 						     1, 2, seg_len) != 0) {
+				dbg.rxdrop++;
 				buf_id_return((u16)buf_id);
 				npu_printf("enq slow path faill\n");
 			}
 		} else if (eagle_pkt_enqueue((u16)buf_id, seg_len, 0, 0, 1, 2,
 					     seg_len) != 0) {
+			dbg.rxdrop++;
 			buf_id_return((u16)buf_id);
 		}
 		goto done;
@@ -5035,6 +5049,7 @@ static int eagle_rxdmad_handle(u8 *chaining)
 	}
 
 	seg_len = (info >> 3) & 0x3FFF;
+	dbg.rxseg++;
 	eagle_seg_len[eagle_rxdmad_segs] = (u16)seg_len;
 	eagle_seg_bufid[eagle_rxdmad_segs] = (u16)buf_id;
 	eagle_rxdmad_seglen += seg_len;
