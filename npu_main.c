@@ -568,6 +568,19 @@ u8 eagle_rro_mode;
 u8 eagle_test_noba;
 u32 eagle_chip_info[6];
 u32 eagle_phy_tx_gpio;
+
+u32 eagle_tx_buf_space_r10;
+u32 eagle_tx_buf_space_r11;
+u32 eagle_txdone_desc_base[2];
+u16 eagle_txdone_cpu_idx[2];
+u16 eagle_txdone_dma_idx[2];
+
+u32 eagle_rx_ring_desc_base[2];
+u32 eagle_ind_cmd_desc_base;
+u16 eagle_rx_ring_size[2];
+u16 eagle_rx_ring_cpu_idx[2];
+u8 eagle_rx_ring_init_done[2];
+u16 eagle_rx_ring_bufid[2][1536];
 #endif
 
 #if defined(WIFI_KITE) && defined(HAS_TR471)
@@ -992,6 +1005,8 @@ void delay_us(u32 us)
 	} while (elapsed < target);
 }
 
+void delay_ms(u32 ms);
+
 static void delay_ms_mcycle(u32 ms)
 {
 	u32 clk = cpu_clock_get();
@@ -1008,6 +1023,11 @@ static void delay_ms_mcycle(u32 ms)
 			elapsed += cur - prev - 1;
 		prev = cur;
 	} while (elapsed < target);
+}
+
+void delay_ms(u32 ms)
+{
+	delay_ms_mcycle(ms);
 }
 
 

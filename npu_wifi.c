@@ -4267,6 +4267,9 @@ int kite_wifi_config(u32 base, u32 cnt)
 #define EAGLE_RING_ALL          15
 
 #define EAGLE_RX_RING_MAX_IDX   1535
+#define EAGLE_TX_BUF_SLOT       256
+#define EAGLE_TX_BUF_SPACE_SIZE 0x80000
+#define EAGLE_TXDONE_RING_BYTES 0x2000
 
 /* host addresses below 0xC0000000 are outside the window the NPU can reach */
 static int eagle_addr_in_range(u32 addr, const char *who)
@@ -4358,26 +4361,92 @@ static void npu_set_rx_ring_for_tx_done_phy_base_eagle(u32 addr, u32 ring)
 	eagle_msdu_pg_desc_base = (addr & 0x3FFFFFFF) | NPU_ADDR_MASK;
 }
 
+/* descriptor base of one eagle ring inside the shared PCIe descriptor
+ * block, by the ring's own id. Offsets are the blob's own table. */
+static u32 eagle_ring_desc_base(u32 ring_id)
+{
+	static const u32 off[6] = {
+		0x00000, 0x140A0, 0x06020, 0x1A0C0, 0x0E020, 0x0E0A0
+	};
+
+	if (ring_id - 1 > 5)
+		return 0;
+	return wifi_pcie_desc_base + off[ring_id - 1];
+}
+
+/* every 256-byte slot of the tx buffer space carries a 144-byte header */
+static void eagle_tx_buf_space_clear(u32 base)
+{
+	u32 p, end = base + EAGLE_TX_BUF_SPACE_SIZE;
+
+	for (p = base; p != end; p += EAGLE_TX_BUF_SLOT)
+		npu_memset((void *)p, 0, 144);
+}
+
+/* tx done ring: one 16-byte descriptor per 256-byte tx packet buffer */
+static void eagle_txdone_ring_init(u32 band)
+{
+	u32 buf, desc, i;
+
+	/* the host sets the tx packet buffer last; wait for it */
+	while (eagle_tx_pkt_buf_addr == 0)
+		delay_ms(100);
+
+	if (band != 0) {
+		buf = eagle_tx_buf_space_r11;
+		eagle_txdone_cpu_idx[1] = 0;
+		eagle_txdone_dma_idx[1] = 0;
+		eagle_txdone_desc_base[1] = sram_buf_alloc(17);
+		desc = eagle_txdone_desc_base[1];
+	} else {
+		buf = eagle_tx_buf_space_r10;
+		eagle_txdone_cpu_idx[0] = 0;
+		eagle_txdone_dma_idx[0] = 0;
+		eagle_txdone_desc_base[0] = sram_buf_alloc(16);
+		desc = eagle_txdone_desc_base[0];
+	}
+
+	for (i = 0; i < EAGLE_TXDONE_RING_BYTES; i += 16) {
+		REG32(desc + i) = (buf & 0x3FFFFFFF) | 0x80000000;
+		REG32(desc + i + 4) = 0;
+		REG32(desc + i + 8) = 0;
+		*(volatile u8 *)(desc + i + 12) = 0;
+		buf += EAGLE_TX_BUF_SLOT;
+	}
+}
+
 static void npu_set_tx_ring_buf_space_phy_base_eagle(u32 addr, u32 ring)
 {
+	u32 base = (addr & 0x3FFFFFFF) | NPU_ADDR_MASK;
+
 	eagle_addr_in_range(addr, "npu_set_tx_ring_buf_space_phy_base_eagle");
 
 	switch (ring) {
 	case 0:
-		eagle_tx_buf_space[0] = (addr & 0x3FFFFFFF) | NPU_ADDR_MASK;
+		eagle_tx_buf_space[0] = base;
 		break;
 	case 1:
-		eagle_tx_buf_space[1] = (addr & 0x3FFFFFFF) | NPU_ADDR_MASK;
+		eagle_tx_buf_space[1] = base;
 		break;
 	case EAGLE_RING_MSDU_PG0:
-		eagle_tx_buf_space_pg[0] = (addr & 0x3FFFFFFF) | NPU_ADDR_MASK;
+		eagle_tx_buf_space_pg[0] = base;
+		eagle_tx_buf_space_clear(base);
 		break;
 	case EAGLE_RING_MSDU_PG1:
-		eagle_tx_buf_space_pg[1] = (addr & 0x3FFFFFFF) | NPU_ADDR_MASK;
+		eagle_tx_buf_space_pg[1] = base;
+		eagle_tx_buf_space_clear(base);
+		break;
+	case EAGLE_RING_TXDONE0:
+		eagle_tx_buf_space_r10 = base;
+		eagle_txdone_ring_init(0);
+		break;
+	case EAGLE_RING_TXDONE1:
+		eagle_tx_buf_space_r11 = base;
+		eagle_txdone_ring_init(1);
 		break;
 	default:
-		npu_printf("%s() wrong input value!!!\n",
-			   "npu_set_tx_ring_buf_space_phy_base_eagle");
+		npu_printf("[error]%s wrong band index:%d !!!!!\n",
+			   "npu_set_tx_ring_buf_space_phy_base_eagle", ring);
 		break;
 	}
 }
@@ -4419,19 +4488,61 @@ static void eagle_icv_err_mbox_handle(u32 action, u32 arg)
 	}
 }
 
+/* rx ring: one 16-byte descriptor per allocated packet buffer */
+static int eagle_rx_ring_init(u32 ring_size, u32 band)
+{
+	u32 desc_base, buf_id, desc, i;
+
+	if (ring_size - 1 > EAGLE_RX_RING_MAX_IDX)
+		npu_printf("ERROR! rx_ring_size = %d\n", ring_size);
+
+	eagle_rx_ring_size[band] = (u16)ring_size;
+	desc_base = eagle_rx_ring_desc_base[band];
+
+	for (i = 0; i < ring_size; i++) {
+		buf_id = buf_id_alloc_hw(0, band);
+		if (buf_id == (u32)-1) {
+			npu_printf("[%s]rx ring init: alloc buffid fail!\n",
+				   band ? "BAND1" : "BAND0");
+			return 1;
+		}
+		eagle_rx_ring_bufid[band][i] = (u16)buf_id;
+		desc = desc_base + 16 * i;
+		REG32(desc) = ((((buf_id << 11) + eagle_pkt_buf_addr) &
+				0x3FFFFFFF) | 0x80000000) + 192;
+		REG32(desc + 8) = buf_id << 16;
+		REG32(desc + 12) = 0;
+		REG32(desc + 4) = 0x07000000;
+	}
+
+	eagle_rx_ring_cpu_idx[band] = 0;
+	eagle_rx_ring_init_done[band] = 1;
+	return 0;
+}
+
 static void npu_mbox_init_rxd_wrapper(u32 ring_size, u32 ring)
 {
-	(void)ring_size;
-
 	switch (ring) {
 	case EAGLE_RING_RX0:
+		eagle_rx_ring_desc_base[0] = eagle_ring_desc_base(1);
+		eagle_rx_ring_init(ring_size, 0);
+		break;
 	case EAGLE_RING_RX1:
+		eagle_rx_ring_desc_base[1] = eagle_ring_desc_base(3);
+		eagle_rx_ring_init(ring_size, 1);
+		break;
 	case EAGLE_RING_MSDU_PG0:
+		eagle_msdu_pg_desc_base = eagle_ring_desc_base(5);
+		break;
 	case EAGLE_RING_MSDU_PG1:
+		npu_printf("%s() wrong input val:%d\n",
+			   "npu_rro_msdu_pg_ring_desc_addr", 1);
+		break;
 	case EAGLE_RING_IND_CMD0:
 	case EAGLE_RING_IND_CMD1:
+		eagle_ind_cmd_desc_base = eagle_ring_desc_base(6);
+		break;
 	case EAGLE_RING_TXDONE0:
-		/* per-ring descriptor fill is not reconstructed yet */
 		break;
 	case EAGLE_RING_TXDONE1:
 		npu_printf("[NPU] ignore tx done ring1 currently because of no use\n");
