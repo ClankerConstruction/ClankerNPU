@@ -4713,9 +4713,14 @@ static void eagle_dbg_tick(void)
 		   dbg.refill[0], dbg.refill[1]);
 	npu_printf("[NPU]rx rxd=%d q=%d fast=%d seg=%d drop=%d\n",
 		   dbg.rxd, dbg.rxq, dbg.rxfast, dbg.rxseg, dbg.rxdrop);
-	npu_printf("[NPU]rxo out=%d full=%d state=%d/%d/%d\n",
-		   dbg.rxout, dbg.rxoutfail, eagle_rx_en, eagle_tx_en,
-		   eagle_txq_state);
+	npu_printf("[NPU]rxo out=%d full=%d host=%d/%d state=%d/%d/%d\n",
+		   dbg.rxout, dbg.rxoutfail,
+		   REG32(HOSTADPT_RX_CPU_IDX(0)) & 0xFFFF,
+		   REG32(HOSTADPT_RX_CPU_IDX(1)) & 0xFFFF,
+		   eagle_rx_en, eagle_tx_en, eagle_txq_state);
+	npu_printf("[NPU]wire sw=%d hw=%d cfg=%x glb=%x\n",
+		   tdma_tx_sw_idx[0], REG32(TDMA_TX_RING0_DMA_IDX) & 0xFFFF,
+		   REG32(TDMA_TX_RING0_CFG), REG32(TDMA_GLB_CFG));
 }
 #else
 static void eagle_dbg_tick(void) { }
@@ -4847,9 +4852,9 @@ static void eagle_txq_drain(u32 band)
 	flags = *(volatile u8 *)(e + 10);
 
 	if ((s32)buf_id >= 0 && seg_len != 0) {
-		if (dbg.rxout == 0)
+		if (dbg.rxout == 0 || dbg.rxout == 40)
 			npu_hexdump("rxpkt", eagle_buf_uncached(buf_id) +
-				    EAGLE_PKT_HEADROOM, 48);
+				    EAGLE_PKT_HEADROOM, 64);
 		dbg.rxout++;
 		if (host_ring_submit(eagle_buf_phys(buf_id), seg_len, 0,
 				 *(volatile u16 *)(e + 4),
