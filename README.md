@@ -325,7 +325,26 @@ table) and the particular session table.
 
 The descriptor own bit is bit 31 of word 1 and means the NPU owns the
 slot. A refill hands a slot back by writing `0x07000000`; a tx ring push
-hands one over by writing `0x4C4048`.
+hands one over by writing `0x4C4048`. The WiFi tx rings start with every
+descriptor at `0x80000000`, written when the host asks for their base.
+
+The rxdmad ring has no own bit. Each descriptor carries a 4-bit
+generation in the top nibble of word 3 (word 1 on the 8-byte indirect
+command ring) that the chip increments each time it wraps, and the NPU
+holds a counter of its own. Ring init stamps every descriptor with a
+generation the NPU never expects - `0xF`, or `0xE` on the narrow ring -
+so an untouched ring reads as empty.
+
+`npu_mbox_get_wait_rxdesc_base` is the pivot of ring setup: the host
+programs the WiFi hardware from what it answers, so the answer is a
+physical address (`& 0x1FFFFFFF`), and it is per ring id, not per band:
+
+| id | answers with |
+|---:|---|
+| 0, 1 | rx ring descriptor base |
+| 5, 6 | WiFi tx ring base, and arms that ring |
+| 8, 9 | rxdmad / indirect command ring base |
+| 10 | MSDU page ring base |
 
 ### Per-variant differences
 
