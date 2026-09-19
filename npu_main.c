@@ -1511,7 +1511,7 @@ void npu_bridge_buf_init(void)
 
 	delay_1ms(10);
 
-	for (i = 0; i < 8; i++) {
+	for (i = 0; i < 4; i++) {
 		ch_status = (u32 *)(0x1EC12210 + i * 16);
 		if (*ch_status & 1)
 			npu_printf("npu bridge channel-%d buf init sucess\n", i);
@@ -1713,8 +1713,6 @@ static void __attribute__((noreturn)) tunnel_offload_loop(u32 core,
 #ifdef HAS_TR471
 	tr471_main_init();
 #endif
-	tunnel_init();
-
 	while (1) {
 		if (tunnel_ecn_enabled) {
 			l4s_ecn_process(1);

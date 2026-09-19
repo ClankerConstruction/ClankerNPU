@@ -386,10 +386,14 @@ give to cores 3 and 4.
   implemented; those frames take the host path instead.
 - **AN7581 TDMA ring init** AN7581 has TDMA rx and tx rings of its
   own, but only the AN7552/AN7583 (`HAS_BME`) ring init is
-  reconstructed. `tdma_tx_submit` returns -1 while the ring base is
+  implemented. But `tdma_tx_submit` returns -1 while the ring base is
   unset.
-- **Eagle PCIe window publish** — set_port_type records the type but
+- **Eagle PCIe window publish** set_port_type records the type but
   does not rewrite the per-port windows at `0x1FA90038` / `0x1FC28030`.
+- **PPE configuration**  `tunnel_init` programs the PPE, but doesn't
+  called from the tunnel offload loop, so it has no caller. The blob
+  configures the PPE from a mailbox command instead (the one that logs
+  `IP check use Black List`), which is not implemented.
 - **TR-471** test infrastructure (~22 functions) is latency/loss
   measurement per ITU-T Y.1540
 - **Thread manager** (~10 functions) advanced multi-hart scheduling
