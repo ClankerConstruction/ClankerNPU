@@ -65,9 +65,9 @@ MIB21 restored
 "core freq at %d MHz"
 ```
 
-RSTCTRL1 is at SCU+0x834, not SCU+0x000. Writing SCU+0x000 stops the
-NPU internal bus: the next MMIO access never completes and the hart
-hangs with no UART output.
+RSTCTRL1 is at SCU+0x834. SCU+0x000 is not the reset control; writing
+it leaves the hart stuck on its next MMIO access, with no UART output
+and every host mailbox call timing out.
 
 ### Hardware Mutex
 
