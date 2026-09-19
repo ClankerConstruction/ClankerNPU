@@ -291,6 +291,20 @@ set from core entry points.
 
 ### What's Missing
 
+- **Datapath workers** runs a polling loop on cores 1, 3 and
+  4; currently no frame moves through the NPU even
+  though every ring is allocated and programmed:
+
+  | core | blob | what it does |
+  |-----:|------|--------------|
+  | 1 | `sub_84012380` | `kite_handle_rxdmad_c_ring`: waits on the ready flags, then loops on `sub_84011686` |
+  | 3 | `sub_84000AA6` | noreturn worker over the per-band dispatch it builds at `0x3E900CC0` |
+  | 4 | `sub_84013B8C` | polls the rx ring at the descriptor base with the cpu index, `sub_84011150` per descriptor |
+
+  `wifi_bridge_loop` and `wifi_pipeline_worker` poll `wifi_tx_pending`
+  and `wifi_rx_pending`, which nothing ever raises - the kite design
+  expects an ISR to set them, and the eagle workers poll the rings
+  directly instead.
 - **Eagle rx descriptor ring fill** `npu_mbox_init_rxd_wrapper`
   (set_wait funcId 1) validates the ring index but does not populate
   descriptors. The per-ring initialisers behind it (RRO, MSDU page,
