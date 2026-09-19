@@ -269,7 +269,6 @@ u32 npu_bridge_base;
 isr_fn_t plic_isr_table[192];
 
 /* PLIC config */
-u32 plic_cfg[3];
 u32 printf_mutex_desc[2];
 u32 mbox_notify_mutex[2];
 
@@ -343,7 +342,6 @@ u32 dba_timer0_snap;
 u8 plic_threshold_table[8];
 u32 plic_isr_init_done;
 u32 plic_cfg2;
-u32 plic_state;
 
 /* UART debug console */
 u32 uart_cmd_idx;
@@ -973,15 +971,15 @@ static void mbox_isr(int src)
 		return;
 	}
 
-	/* read queue registers */
-	base_ptr = REG32(MBQ_BASE_PTR(mbox_idx));
-	max_cnt = REG32(MBQ_MAX_CNT(mbox_idx));
-	rptr = REG32(MBQ_RPTR(mbox_idx));
+	/* read queue registers; length and arg are 16-bit */
+	base_ptr = REG32(MBQ_CTRL0(mbox_idx));
+	max_cnt = REG32(MBQ_CTRL1(mbox_idx)) & 0xFFFF;
+	rptr = REG32(MBQ_CTRL3(mbox_idx)) & 0xFFFF;
 
 	/* set response status if not already set */
 	if (!(rptr & 1)) {
-		rptr = (rptr & 0xFFFFFF00u) | (rptr & 0xE1) | 0x6;
-		REG32(MBQ_RPTR(mbox_idx)) = rptr;
+		rptr = ((rptr & 0xFF00u) | (rptr & 0xE1) | 0x6) & 0xFFFF;
+		REG32(MBQ_CTRL3(mbox_idx)) = rptr;
 	}
 
 	func_idx = (rptr >> 11) & 0xF;
@@ -1005,7 +1003,7 @@ static void mbox_isr(int src)
 
 		/* signal completion */
 		if (rptr & 1)
-			REG32(MBQ_RPTR(mbox_idx)) = (rptr & ~2u) | 2;
+			REG32(MBQ_CTRL3(mbox_idx)) = (rptr & ~2u) | 2;
 	}
 }
 
@@ -1014,16 +1012,18 @@ static void mailbox_init(void)
 	u32 i;
 	u32 *callbacks;
 
-	/* enable per-core mailbox interrupts */
+	/* route mailbox n to core n-1 */
 	for (i = 0; i < MAX_CORE_NUM; i++) {
-		REG32(NPU_MBOX_BASE + 0x008 + i * 4) = (1u << i);
+		REG32(MBOX_INT_MASK(i + 1)) = (1u << i);
 		plic_register_isr(8 + i, mbox_isr);
 	}
 
 	REG32(MBOX_INT_MASK0) = 256;
-	plic_cfg[0] = 14;
-	plic_state = 0;
+#if defined(AN7581)
 	mbox_notify_mutex[0] = 30;
+#else
+	mbox_notify_mutex[0] = 14;
+#endif
 	mbox_notify_mutex[1] = 0;
 
 	/* zero all dispatch tables */
@@ -1058,26 +1058,30 @@ static void mailbox_init(void)
 }
 
 /* notify host via mailbox queue 8 */
-int mbox_notify_host(u32 base_ptr, u32 max_cnt, u32 func_id)
+int mbox_notify_host(u32 core_id, u32 func_id, u32 len)
 {
 	u32 timeout = 30;
-	u32 rptr;
+	u32 sts;
 
 	hw_mutex_lock_pri(mbox_notify_mutex);
 
-	REG32(MBQ_BASE_PTR(8)) = base_ptr;
-	REG32(MBQ_MAX_CNT(8)) = max_cnt;
-	REG32(MBQ_RPTR(8)) = (func_id << 11) | 1;
-	REG32(MBQ_WPTR(8)) = 1;
+	REG32(MBQ_CTRL0(MBQ_NOTIFY)) = core_id & 0xF;
+	REG32(MBQ_CTRL1(MBQ_NOTIFY)) = len & 0xFFFF;
+	REG32(MBQ_CTRL3(MBQ_NOTIFY)) = (func_id & 0xF) << 11;
+	REG32(MBQ_CTRL2(MBQ_NOTIFY)) = REG32(MBQ_CTRL2(MBQ_NOTIFY)) + 1;
 
-	while (timeout--) {
-		rptr = REG32(MBQ_RPTR(8));
-		if (rptr & 2)
-			break;
+	sts = REG32(MBQ_CTRL3(MBQ_NOTIFY)) & 0xFFFF;
+	while (!(sts & 2) && timeout--) {
+		delay_ms_mcycle(1);
+		sts = REG32(MBQ_CTRL3(MBQ_NOTIFY)) & 0xFFFF;
 	}
 
+	if (!(sts & 2))
+		npu_printf("Error(%s): npu notify host timeout (func_id:%d, core_id:%d)\n",
+			   "npu_notify_host", func_id, core_id);
+
 	hw_mutex_unlock_pri(mbox_notify_mutex);
-	return (rptr & 2) ? 0 : -1;
+	return (sts >> 2) & 7;
 }
 
 

@@ -33,7 +33,7 @@ void delay_us(u32 us);
 void delay_ms(u32 ms);
 
 /* npu_main.c — mailbox */
-int mbox_notify_host(u32 base_ptr, u32 max_cnt, u32 func_id);
+int mbox_notify_host(u32 core_id, u32 func_id, u32 len);
 
 /* npu_main.c — SRAM */
 u32 sram_buf_alloc(u32 addr_type);
@@ -165,8 +165,6 @@ extern char printf_buf[1024];
 extern u32 uart_cmd_idx;
 extern u8 uart_cmd_buf[32];
 
-extern u32 plic_cfg[3];
-extern u32 plic_state;
 extern u32 mbox_notify_mutex[2];
 
 extern u32 timer_irq_map[NPU_TIMER_NUM];

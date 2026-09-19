@@ -54,14 +54,18 @@
 #define HW_MUTEX_OFF_MASK       0x3C		/* 16 mutexes */
 #endif
 
-/* Mailbox */
+/* Mailbox. One 16-byte control block per queue at +0x030, matching the
+ * host driver's CR_MBQ<n>_CTRL0..3. Queue index is the core id; queue 8 is
+ * the NPU-to-host notify channel. */
 #define NPU_MBOX_BASE           0x1EC0C000
-#define MBOX_INT_STS            (NPU_MBOX_BASE + 0x008)
-#define MBOX_INT_MASK0          (NPU_MBOX_BASE + 0x00C)
-#define MBQ_BASE_PTR(q)         (NPU_MBOX_BASE + 0x010 + ((q) * 0x10))
-#define MBQ_MAX_CNT(q)          (NPU_MBOX_BASE + 0x014 + ((q) * 0x10))
-#define MBQ_RPTR(q)             (NPU_MBOX_BASE + 0x018 + ((q) * 0x10))
-#define MBQ_WPTR(q)             (NPU_MBOX_BASE + 0x01C + ((q) * 0x10))
+#define MBOX_INT_STS            (NPU_MBOX_BASE + 0x000)
+#define MBOX_INT_MASK(n)        (NPU_MBOX_BASE + 0x004 + ((n) * 4))
+#define MBOX_INT_MASK0          MBOX_INT_MASK(0)
+#define MBQ_CTRL0(q)            (NPU_MBOX_BASE + 0x030 + ((q) * 0x10))	/* buffer phys addr */
+#define MBQ_CTRL1(q)            (NPU_MBOX_BASE + 0x034 + ((q) * 0x10))	/* length */
+#define MBQ_CTRL2(q)            (NPU_MBOX_BASE + 0x038 + ((q) * 0x10))	/* doorbell counter */
+#define MBQ_CTRL3(q)            (NPU_MBOX_BASE + 0x03C + ((q) * 0x10))	/* arg + status */
+#define MBQ_NOTIFY              8
 
 /* Host adaptor */
 #define NPU_HOSTADPT_BASE       0x1EC0D100
