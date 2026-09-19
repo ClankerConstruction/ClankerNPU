@@ -74,6 +74,7 @@ u32 timer_pair_bit[4] = { 0x19, 0x1a, 0x1b, 0x1c };
 /* 0x180: GET_WAIT function table (indexed by SDK WIFI_MAIL_Get_Wait_Func_t) */
 #ifdef HAS_WIFI
 typedef int (*wifi_mail_fn_t)(u32 *msg);
+#ifdef WIFI_KITE
 wifi_mail_fn_t get_wait_func_table[10] __attribute__((section(".data"))) = {
 	wifi_mail_get_npu_info,
 	wifi_mail_get_last_rate,
@@ -119,6 +120,11 @@ wifi_mail_fn_t set_wait_func_table[31] __attribute__((section(".data"))) = {
 	wifi_mail_set_ratelimit,
 	wifi_mail_set_arht_chip_info,
 };
+#else
+/* eagle helpers are not reconstructed; every slot stays NULL */
+wifi_mail_fn_t get_wait_func_table[10];
+wifi_mail_fn_t set_wait_func_table[31];
+#endif
 #endif
 
 /* 0x1EC: WiFi chip name table (kite only, 8 bytes per entry) */
@@ -468,7 +474,7 @@ u8 wifi_port_band_5g[16];
 u32 wifi_pipeline_queue_2g;
 u32 wifi_pipeline_queue_5g;
 
-#ifdef HAS_WIFI
+#ifdef WIFI_KITE
 u32 ratelimit_table[32];
 u32 arht_chip_info[6];
 u32 arht_phy_tx_gpio;

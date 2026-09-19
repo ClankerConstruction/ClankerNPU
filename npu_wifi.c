@@ -3683,15 +3683,17 @@ static u32 npu_get_pipeline_queue(u32 band)
 }
 
 /* ================================================================
- * WiFi mailbox command wrappers
+ * WiFi mailbox command wrappers (kite path)
  *
- * Host-side mailbox command handlers, shared by both WiFi paths: the
- * blob's kite and eagle tables hold the same thin wrappers over the
- * npu_set_* helpers. The npu_mbox_* helpers below are the kite
- * behaviour, where the inode commands report "not support on 791X".
+ * Kite (MT7916/MT7996) host-side mailbox command handlers. Eagle uses
+ * the same wrapper shape but a different helper behind every command -
+ * see the eagle table in the blob, where funcId 0 reaches
+ * npu_set_pcie_base_eagle rather than npu_set_pcie_base. None of the
+ * eagle helpers are reconstructed yet, so an eagle build leaves both
+ * dispatch tables empty and every command returns without acting.
  * ================================================================ */
 
-#ifdef HAS_WIFI
+#ifdef WIFI_KITE
 
 static void npu_mbox_txrx_ring_size_get(u32 dir, u32 band, u32 *size)
 {
@@ -4240,7 +4242,7 @@ int kite_wifi_config(u32 base, u32 cnt)
 }
 #endif /* HAS_TR471 && WIFI_KITE */
 
-#endif /* HAS_WIFI */
+#endif /* WIFI_KITE */
 
 #ifdef WIFI_EAGLE
 
