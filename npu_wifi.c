@@ -4852,9 +4852,6 @@ static void eagle_txq_drain(u32 band)
 	flags = *(volatile u8 *)(e + 10);
 
 	if ((s32)buf_id >= 0 && seg_len != 0) {
-		if (dbg.rxout == 0 || dbg.rxout == 40)
-			npu_hexdump("rxpkt", eagle_buf_uncached(buf_id) +
-				    EAGLE_PKT_HEADROOM, 64);
 		dbg.rxout++;
 		if (host_ring_submit(eagle_buf_phys(buf_id), seg_len, 0,
 				 *(volatile u16 *)(e + 4),
@@ -4952,12 +4949,6 @@ static int eagle_rxdmad_handle(u8 *chaining)
 	if (REG32(d + 12) >> 28 != eagle_rxdmad_gen)
 		return 1;
 	dbg.rxd++;
-	if (dbg.rxd == 1) {
-		npu_printf("[NPU]rxdmad base=%x idx=%d gen=%d\n",
-			   eagle_ind_cmd_desc_base, eagle_rxdmad_ridx,
-			   eagle_rxdmad_gen);
-		npu_hexdump("rxd", d, 16);
-	}
 	if (eagle_rxdmad_on_core2)
 		eagle_delay(280);
 
@@ -4985,6 +4976,13 @@ static int eagle_rxdmad_handle(u8 *chaining)
 	else if ((dw2 & 0xF000) == 0x2000)
 		err |= 2;
 	info = (info & 0x0FFFFFFF) | ((dw2 >> 12) << 28);
+
+	if (dbg.rxd == 1 || dbg.rxd == 40 || dbg.rxd == 90) {
+		npu_printf("[NPU]rxdsc n=%d dw1=%x dw2=%x info=%x sdl=%d dst=%d\n",
+			   dbg.rxd, dw1, dw2, info, (dw1 >> 16) & 0x3FFF,
+			   (dw1 >> 11) & 3);
+		npu_hexdump("rxpkt", buf + EAGLE_PKT_HEADROOM, 128);
+	}
 
 	if ((info & 1) == 0 && *chaining == 0) {
 		/* a whole frame in one buffer */
