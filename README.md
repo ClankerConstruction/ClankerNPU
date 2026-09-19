@@ -93,6 +93,24 @@ few instructions later. Nothing may re-enter a printf while it holds the
 printf mutex, which is why the trap handler reports faults instead of
 dispatching them through the PLIC ISR table.
 
+### WiFi Mail
+
+Command handlers reach the host over mailbox function 0. `interfaceID`
+in the message header means a band on the kite path and a **ring index**
+on the eagle path:
+
+| ring | eagle meaning |
+|-----:|---------------|
+| 0, 1 | RRO rx rings |
+| 5, 6 | MSDU page rings |
+| 8, 9 | indirect command ring |
+| 10, 11 | tx done rings |
+| 15 | all bases set; publish every ring's cpu index |
+
+Host addresses at or above `0xC0000000` are outside the window the NPU
+can reach. Both paths use the same dispatch tables, one entry per funcId,
+with a different handler set behind each.
+
 ### Mailbox
 
 `0x1EC0C000`, matching the host driver's `CR_MBOX_*` / `CR_MBQ<n>_CTRL*`.
@@ -243,12 +261,12 @@ set from core entry points.
 
 ### What's Missing
 
-- **Eagle WiFi mailbox helpers** (~35 functions) the eagle
-  (MT7991/MT7992/MT7993) set_wait and get_wait tables use the same
-  wrapper shape as kite but a different helper behind every command,
-  e.g. `npu_set_pcie_base_eagle` for funcId 0. None are reconstructed,
-  so an eagle build leaves both tables empty and the host sees every
-  WiFi mail command return without acting.
+- **Eagle rx descriptor ring fill** `npu_mbox_init_rxd_wrapper`
+  (set_wait funcId 1) validates the ring index but does not populate
+  descriptors. The per-ring initialisers behind it (RRO, MSDU page,
+  indirect command, tx done) are not reconstructed.
+- **Eagle PCIe window publish** set_port_type records the type but
+  does not rewrite the per-port windows at `0x1FA90038` / `0x1FC28030`.
 - **TR-471** test infrastructure (~22 functions) is latency/loss
   measurement per ITU-T Y.1540
 - **Thread manager** (~10 functions) advanced multi-hart scheduling
