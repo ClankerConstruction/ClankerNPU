@@ -5055,6 +5055,9 @@ static int eagle_hostadpt_drain(u32 band)
 	u32 e = hostadpt_in_base[band] + HOSTADPT_IN_ENTRY * idx;
 	int moved = 0;
 
+	if (hostadpt_in_size[band] == 0)
+		return 0;
+
 	while (*(volatile u32 *)e & 1) {
 		if (eagle_tx_stage(band, (u32 *)e) < 0)
 			return moved;
@@ -5173,11 +5176,12 @@ static int eagle_txdone_poll(void)
 
 		if ((hdr >> 27) == 6 || (hdr >> 27) == 24) {
 			/* token report: 15-bit ids, 0x7FFF is the terminator */
-			u32 left = (hdr & 0xFFFF) - 12;
+			u32 left = (hdr & 0xFFFF);
 
+			left = (left > 12) ? left - 12 : 0;
 			cnt = (hdr >> 16) & 0xFF;
 			n = 0;
-			for (i = 0; n < cnt && left != 0; i++, left -= 4) {
+			for (i = 0; n < cnt && left >= 4; i++, left -= 4) {
 				u32 w = REG32(buf + EAGLE_PKT_HEADROOM + 12 + 4 * i);
 				u32 lo = w & 0x7FFF;
 				u32 hi = (w >> 15) & 0x7FFF;
@@ -5451,12 +5455,13 @@ static void eagle_inode_txrx_reg(u32 id, u32 arg, u32 addr)
 			npu_memset((void *)eagle_icv_err_table, 0, 4104);
 		break;
 	case 3:				/* re-arm one session's elements */
+		base = (arg == 1) ? eagle_session_tbl :
+				    eagle_rro_addr_elem[(arg >> 3) & 127];
+		if (base == 0)
+			break;
 		for (i = 0; i < 1024; i++) {
-			if (arg == 1)
-				p = eagle_session_tbl + 8 * i;
-			else
-				p = eagle_rro_addr_elem[(arg >> 3) & 127] +
-				    8 * (((arg & 7) << 10) + i);
+			p = (arg == 1) ? base + 8 * i :
+					 base + 8 * (((arg & 7) << 10) + i);
 			*(volatile u8 *)(p + 7) = 0xFF;
 		}
 		break;
@@ -5612,8 +5617,10 @@ static int eagle_rx_ring_init(u32 ring_size, u32 band)
 {
 	u32 desc_base, buf_id, desc, i;
 
-	if (ring_size - 1 > EAGLE_RX_RING_MAX_IDX)
+	if (ring_size - 1 > EAGLE_RX_RING_MAX_IDX) {
 		npu_printf("ERROR! rx_ring_size = %d\n", ring_size);
+		ring_size = EAGLE_RX_RING_MAX_IDX + 1;
+	}
 
 	eagle_rx_ring_size[band] = (u16)ring_size;
 	desc_base = eagle_rx_ring_desc_base[band];
