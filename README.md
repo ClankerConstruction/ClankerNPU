@@ -346,6 +346,23 @@ physical address (`& 0x1FFFFFFF`), and it is per ring id, not per band:
 | 8, 9 | rxdmad / indirect command ring base |
 | 10 | MSDU page ring base |
 
+### SRAM allocation order
+
+`sram_buf_alloc(type)` is a bump allocator over 0x3E800000, keyed by
+address type, and `tdma_init` restarts it after zeroing all of SRAM.
+Nothing may claim a block before that call. Core 0's order is:
+
+| | |
+|---|---|
+| `tdma_init` | zero SRAM, reset the allocator |
+| `bufid_pool_init` | types 138, 18, 28, 29 - 0x14000 |
+| `core0_wifi_init_wrapper` | type 1, the PCIe descriptor block - 0x220C0 at 0x3E814000 |
+| `npu_bridge_buf_init` | type 129, the bridge packet buffer |
+
+The PCIe descriptor block holds every WiFi ring the host programs, at
+the fixed offsets `eagle_ring_desc_base` carries, so it has to be a
+single 0x220C0 reservation that nothing else overlaps.
+
 ### Per-variant differences
 
 | | AN7552 | AN7581 | AN7583 |
