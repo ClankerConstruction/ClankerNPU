@@ -306,8 +306,6 @@ static void counter_init(u32 band)
 	u32 *base;
 	u32 count;
 
-	npu_printf("%s:%d\n", "counter_init", band);
-
 	if (band == 1) {
 		counter_base_5g = sram_buf_alloc(9);
 		base = (u32 *)counter_base_5g;
@@ -424,6 +422,7 @@ static void bme_done_isr(int src)
 }
 
 /* BME init: buffer move engine descriptor ring */
+#ifdef WIFI_KITE
 static void tdma_bme_init(void)
 {
 	u32 *desc;
@@ -470,6 +469,8 @@ static void tdma_bme_init(void)
 }
 
 /* TDMA BME init: hardware buffer-ID allocator path */
+#endif /* WIFI_KITE */
+
 void tdma_bmgr_init(void)
 {
 	u32 buf_base;
@@ -594,7 +595,9 @@ void tdma_tx_init(void)
 		   "tdma_tx_init", TDMA_WIFI_BUF_CFG, REG32(TDMA_WIFI_BUF_CFG));
 
 #ifdef HAS_BME
+#ifdef WIFI_KITE
 	tdma_bme_init();
+#endif
 #endif
 }
 
@@ -5472,6 +5475,8 @@ void eagle_rx_init(void)
 	eagle_rx_ring_init_done[1] = 0;
 	eagle_icv_err_table = sram_buf_alloc(22);
 	counter_init(2);
+	counter_init(0);
+	counter_init(1);
 }
 
 /* ---- mailbox: npu_mbox_set_wait_inode_txrx_reg_addr ---- */
@@ -6339,11 +6344,14 @@ void core0_wifi_init_wrapper(void)
 	tdma_tx_init();
 	tdma_rx_init();
 #endif
+#ifndef WIFI_EAGLE
 	wifi_bridge_init();
 	npu_printf("%s finish\n", "core0_wifi_init_wrapper");
+#endif
 
 #ifdef WIFI_EAGLE
 	eagle_init_done = 1;
+	npu_printf("NPU init Version: %s\n", NPU_INIT_VERSION);
 #endif
 	result = hostadpt_init();
 	if (result != 0)
