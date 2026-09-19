@@ -696,6 +696,7 @@ static void plic_init(void)
 	plic_set_threshold();
 
 	for (i = 0; i < 192; i++) {
+		plic_disable(i);
 		if (i == 95)
 			REG32(PLIC_PRIORITY(95)) = 17;
 		else

@@ -89,7 +89,7 @@
 #define PLIC_BASE               0x0C000000
 #define PLIC_PRIORITY(src)      (0x0C000004 + ((src) * 4))
 #define PLIC_ENABLE_REG(word)   (0x0C002000 + ((word) * 4))
-#define PLIC_MASK_REG(word)     (0x0C004000 + ((word) * 4))
+#define PLIC_MASK_REG(word)     (0x0C003000 + ((word) * 4))
 #define PLIC_THRESHOLD_REG      0x0C200000
 #define PLIC_CLAIM_REG          0x0C200004
 #define PLIC_MAX_SOURCE         192
