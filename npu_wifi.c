@@ -4634,6 +4634,7 @@ static u32 eagle_ring_desc_base(u32 ring_id)
 #define EAGLE_STAGE_ENTRIES	512
 #define EAGLE_TXD_SLOT		256
 #define EAGLE_TXD_BYTES		76
+#define EAGLE_TX_BUF_BYTES	2048
 #define EAGLE_TX_RING_MASK	0x7FF
 #define EAGLE_TX_RING_ROOM	5	/* keep this many slots free */
 #define EAGLE_TX_RING_ENTRIES	2048
@@ -5026,6 +5027,8 @@ static int eagle_tx_stage(u32 band, u32 *in)
 		return -1;
 
 	len = (u16)((in[0] << 1) >> 19);
+	if (len > EAGLE_TX_BUF_BYTES)
+		len = EAGLE_TX_BUF_BYTES;
 	*(volatile u16 *)(e + 10) = len;
 
 	token = tx_token_alloc();
@@ -5060,6 +5063,13 @@ static int eagle_hostadpt_drain(u32 band)
 		return 0;
 
 	while (*(volatile u32 *)e & 1) {
+		if (eagle_in_first[band] == 0) {
+			eagle_in_first[band] = 1;
+			npu_printf("[NPU]in%d base=%x size=%d w0=%x pkt=%x skb=%x\n",
+				   band, hostadpt_in_base[band],
+				   hostadpt_in_size[band], ((u32 *)e)[0],
+				   ((u32 *)e)[1], ((u32 *)e)[2]);
+		}
 		if (eagle_tx_stage(band, (u32 *)e) < 0)
 			return moved;
 		idx++;
@@ -5151,6 +5161,14 @@ static int eagle_tx_ring_push(u32 band)
 		eagle_tx_ring_cpu_idx[band] = (u16)next;
 		REG32(eagle_tx_ring_pcie_base[band] + 8) = next;
 		pushed = 1;
+
+		if (eagle_tx_first_push[band] == 1) {
+			eagle_tx_first_push[band] = 2;
+			npu_printf("[NPU]tx%d sent d0=%x d1=%x d2=%x cidx=%d dma=%d\n",
+				   band, REG32(desc), REG32(desc + 4),
+				   REG32(desc + 8), next,
+				   REG32(eagle_tx_ring_pcie_base[band] + 0xC));
+		}
 	}
 
 	*(volatile u32 *)(e + 4) = 0;
@@ -5303,6 +5321,11 @@ void eagle_rxdmad_loop(void)
 			eagle_delay(500);
 	}
 }
+
+#ifdef EAGLE_NO_TX_PUSH
+/* NPUTX=0: stage host frames but never hand them to the WiFi tx ring */
+#define eagle_tx_ring_push(band) (0)
+#endif
 
 /* core 2: staged frames into the WiFi tx ring, paced by the ring's own
  * dma index so the chip is never overrun */

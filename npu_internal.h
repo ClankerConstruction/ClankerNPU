@@ -549,6 +549,7 @@ extern u32 eagle_tx_ring_desc[2];
 extern u16 eagle_tx_ring_cpu_idx[2];
 extern u32 eagle_txdone_ridx;
 extern u8 eagle_tx_first_push[2];
+extern u8 eagle_in_first[2];
 extern u8 eagle_txdone_kick;
 extern volatile u32 eagle_rro_cfg[26];
 extern volatile u32 eagle_rro_active;
