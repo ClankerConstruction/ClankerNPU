@@ -1283,6 +1283,34 @@ int tunnel_mail_reset(u32 base, u32 cnt)
 	return 1;
 }
 
+/* HWNAT config the host hands over at init */
+static void hwnat_set_wait_init(u32 addr)
+{
+	hwnat_cds = *(volatile u8 *)(addr + 8);
+	hwnat_xpon_hal_api_ng = *(volatile u8 *)(addr + 9);
+	hwnat_wan_xsi = *(volatile u8 *)(addr + 10);
+	hwnat_ct_joyme4 = *(volatile u8 *)(addr + 11);
+	hwnat_max_packet_2000 = *(volatile u8 *)(addr + 12);
+	hwnat_ppe_type = REG32(addr + 16);
+	hwnat_wan_mode = REG32(addr + 20);
+	hwnat_ae_wan_sel = REG32(addr + 24);
+	hwnat_ready = 1;
+}
+
+/* SET_WAIT_API sub-dispatch, keyed by the _hwnat_set_func_id the host
+ * puts at +8 */
+static int hwnat_set_wait_api(u32 addr)
+{
+	u32 cmd = REG32(addr + 8);
+
+	if (cmd > 3 || mbox_ext_handlers[cmd] == NULL) {
+		npu_printf("%s not support cmd:%d\n",
+			   "hwnat_mail_set_wait_api", cmd);
+		return 0;
+	}
+	return mbox_ext_handlers[cmd](addr, 0);
+}
+
 int hwnat_mail_dispatch(u32 base, u32 cnt)
 {
 	u32 addr = (base & 0x3FFFFFFF) | NPU_ADDR_MASK;
@@ -1308,10 +1336,27 @@ int hwnat_mail_dispatch(u32 base, u32 cnt)
 		return 0;
 	}
 
-	if (mbox_ext_handlers[func_id + 4] == NULL)
-		return 0;
+	switch (func_id) {
+	case 1:			/* HWNAT_INIT */
+		hwnat_set_wait_init(addr);
+		result = 1;
+		break;
+	case 2:			/* HWNAT_DEINIT */
+		hwnat_ready = 0;
+		result = 1;
+		break;
+	case 3:			/* API */
+		result = hwnat_set_wait_api(addr);
+		break;
+	case 4:			/* FLOW_STATS_SETUP, not implemented */
+		result = 0;
+		break;
+	default:		/* L4S_SETUP */
+		npu_printf("L4S not support!!!\n");
+		result = 1;
+		break;
+	}
 
-	result = mbox_ext_handlers[func_id + 4](addr, 0);
 	if (result == 0)
 		npu_printf("hwnat_mail_set_wait_operation fail !\n");
 	return result;
