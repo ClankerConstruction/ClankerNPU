@@ -3144,14 +3144,14 @@ static void wifi_ba_node_init(void)
 
 	pool = (u16 *)sram_buf_alloc(12);
 	reorder_pri_idx_pool = (u32)pool;
-	for (i = 0; i < REORDER_PRI_POOL_SIZE; i++)
+	for (i = 0; pool != NULL && i < REORDER_PRI_POOL_SIZE; i++)
 		pool[i] = (u16)i;
 	reorder_pri_widx = 0;
 	reorder_pri_ridx = 0;
 
 	pool = (u16 *)sram_buf_alloc(13);
 	reorder_sec_idx_pool = (u32)pool;
-	for (i = 0; i < REORDER_SEC_POOL_SIZE; i++)
+	for (i = 0; pool != NULL && i < REORDER_SEC_POOL_SIZE; i++)
 		pool[i] = (u16)i;
 	reorder_sec_widx = 0;
 	reorder_sec_ridx = 0;

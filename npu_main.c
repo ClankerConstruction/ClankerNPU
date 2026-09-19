@@ -1326,6 +1326,16 @@ static const struct sram_size_ent sram_size_hi[] = {
 	{ 134, 0x01000 }, { 136, 0x08010 }, { 130, 0x00004 }, { 137, 0x00004 },
 };
 
+/* Types this reconstruction allocates that neither blob table lists, so
+ * the numbering at those call sites does not match the blob yet. Sized
+ * from the loops that fill them; the rest get a bounded default. */
+#define SRAM_DEFAULT_SIZE  0x4000
+
+static const struct sram_size_ent sram_size_ext[] = {
+	{  12, 0x01000 },	/* reorder primary index pool, 2000 u16 */
+	{  13, 0x02800 },	/* reorder secondary index pool, 5000 u16 */
+};
+
 static u32 sram_type_size(u32 addr_type)
 {
 	const struct sram_size_ent *t;
@@ -1342,7 +1352,16 @@ static u32 sram_type_size(u32 addr_type)
 		if (t[i].addr_type == addr_type)
 			return t[i].size;
 	}
-	return 0;
+
+	n = sizeof(sram_size_ext) / sizeof(sram_size_ext[0]);
+	for (i = 0; i < n; i++) {
+		if (sram_size_ext[i].addr_type == addr_type)
+			return sram_size_ext[i].size;
+	}
+
+	npu_printf("AddrType=%d is not in the size table, reserving 0x%x\n",
+		   addr_type, SRAM_DEFAULT_SIZE);
+	return SRAM_DEFAULT_SIZE;
 }
 
 u32 sram_buf_alloc(u32 addr_type)
@@ -1353,11 +1372,6 @@ u32 sram_buf_alloc(u32 addr_type)
 		return 0;
 
 	size = sram_type_size(addr_type);
-	if (size == 0) {
-		npu_printf("alloc fail!! unknown AddrType=%d\n", addr_type);
-		return 0;
-	}
-
 	result = sram_buf_alloc_impl((u16)addr_type, size);
 	if (result == SRAM_ERROR_ADDR)
 		return 0;
