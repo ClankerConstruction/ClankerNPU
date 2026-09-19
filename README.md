@@ -389,6 +389,14 @@ give to cores 3 and 4.
 
 ### What's Missing
 
+- **WiFi -> LAN hardware fast path** a frame the WiFi chip marks
+  `dst_sel=1` carries its own ethernet header offset and the blob puts
+  it straight on the wired side through the PPE. The PPE has to punt an
+  unmatched flow to the CPU for that to be safe, and its configuration
+  is not implemented, so a traffics leaves on the LAN port
+  instead of reaching the host. `HWFAST=1` builds the blob's behaviour;
+  the default hands those frames to the host, which is what the driver's
+  own rx path does with the same descriptor.
 - **LAN -> WiFi hardware fast path** `sub_84006944` drains the TDMA
   rx ring straight into the WiFi tx ring through `sub_840146E2`. Not
   implemented; those frames take the host path instead.
