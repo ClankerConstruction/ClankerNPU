@@ -335,6 +335,14 @@ holds a counter of its own. Ring init stamps every descriptor with a
 generation the NPU never expects - `0xF`, or `0xE` on the narrow ring -
 so an untouched ring reads as empty.
 
+`SET_WAIT_PCIE_PORT_TYPE` opens each PCIe port's inbound window onto the
+descriptor block - a base at `0x1FA90038` / `0x1FC28030` and an end four
+bytes after it, both physical. The rings live in NPU SRAM, so until the
+window is open the WiFi chip cannot fetch a tx descriptor or write an rx
+one: the NPU can queue as many as it likes and the chip's dma index
+never moves. Types 0 and 1 give one port the whole block; 2 and 3 split
+it, band 0 taking everything below rx ring 1 and band 1 the rest.
+
 `npu_mbox_get_wait_rxdesc_base` is the pivot of ring setup: the host
 programs the WiFi hardware from what it answers, so the answer is a
 physical address (`& 0x1FFFFFFF`), and it is per ring id, not per band:
@@ -388,10 +396,8 @@ give to cores 3 and 4.
   own, but only the AN7552/AN7583 (`HAS_BME`) ring init is
   implemented. But `tdma_tx_submit` returns -1 while the ring base is
   unset.
-- **Eagle PCIe window publish** set_port_type records the type but
-  does not rewrite the per-port windows at `0x1FA90038` / `0x1FC28030`.
-- **PPE configuration**  `tunnel_init` programs the PPE, but doesn't
-  called from the tunnel offload loop, so it has no caller. The blob
+- **PPE configuration** `tunnel_init` programs the PPE, but no blob
+  calls it from the tunnel offload loop, so it has no caller. The blob
   configures the PPE from a mailbox command instead (the one that logs
   `IP check use Black List`), which is not implemented.
 - **TR-471** test infrastructure (~22 functions) is latency/loss

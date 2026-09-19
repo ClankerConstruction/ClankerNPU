@@ -68,6 +68,13 @@
 #define MBQ_NOTIFY              8
 
 /* Host adaptor */
+/* PCIe inbound windows: base and end of the slice of NPU SRAM the WiFi
+ * chip behind each port may reach */
+#define PCIE0_WIN_BASE          0x1FA90038
+#define PCIE0_WIN_END           0x1FA9003C
+#define PCIE1_WIN_BASE          0x1FC28030
+#define PCIE1_WIN_END           0x1FC28034
+
 #define NPU_HOSTADPT_BASE       0x1EC0D100
 #define HOSTADPT_TX_BASE_PTR(r) (NPU_HOSTADPT_BASE + 0x000 + ((r) * 0x10))
 #define HOSTADPT_TX_MAX_CNT(r)  (NPU_HOSTADPT_BASE + 0x004 + ((r) * 0x10))

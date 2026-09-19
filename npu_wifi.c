@@ -5989,11 +5989,61 @@ int eagle_mail_set_pcie_state(u32 *msg)
 	return 1;
 }
 
+/* Open the PCIe port's window onto the descriptor block. Until this runs
+ * the WiFi chip cannot fetch a tx ring descriptor or write an rx one, so
+ * its dma index never moves however many descriptors the NPU queues.
+ *
+ * The window is a base and an end. Port type 0 and 1 give one port the
+ * whole block; 2 and 3 split it, band 0 taking everything up to rx ring
+ * 1 and band 1 the rest. */
+static void eagle_pcie_window_publish(u32 band)
+{
+	u32 rx1 = eagle_ring_desc_base(2);
+	u32 rx1_end = rx1 + 0xE020;
+	u32 rx0 = eagle_ring_desc_base(1);
+	u32 rx0_end = rx0 + 0x140A0;
+
+	switch (eagle_pcie_port_type) {
+	case 0:
+		REG32(PCIE1_WIN_BASE) = rx0 & 0x1FFFFFFF;
+		REG32(PCIE1_WIN_END) = rx1_end & 0x1FFFFFFF;
+		break;
+	case 1:
+		REG32(PCIE0_WIN_BASE) = rx0 & 0x1FFFFFFF;
+		REG32(PCIE0_WIN_END) = rx1_end & 0x1FFFFFFF;
+		break;
+	case 2:
+		if (band != 0) {
+			REG32(PCIE0_WIN_BASE) = rx1 & 0x1FFFFFFF;
+			REG32(PCIE0_WIN_END) = rx1_end & 0x1FFFFFFF;
+		} else {
+			REG32(PCIE1_WIN_BASE) = rx0 & 0x1FFFFFFF;
+			REG32(PCIE1_WIN_END) = rx0_end & 0x1FFFFFFF;
+		}
+		break;
+	case 3:
+		if (band != 0) {
+			REG32(PCIE1_WIN_BASE) = rx1 & 0x1FFFFFFF;
+			REG32(PCIE1_WIN_END) = rx1_end & 0x1FFFFFFF;
+		} else {
+			REG32(PCIE0_WIN_BASE) = rx0 & 0x1FFFFFFF;
+			REG32(PCIE0_WIN_END) = rx0_end & 0x1FFFFFFF;
+		}
+		break;
+	default:
+		break;
+	}
+}
+
 int eagle_mail_set_port_type(u32 *msg)
 {
 	eagle_pcie_port_type = (u8)msg[2];
-	/* the blob also republishes the per-port PCIe windows at 0x1FA90038
-	 * and 0x1FC28030 from SRAM addresses; that path is not reconstructed */
+	eagle_pcie_window_publish(0);
+	eagle_pcie_window_publish(1);
+	npu_printf("[NPU]pcie port type=%d win0=%x/%x win1=%x/%x\n",
+		   eagle_pcie_port_type, REG32(PCIE0_WIN_BASE),
+		   REG32(PCIE0_WIN_END), REG32(PCIE1_WIN_BASE),
+		   REG32(PCIE1_WIN_END));
 	return 1;
 }
 
