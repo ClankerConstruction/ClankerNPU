@@ -1696,6 +1696,38 @@ void tr471_main_init(void)
  * Per-core main functions
  * ================================================================ */
 
+#ifdef HAS_TUNNEL
+/* The tunnel offload never returns. On the eight-core part core 7 runs
+ * it; the six-core part has no core 7 and gives it to core 0 once the
+ * WiFi init is done. */
+static void __attribute__((noreturn)) tunnel_offload_loop(u32 core,
+							  const char *who)
+{
+	u32 pkt_len = 0, desc_ptr = 0;
+
+	npu_printf("%s for npu tunnel offload\n", who);
+
+	plic_register_isr(8 + core, mbox_isr);
+	npu_bridge_buf_init();
+
+#ifdef HAS_TR471
+	tr471_main_init();
+#endif
+	tunnel_init();
+
+	while (1) {
+		if (tunnel_ecn_enabled) {
+			l4s_ecn_process(1);
+			l4s_ecn_process(2);
+		}
+		if (tunnel_dequeue(core, &pkt_len, &desc_ptr) == 0 &&
+		    tunnel_offload_handler(core, pkt_len,
+					   (u32 *)desc_ptr) == -1)
+			tunnel_pkt_drop(core, pkt_len, desc_ptr);
+	}
+}
+#endif
+
 static void __attribute__((noinline)) core0_main(void)
 {
 	tdma_init();
@@ -1714,12 +1746,17 @@ static void __attribute__((noinline)) core0_main(void)
 #endif
 
 	core0_wifi_init_wrapper();
-	npu_bridge_buf_init();
 	plic_register_isr(59, dbg_cnt_isr);
 
+#if defined(AN7583) && defined(HAS_TUNNEL)
+	tunnel_offload_loop(0, "npu_tunnel_offload");
+#else
+	npu_bridge_buf_init();
 	npu_printf("%s\n", "core0_main");
 #if defined(AN7552) && defined(WIFI_EAGLE)
+	/* TODO the blob also runs the tunnel dequeue here */
 	eagle_core0_loop();
+#endif
 #endif
 }
 
@@ -1816,40 +1853,13 @@ static void core7_wifi_init_wrapper(void)
 static void __attribute__((noinline)) core7_main(void)
 {
 #ifdef HAS_TUNNEL
-	u32 pkt_len = 0, desc_ptr = 0;
-
 	core7_wifi_init_wrapper();
-	npu_printf("%s for npu tunnel offload\n", "core7_main");
-
-	plic_register_isr(15, mbox_isr);
-	npu_bridge_buf_init();
-
-#ifdef HAS_TR471
-	tr471_main_init();
-#endif
-
-	tunnel_init();
-
-	while (1) {
-		while (tunnel_ecn_enabled) {
-			l4s_ecn_process(1);
-			l4s_ecn_process(2);
-			tunnel_process();
-			if (tunnel_test_active == 0)
-				goto dequeue;
-		}
-		tunnel_process();
-		if (tunnel_test_active == 0) {
-dequeue:
-			if (tunnel_dequeue(7, &pkt_len, &desc_ptr) == 0 &&
-			    tunnel_offload_handler(7, pkt_len, (u32 *)desc_ptr) == -1)
-				tunnel_pkt_drop(7, pkt_len, desc_ptr);
-		}
-	}
+	tunnel_offload_loop(7, "core7_main");
 #else
 	npu_printf("%s\n", "core7_main");
 #endif
 }
+
 #endif /* MAX_CORE_NUM > 6 */
 
 
