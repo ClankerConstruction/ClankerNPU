@@ -1676,16 +1676,24 @@ void __attribute__((naked, aligned(4))) trap_vector(void)
  * NPU initialization (called from crt0 before core_dispatch)
  * ================================================================ */
 
+/* .data + .bss must fit the global-variable window of the NPU SRAM */
+#define GLB_VAR_SRAM_SIZE  0x7800
+extern char __bss_end[];
+
 void npu_init(void)
 {
 	u32 hart = get_hartid();
+	u32 mib21;
 
 	/* hart 0 clears sync flag; others wait */
-	if (hart == 0)
+	if (hart != 0)
+		delay_ms_mcycle(10);
+	else
 		core_sync_flag = 0;
-	else if (core_sync_flag == 0) {
-		while (core_sync_flag == 0)
-			;
+	if (hart != 0 && core_sync_flag == 0) {
+		do
+			delay_ms_mcycle(100);
+		while (core_sync_flag == 0);
 	}
 
 	/* init PLIC for this hart */
@@ -1700,10 +1708,24 @@ void npu_init(void)
 	/* hart 0 conditional block: first-time initialization */
 	if (npu_reset_pending != 0) {
 		npu_reset_pending = 0;
+		/* MIB21 gates npu_printf and does not survive the reset pulse */
+		mib21 = REG32(NPU_MIB21);
 		sim_mode_flag = REG32(NPU_MIB12);
+		REG32(NPU_SCU_RSTCTRL1) = NPU_SCU_RST_ALL;
+		delay_ms_mcycle(1);
 		REG32(NPU_SCU_RSTCTRL1) = 0;
+		delay_ms_mcycle(1);
+		REG32(NPU_THREAD_ENABLE) = 4;
 		REG32(NPU_THREAD_ENABLE) = 1;
+		delay_ms_mcycle(1);
 		REG32(NPU_MIB0) = ALL_FF;
+		boot_uart_init();
+		REG32(NPU_MIB21) = mib21;
+		npu_printf("core freq at %d MHz\n", cpu_clock_get());
+		if ((u32)__bss_end - NPU_SRAM_BASE > GLB_VAR_SRAM_SIZE)
+			npu_printf("Error: OVER GLB_VAR_SRAM_SIZE. "
+				   "_data:0x%x, __bss_end:0x%x\n",
+				   NPU_SRAM_BASE, (u32)__bss_end);
 		plic_enable_wrapper(22);
 		timer_init(0, 1, 10);
 		mailbox_init();

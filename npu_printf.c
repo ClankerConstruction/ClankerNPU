@@ -303,6 +303,24 @@ int npu_printf(const char *fmt, ...)
 	return len;
 }
 
+void boot_uart_init(void)
+{
+	REG32(BOOT_UART_FCR) = 15;
+	REG32(BOOT_UART_MCR) = 0;
+	REG32(BOOT_UART_SCR) = 0;
+	REG32(BOOT_UART_IER) = 1;
+	REG32(BOOT_UART_LCR) = 0x80;		/* DLAB: DLL/DLM visible */
+	REG32(BOOT_UART_FRACDIV) = 0xEA00FDE8;
+	REG32(BOOT_UART_DLL) = 1;
+	REG32(BOOT_UART_DLM) = 0;
+	REG32(BOOT_UART_LCR) = 3;		/* 8N1 */
+
+	printf_mutex_desc[0] = 15;
+	printf_mutex_desc[1] = 0;
+	boot_printf("%s done via base:0x%x\n\n\n", "npu_uart_init",
+		    BOOT_UART_BASE);
+}
+
 /* boot printf (uses boot UART at 0x1EC10000) */
 int boot_printf(const char *fmt, ...)
 {

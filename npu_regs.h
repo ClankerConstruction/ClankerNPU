@@ -126,7 +126,15 @@
 /* UART - boot UART and runtime UART */
 #define BOOT_UART_BASE          0x1EC10000
 #define BOOT_UART_TX            (BOOT_UART_BASE + 0x000)
+#define BOOT_UART_DLL           (BOOT_UART_BASE + 0x000)
+#define BOOT_UART_IER           (BOOT_UART_BASE + 0x004)
+#define BOOT_UART_DLM           (BOOT_UART_BASE + 0x004)
+#define BOOT_UART_FCR           (BOOT_UART_BASE + 0x008)
+#define BOOT_UART_LCR           (BOOT_UART_BASE + 0x00C)
+#define BOOT_UART_MCR           (BOOT_UART_BASE + 0x010)
 #define BOOT_UART_STATUS        (BOOT_UART_BASE + 0x014)
+#define BOOT_UART_SCR           (BOOT_UART_BASE + 0x024)
+#define BOOT_UART_FRACDIV       (BOOT_UART_BASE + 0x02C)
 #define NPU_UART_BASE           0x1FBF0000
 #define UART_TX_DATA            (NPU_UART_BASE + 0x000)
 #define UART_TX_STATUS          (NPU_UART_BASE + 0x014)
@@ -164,7 +172,11 @@
 
 /* SCU */
 #define NPU_SCU_BASE            0x1EC11000
-#define NPU_SCU_RSTCTRL1        (NPU_SCU_BASE + 0x000)
+#define NPU_SCU_WDOG_RST_CFG    (NPU_SCU_BASE + 0x038)
+#define NPU_SCU_PMC             (NPU_SCU_BASE + 0x080)
+#define NPU_SCU_RSTCTRL1        (NPU_SCU_BASE + 0x834)
+/* every block behind the NPU internal bus, held for the 1ms reset pulse */
+#define NPU_SCU_RST_ALL         0x10001788
 
 /* Thread manager */
 #define NPU_THREAD_BASE         0x1EC00000

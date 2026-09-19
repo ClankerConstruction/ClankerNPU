@@ -52,6 +52,7 @@ void usb_powerdown(void);
 /* npu_printf.c */
 int npu_printf(const char *fmt, ...);
 int boot_printf(const char *fmt, ...);
+void boot_uart_init(void);
 
 /* npu_wifi.c */
 int hostadpt_init(void);
