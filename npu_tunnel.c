@@ -51,6 +51,7 @@ int tunnel_mail_dispatch(u32 base, u32 cnt)
 #define PPE0_BND_AGE1   0x1FB50E40
 #define PPE0_HASH_SEED  0x1FB50E44
 #define PPE0_DFT_CPORT  0x1FB50E48
+#define PPE0_FOE_PAUSE  0x1FB50F34
 #define PPE0_ENABLE     0x1FB50E50
 #define PPE1_ENABLE     0x1FB51E50
 #define GDM_BASE        0x1FB50000
@@ -499,20 +500,64 @@ static void ppe_ethertype_init(void)
 	ppe_ethertype_set(4, 1, 0, 0x86DD);		/* IPv6 */
 }
 
+/* CDS and the xPON HAL parse IPv6 themselves, so the slot keeps its
+ * ethertype but loses its enable bit. */
+static void ppe_ethertype_fixup(void)
+{
+	u32 chip_rev = CHIP_FAMILY;
+
+	if ((hwnat_cds | hwnat_xpon_hal_api_ng) == 0)
+		return;
+
+	if (chip_rev == 10 || chip_rev == 12 || chip_rev == 14 ||
+	    chip_rev == 15 || chip_rev == 16) {
+		ppe_ethertype_set(4, 0, 0, 0x86DD);
+	} else {
+		REG32(GDM_PARSE0 + 0x04) &= ~8u;
+		REG32(GDM_PARSE0 + 0x14) |= 0x8000000u;
+		REG32(GDM_PARSE0 + 0x04) &= ~0x10u;
+		REG32(GDM_PARSE0 + 0x18) =
+			(REG32(GDM_PARSE0 + 0x18) & 0xFFFF0000) | 0x86DD;
+	}
+}
+
+/* The flow table keeps ageing while the host walks it unless it is told
+ * to hold. Only the parsers without a PPE flow-pause register need it. */
+static void ppe_foe_pause(u32 pause)
+{
+	u32 chip_rev = CHIP_FAMILY;
+
+	if (chip_rev == 10 || chip_rev == 12 || chip_rev == 14 ||
+	    chip_rev == 15 || chip_rev == 16)
+		return;
+
+	if (pause != 0)
+		REG32(PPE0_FOE_PAUSE) = 51;
+	else
+		REG32(PPE0_FOE_PAUSE) &= ~1u;
+}
+
 static void ppe_filter_config(void)
 {
 	u32 chip_rev = CHIP_FAMILY;
 
-	REG32(PPE0_FLT_BASE + 0x04) = 131336144;
-	REG32(PPE0_FLT_BASE + 0x08) = 131860440;
-	REG32(PPE0_FLT_BASE + 0x0C) = 132384736;
-	REG32(PPE0_FLT_BASE + 0x10) = 2024;
+	if (chip_rev == 12 || chip_rev == 14 ||
+	    chip_rev == 15 || chip_rev == 16) {
+		REG32(PPE0_FLT_BASE + 0x04) = 131336144;
+		REG32(PPE0_FLT_BASE + 0x08) = 131860440;
+		REG32(PPE0_FLT_BASE + 0x0C) = 132384736;
+		REG32(PPE0_FLT_BASE + 0x10) = 2024;
 
-	if (chip_rev == 14) {
-		REG32(PPE1_FLT_BASE + 0x04) = 131336144;
-		REG32(PPE1_FLT_BASE + 0x08) = 131860440;
-		REG32(PPE1_FLT_BASE + 0x0C) = 132384736;
-		REG32(PPE1_FLT_BASE + 0x10) = 2024;
+		if (chip_rev == 14) {
+			REG32(PPE1_FLT_BASE + 0x04) = 131336144;
+			REG32(PPE1_FLT_BASE + 0x08) = 131860440;
+			REG32(PPE1_FLT_BASE + 0x0C) = 132384736;
+			REG32(PPE1_FLT_BASE + 0x10) = 2024;
+		}
+	} else {
+		REG32(PPE0_FLT_BASE + 0x0C) = 131336144;
+		REG32(PPE0_FLT_BASE + 0x10) = 131860440;
+		REG32(PPE0_FLT_BASE + 0x14) = 2016;
 	}
 
 	if (hwnat_max_packet_2000 != 0)
@@ -521,6 +566,8 @@ static void ppe_filter_config(void)
 		REG32(0x1FB50514) |= 0x06A40000;
 }
 
+/* Flow-table scan: turn the table walker on, tell it how many entries
+ * the chip has, and seed the hash. */
 static void ppe_enable_config(void)
 {
 	u32 chip_rev = CHIP_FAMILY;
@@ -543,23 +590,46 @@ static void ppe_enable_config(void)
 		if (chip_rev == 14)
 			REG32(PPE1_ENABLE) |= 0x100u;
 
-		REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xF8FFFFFF) | 0x4000000;
+		REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xF8FFFFFF) | 0x3000000;
 		if (chip_rev == 14 && (REG32(PPE1_CTRL) & 1)) {
 			REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xF8FFFFFF) |
-					   0x3000000;
+					   0x2000000;
 			REG32(PPE1_MISC) = (REG32(PPE1_MISC) & 0xF8FFFFFF) |
-					   0x3000000;
-			REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xFFFFFFF8) | 4;
-			REG32(PPE1_MISC) = (REG32(PPE1_MISC) & 0xFFFFFFF8) | 5;
-		} else {
-			REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xFFFFFFF8) | 6;
+					   0x2000000;
 		}
-	} else {
-		REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xFFFFFFF8) | 6;
 	}
+
+	REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xFFFFFFF8) | 4;
 	REG32(PPE0_HASH_SEED) = 0x12345678;
 	if (chip_rev == 14)
 		REG32(PPE0_HASH_SEED + PPE1_OFFSET) = 0x12345678;
+
+	if (chip_rev == 10 || chip_rev == 12 || chip_rev == 14 ||
+	    chip_rev == 15 || chip_rev == 16) {
+		REG32(PPE0_MISC) &= ~8u;
+		if (chip_rev == 14)
+			REG32(PPE1_MISC) &= ~8u;
+	} else {
+		switch (hwnat_ppe_type) {
+		case 1:
+			REG32(PPE0_MISC) |= 0x10000u;
+			break;
+		case 2:
+			REG32(PPE0_MISC) &= ~0x10000u;
+			REG32(PPE0_MISC) &= ~8u;
+			break;
+		case 3:
+			REG32(PPE0_MISC) &= ~0x10000u;
+			REG32(PPE0_MISC) |= 8u;
+			break;
+		default:
+			break;
+		}
+	}
+
+	REG32(PPE0_MISC) |= 0x30u;
+	if (chip_rev == 14)
+		REG32(PPE1_MISC) |= 0x30u;
 }
 
 /* Ageing and keepalive for bound flows. The PPE stops handing unmatched
@@ -683,10 +753,15 @@ void tunnel_init(void)
 
 	/* parser config */
 	{
-		u32 parser = 0x7F | 0xF00;
+		u32 parser = 0x7D;
+
+		if (chip_rev == 10 || chip_rev == 12 || chip_rev == 14 ||
+		    chip_rev == 15 || chip_rev == 16)
+			parser = 0x7F;
 		if (chip_rev == 12 || chip_rev == 14 ||
 		    chip_rev == 15 || chip_rev == 16)
 			parser |= 0x100000;
+		parser |= 0xF00;
 		REG32(PPE0_PARSER) = parser;
 		if (chip_rev == 14)
 			REG32(PPE1_PARSER) = parser;
@@ -706,9 +781,37 @@ void tunnel_init(void)
 					REG32(PPE1_PARSER) |= 0xC0000u;
 			}
 			ppe_ethertype_init();
+		} else {
+			/* No PPE parser: the GDM does the ethertype match. */
+			u32 cfg = REG32(GDM_BASE) >> 16;
+
+			REG32(GDM_PARSE0) = 1;
+			REG32(GDM_PARSE0 + 0x04) |= 1u;
+			REG32(GDM_PARSE0 + 0x10) =
+				(REG32(GDM_PARSE0 + 0x10) & 0xFFFF0000) | 0x8100;
+			REG32(GDM_PARSE0 + 0x04) |= 2u;
+			REG32(GDM_PARSE0 + 0x10) =
+				(REG32(GDM_PARSE0 + 0x10) & 0x7757FFFF) |
+				0x88A80000;
+			if (cfg != 0x8100 && cfg != 0x88A8) {
+				REG32(GDM_PARSE0 + 0x04) |= 4u;
+				REG32(GDM_PARSE0 + 0x14) =
+					(REG32(GDM_PARSE0 + 0x14) & 0xFFFF0000) |
+					cfg;
+			}
+			if (hwnat_cds == 0) {
+				REG32(GDM_PARSE0 + 0x04) |= 8u;
+				REG32(GDM_PARSE0 + 0x14) |= 0x8000000u;
+				REG32(GDM_PARSE0 + 0x04) |= 0x10u;
+				REG32(GDM_PARSE0 + 0x18) =
+					(REG32(GDM_PARSE0 + 0x18) & 0xFFFF0000) |
+					0x86DD;
+			}
 		}
 	}
 
+	ppe_ethertype_fixup();
+	ppe_foe_pause(1);
 	ppe_filter_config();
 
 	/* GDM egress config */
