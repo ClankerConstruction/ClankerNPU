@@ -87,6 +87,12 @@ The hart field is 2 bits, so harts 4-7 alias onto 0-3. Acquire is a
 single write plus one status read — the hardware arbitrates and callers
 never spin. Mutex 15 is the printf lock.
 
+Acquiring a mutex that is already held stalls the NPU bus: the acquire
+write never completes, the store buffer fills, and the hart freezes a
+few instructions later. Nothing may re-enter a printf while it holds the
+printf mutex, which is why the trap handler reports faults instead of
+dispatching them through the PLIC ISR table.
+
 ### Mailbox
 
 `0x1EC0C000`, matching the host driver's `CR_MBOX_*` / `CR_MBQ<n>_CTRL*`.
