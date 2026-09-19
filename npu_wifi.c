@@ -4670,6 +4670,55 @@ static void eagle_tdma_to_wifi(u32 band, u32 budget)
 	(void)budget;
 }
 
+/* Where frames are supposed to appear. One line every two seconds from
+ * core 3 says which stage they stop at. */
+struct eagle_dbg {
+	u32 in[2];	/* host tx entries taken off the in ring */
+	u32 stage[2];	/* frames staged for the WiFi tx ring */
+	u32 nostage[2];	/* staging refused: ring full or no token */
+	u32 push[2];	/* descriptors handed to the WiFi tx ring */
+	u32 rxd;	/* rxdmad descriptors parsed */
+	u32 rxq;	/* packets queued for the host */
+	u32 rxout;	/* packets handed to the host adaptor */
+	u32 txdone;	/* tx done reports consumed */
+	u32 refill[2];	/* rx ring descriptors refilled */
+};
+static struct eagle_dbg dbg;
+
+#ifdef NPU_DATAPATH_DBG
+#define EAGLE_DBG_CYCLES  (2u * 720u * 1000u * 1000u)	/* ~2s at 720MHz */
+
+static u32 eagle_dma_idx(u32 band)
+{
+	if (eagle_tx_ring_pcie_base[band] == 0)
+		return 0xFFFF;
+	return REG32(eagle_tx_ring_pcie_base[band] + 0xC) & 0xFFFF;
+}
+
+static void eagle_dbg_tick(void)
+{
+	static u32 last;
+	u32 now = (u32)csr_read(mcycle);
+
+	if ((u32)(now - last) < EAGLE_DBG_CYCLES)
+		return;
+	last = now;
+
+	npu_printf("[NPU]tx in=%d/%d stg=%d/%d full=%d/%d psh=%d/%d\n",
+		   dbg.in[0], dbg.in[1], dbg.stage[0], dbg.stage[1],
+		   dbg.nostage[0], dbg.nostage[1], dbg.push[0], dbg.push[1]);
+	npu_printf("[NPU]ring cpu=%d/%d dma=%d/%d done=%d rf=%d/%d\n",
+		   eagle_tx_ring_cpu_idx[0], eagle_tx_ring_cpu_idx[1],
+		   eagle_dma_idx(0), eagle_dma_idx(1), dbg.txdone,
+		   dbg.refill[0], dbg.refill[1]);
+	npu_printf("[NPU]rx rxd=%d q=%d out=%d state=%d/%d/%d\n",
+		   dbg.rxd, dbg.rxq, dbg.rxout, eagle_rx_en, eagle_tx_en,
+		   eagle_txq_state);
+}
+#else
+static void eagle_dbg_tick(void) { }
+#endif
+
 static void eagle_delay(u32 loops)
 {
 	volatile u32 i;
@@ -4795,6 +4844,7 @@ static void eagle_txq_drain(u32 band)
 	flags = *(volatile u8 *)(e + 10);
 
 	if ((s32)buf_id >= 0 && seg_len != 0) {
+		dbg.rxout++;
 		host_ring_submit(eagle_buf_phys(buf_id), seg_len, 0,
 				 *(volatile u16 *)(e + 4),
 				 *(volatile u8 *)(e + 11),
@@ -4887,6 +4937,13 @@ static int eagle_rxdmad_handle(u8 *chaining)
 
 	if (REG32(d + 12) >> 28 != eagle_rxdmad_gen)
 		return 1;
+	dbg.rxd++;
+	if (dbg.rxd == 1) {
+		npu_printf("[NPU]rxdmad base=%x idx=%d gen=%d\n",
+			   eagle_ind_cmd_desc_base, eagle_rxdmad_ridx,
+			   eagle_rxdmad_gen);
+		npu_hexdump("rxd", d, 16);
+	}
 	if (eagle_rxdmad_on_core2)
 		eagle_delay(280);
 
@@ -5072,9 +5129,17 @@ static int eagle_hostadpt_drain(u32 band)
 				   band, hostadpt_in_base[band],
 				   hostadpt_in_size[band], ((u32 *)e)[0],
 				   ((u32 *)e)[1], ((u32 *)e)[2]);
+			npu_hexdump("txd", e + 16, EAGLE_TXD_BYTES);
+			npu_hexdump("pkt",
+				    (((u32 *)e)[1] & 0x3FFFFFFF) | NPU_ADDR_MASK,
+				    32);
 		}
-		if (eagle_tx_stage(band, (u32 *)e) < 0)
+		dbg.in[band]++;
+		if (eagle_tx_stage(band, (u32 *)e) < 0) {
+			dbg.nostage[band]++;
 			return moved;
+		}
+		dbg.stage[band]++;
 		idx++;
 		if (idx == hostadpt_in_size[band])
 			idx = 0;
@@ -5163,6 +5228,7 @@ static int eagle_tx_ring_push(u32 band)
 
 		eagle_tx_ring_cpu_idx[band] = (u16)next;
 		REG32(eagle_tx_ring_pcie_base[band] + 8) = next;
+		dbg.push[band]++;
 		pushed = 1;
 
 		if (eagle_tx_first_push[band] == 1) {
@@ -5250,6 +5316,7 @@ static int eagle_txdone_poll(void)
 		REG32(d) = eagle_buf_phys(ids[idx]);
 		REG32(d + 4) = EAGLE_RX_DESC_CTRL;
 
+		dbg.txdone++;
 		idx = (idx + 1 < eagle_txdone_ring_cnt) ? idx + 1 : 0;
 		eagle_txdone_ridx = idx;
 		if (++eagle_txdone_kick > 15) {
@@ -5273,6 +5340,7 @@ static int eagle_rx_ring_refill(u32 band, u32 desc, u32 *idx)
 	if (buf_id == -1)
 		return 1;
 
+	dbg.refill[band]++;
 	eagle_rx_ring_bufid[band][i] = (u16)buf_id;
 	REG32(desc) = eagle_buf_phys((u32)buf_id);
 	REG32(desc + 8) = (u32)buf_id << 16;
@@ -5403,6 +5471,7 @@ void __attribute__((noreturn)) eagle_core3_loop(void)
 			eagle_delay(2000);
 			started = 0;
 		}
+		eagle_dbg_tick();
 		if (started == 0)
 			continue;
 
@@ -5694,7 +5763,8 @@ static int eagle_rx_ring_init(u32 ring_size, u32 band)
 				   band ? "BAND1" : "BAND0");
 			return 1;
 		}
-		eagle_rx_ring_bufid[band][i] = (u16)buf_id;
+		dbg.refill[band]++;
+	eagle_rx_ring_bufid[band][i] = (u16)buf_id;
 		desc = desc_base + 16 * i;
 		REG32(desc) = ((((buf_id << 11) + eagle_pkt_buf_addr) &
 				0x3FFFFFFF) | 0x80000000) + 192;

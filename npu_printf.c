@@ -368,3 +368,17 @@ int boot_printf(const char *fmt, ...)
 	return len;
 }
 
+
+/* 16 bytes a line, address first. Reads whole words: the caller passes
+ * an NPU-visible address, not a physical one. */
+void npu_hexdump(const char *tag, u32 addr, u32 len)
+{
+	u32 i;
+
+	npu_printf("[HEX]%s @%x len=%d\n", tag, addr, len);
+	for (i = 0; i < len; i += 16) {
+		npu_printf("[HEX] %x: %x %x %x %x\n", addr + i,
+			   REG32(addr + i), REG32(addr + i + 4),
+			   REG32(addr + i + 8), REG32(addr + i + 12));
+	}
+}

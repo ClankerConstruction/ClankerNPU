@@ -13,13 +13,16 @@ WIFI    ?= MT7996
 MAILTRACE ?= 0
 # 0 stages host tx frames but never writes the WiFi tx ring
 NPUTX ?= 1
+# 1 reports the datapath counters every two seconds
+NPUDBG ?= 1
 
 ARCH    := -march=rv32imc_zicsr_zifencei -mabi=ilp32
 CFLAGS  := $(ARCH) -Os -ffunction-sections -fdata-sections \
            -fno-builtin -ffreestanding -nostdlib \
            -Wall -Wno-unused-function \
            -D$(SOC) -D$(WIFI) $(if $(filter 1,$(MAILTRACE)),-DNPU_MAIL_TRACE) \
-           $(if $(filter 0,$(NPUTX)),-DEAGLE_NO_TX_PUSH)
+           $(if $(filter 0,$(NPUTX)),-DEAGLE_NO_TX_PUSH) \
+           $(if $(filter 1,$(NPUDBG)),-DNPU_DATAPATH_DBG)
 ASFLAGS := $(ARCH) -D$(SOC) -D$(WIFI)
 LIBGCC  := $(shell $(CC) $(ARCH) -print-libgcc-file-name)
 LDFLAGS := -m elf32lriscv -T link.ld -nostdlib --gc-sections --relax \
