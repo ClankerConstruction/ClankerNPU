@@ -273,7 +273,7 @@ bad_cmd:
 int npu_printf(const char *fmt, ...)
 {
 	int len;
-	u32 *args;
+	__builtin_va_list ap;
 
 	/* check if printing is suppressed by host */
 	if (REG32(NPU_MIB(21)) != 0)
@@ -283,8 +283,9 @@ int npu_printf(const char *fmt, ...)
 	hw_mutex_lock_pri(printf_mutex_desc);
 
 	/* format into buffer */
-	args = (u32 *)&fmt + 1;
-	len = npu_vsprintf(printf_buf, fmt, args);
+	__builtin_va_start(ap, fmt);
+	len = npu_vsprintf(printf_buf, fmt, (u32 *)ap);
+	__builtin_va_end(ap);
 
 	/* print core prefix if enabled */
 	if (npu_printf_prefix) {
@@ -325,13 +326,14 @@ void boot_uart_init(void)
 int boot_printf(const char *fmt, ...)
 {
 	int len;
-	u32 *args;
+	__builtin_va_list ap;
 	char *p;
 
 	hw_mutex_lock_pri(printf_mutex_desc);
 
-	args = (u32 *)&fmt + 1;
-	len = npu_vsprintf(printf_buf, fmt, args);
+	__builtin_va_start(ap, fmt);
+	len = npu_vsprintf(printf_buf, fmt, (u32 *)ap);
+	__builtin_va_end(ap);
 
 	/* output core prefix */
 	while (!(REG32(BOOT_UART_STATUS) & UART_TX_READY_BIT)) ;
