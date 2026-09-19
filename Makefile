@@ -36,6 +36,7 @@ SRCS_S  := crt0.S
 SRCS_C  := npu_main.c npu_printf.c npu_wifi.c npu_tunnel.c
 OBJS    := $(patsubst %.S,$(BUILD)/%.o,$(SRCS_S)) \
            $(patsubst %.c,$(BUILD)/%.o,$(SRCS_C))
+FLAGS   := $(BUILD)/.flags
 
 .PHONY: all clean disasm
 
@@ -44,10 +45,15 @@ all: $(BIN) $(DATA)
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(BUILD)/%.o: %.S npu_config.h | $(BUILD)
+# rebuild when the build flags change, not just the sources
+$(BUILD)/.flags: FORCE | $(BUILD)
+	@echo '$(CFLAGS)' > $@.tmp; cmp -s $@.tmp $@ || mv $@.tmp $@; rm -f $@.tmp
+FORCE:
+
+$(BUILD)/%.o: %.S npu_config.h $(FLAGS) | $(BUILD)
 	$(CC) $(ASFLAGS) -c -o $@ $<
 
-$(BUILD)/%.o: %.c npu_config.h npu_regs.h npu_types.h npu_internal.h | $(BUILD)
+$(BUILD)/%.o: %.c npu_config.h npu_regs.h npu_types.h npu_internal.h $(FLAGS) | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(ELF): $(OBJS) link.ld
