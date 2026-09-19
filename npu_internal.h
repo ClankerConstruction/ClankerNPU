@@ -235,6 +235,15 @@ extern const char wifi_chip_names[6][8];
 
 extern mbox_handler_t mbox_pri_handlers[10];
 extern mbox_handler_t mbox_ext_handlers[32];
+extern u8 hwnat_cds;
+extern u8 hwnat_xpon_hal_api_ng;
+extern u8 hwnat_wan_xsi;
+extern u8 hwnat_ct_joyme4;
+extern u8 hwnat_max_packet_2000;
+extern u8 hwnat_ready;
+extern u32 hwnat_ppe_type;
+extern u32 hwnat_wan_mode;
+extern u32 hwnat_ae_wan_sel;
 
 extern u32 exception_handlers[12];
 
@@ -341,8 +350,8 @@ extern u16 dba_cfg_word1;
 #endif
 
 extern u8 plic_threshold_table[8];
-extern u32 plic_isr_init_done;
-extern u32 core_sync_flag;
+extern volatile u32 plic_isr_init_done;
+extern volatile u32 core_sync_flag;
 
 extern u32 wifi_ext_state[32];
 
@@ -443,7 +452,7 @@ extern u8 wifi_wait_state_5g[16];
 extern u8 wifi_port_band_2g[16];
 extern u8 wifi_port_band_5g[16];
 
-extern u32 npu_tx_pkt_buf_addr;
+extern volatile u32 npu_tx_pkt_buf_addr;
 extern u32 tdma_rx_dscp_base[2];
 extern u32 tdma_rx_desc_count;
 extern u32 tdma_rx_alloc_fail;

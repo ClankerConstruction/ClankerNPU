@@ -181,6 +181,17 @@ const char wifi_chip_names[6][8] = {
 mbox_handler_t mbox_pri_handlers[10];
 mbox_handler_t mbox_ext_handlers[32];
 
+/* HWNAT config from the host */
+u8 hwnat_cds;
+u8 hwnat_xpon_hal_api_ng;
+u8 hwnat_wan_xsi;
+u8 hwnat_ct_joyme4;
+u8 hwnat_max_packet_2000;
+u8 hwnat_ready;
+u32 hwnat_ppe_type;
+u32 hwnat_wan_mode;
+u32 hwnat_ae_wan_sel;
+
 /* 0x2D0: tunnel config structures */
 #ifdef HAS_TUNNEL
 u32 tunnel_config_ptrs[4];
@@ -384,7 +395,7 @@ u32 dba_timer0_snap;
 
 /* PLIC threshold per-hart */
 u8 plic_threshold_table[8];
-u32 plic_isr_init_done;
+volatile u32 plic_isr_init_done;
 u32 plic_cfg2;
 
 /* UART debug console */
@@ -392,7 +403,7 @@ u32 uart_cmd_idx;
 u8 uart_cmd_buf[32];
 
 /* npu_init sync */
-u32 core_sync_flag;
+volatile u32 core_sync_flag;
 u32 sim_mode_flag;
 
 /* WiFi extended state */
@@ -514,7 +525,7 @@ u8 wifi_port_band_2g[16];
 u8 wifi_port_band_5g[16];
 
 /* host tx packet buffer, published over the mailbox */
-u32 npu_tx_pkt_buf_addr;
+volatile u32 npu_tx_pkt_buf_addr;
 u32 tdma_rx_dscp_base[2];
 u32 tdma_rx_desc_count;
 u32 tdma_rx_alloc_fail;
