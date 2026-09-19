@@ -499,20 +499,14 @@ give to cores 3 and 4.
 ### What's Missing
 
 - **WiFi -> LAN hardware fast path** a frame the WiFi chip marks
-  `dst_sel=1` carries its own ethernet header offset and the blob puts
-  it straight on the wired side through the PPE, which has to send an
-  unmatched flow to the CPU rather than out a port. `HWFAST=1` builds
-  that; the default hands those frames to the host, which is what the
-  driver's own rx path does with the same descriptor. Try `HWFAST=1`
-  now that the PPE init runs - if a client still gets a DHCP lease, the
-  offload is working and the default can move.
+  `dst_sel=1` carries its own ethernet header offset, so the NPU can put
+  it straight on the wired side and let the PPE forward it. `HWFAST=1`
+  builds that; the default hands those frames to the host, which is what
+  the driver's own rx path does with the same descriptor. The offload
+  only works with `PPE_TB_CFG.SEARCH_MISS = 3`, otherwise the PPE drops
+  every packet whose flow it cannot find instead of sending it to the
+  CPU, and a DHCP discover leaves the chip and never comes back.
 - **LAN -> WiFi hardware fast path** `sub_84006944` drains the TDMA
-  rx ring straight into the WiFi tx ring through `sub_840146E2`. Not
-  implemented; those frames take the host path instead.
-- **AN7581 TDMA ring init** AN7581 has TDMA rx and tx rings of its
-  own, but only the AN7552/AN7583 (`HAS_BME`) ring init is
-  implemented. But `tdma_tx_submit` returns -1 while the ring base is
-  unset.
 - **PPE configuration** `tunnel_init` programs the PPE, but no blob
   calls it from the tunnel offload loop, so it has no caller. The blob
   configures the PPE from a mailbox command instead (the one that logs
