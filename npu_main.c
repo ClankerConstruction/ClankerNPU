@@ -573,6 +573,7 @@ u8 eagle_pcie_port_type;
 u8 eagle_pcie_state[2];
 u8 eagle_rro_mode;
 u8 eagle_test_noba;
+u32 eagle_txdone_id_base;
 u32 eagle_chip_info[6];
 u32 eagle_phy_tx_gpio;
 
@@ -1335,7 +1336,7 @@ static const struct sram_size_ent sram_size_hi[] = {
 /* Types this reconstruction allocates that neither blob table lists, so
  * the numbering at those call sites does not match the blob yet. Sized
  * from the loops that fill them; the rest get a bounded default. */
-#define SRAM_DEFAULT_SIZE  0x4000
+#define SRAM_DEFAULT_SIZE  0x2000
 
 static const struct sram_size_ent sram_size_ext[] = {
 	{  12, 0x01000 },	/* reorder primary index pool, 2000 u16 */

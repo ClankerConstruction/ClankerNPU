@@ -448,6 +448,7 @@ extern u32 tdma_rx_dscp_base[2];
 extern u32 tdma_rx_desc_count;
 extern u32 tdma_rx_alloc_fail;
 void tdma_rx_init(void);
+void np_skb_tx_force_reset(void);
 extern u32 wifi_pipeline_queue_2g;
 extern u32 wifi_pipeline_queue_5g;
 
@@ -487,6 +488,7 @@ extern u8 eagle_pcie_port_type;
 extern u8 eagle_pcie_state[2];
 extern u8 eagle_rro_mode;
 extern u8 eagle_test_noba;
+extern u32 eagle_txdone_id_base;
 extern u32 eagle_chip_info[6];
 extern u32 eagle_phy_tx_gpio;
 extern u32 eagle_tx_buf_space_r10;

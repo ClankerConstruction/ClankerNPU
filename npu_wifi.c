@@ -86,7 +86,32 @@ static u32 counter_base_tri;
 static u32 wcid_counter_base_2g;
 static u32 wcid_counter_base_5g;
 
-/* buf_id recycle ring (5600-entry ring of u16 buffer indices) */
+/* tx buffer id rings.
+ *
+ * bufid_pool  12288 ids, the full buffer id space
+ * tx_free_ring 13312 slots, the ids free for transmit
+ * tx_buf_state 13312 bytes of per-id state, 3 means the id is parked in
+ *              a TDMA rx descriptor and must not be handed out
+ * tdma_rx_ids  the ids recovered from the rx rings, up to 2048
+ */
+#define BUFID_POOL_ENTRIES    12288
+#define TX_FREE_RING_ENTRIES  13312
+#define TX_FREE_RING_LAST     (TX_FREE_RING_ENTRIES - 1)
+#define TDMA_RX_ID_ENTRIES    2048
+#define TX_BUF_STATE_IN_RX    3
+
+/* TDMA rx ring geometry */
+#define TDMA_RX_RINGS         2
+#define TDMA_RX_RING_DESCS    1024
+#define TDMA_RX_DESC_SIZE     32
+#define TDMA_RX_RING_STRIDE   0x8000
+
+static u32 bufid_pool_base;
+static u32 tx_buf_state_base;
+static u32 tdma_rx_ids_base;
+static u32 tx_force_reset_mutex[2];
+
+/* buf_id recycle ring */
 static u32 bufid_enq_mutex[2];
 static u16 bufid_widx;
 static u32 bufid_ring_base;
@@ -110,7 +135,7 @@ static void buf_id_return(u16 buf_id)
 	bufid_enq_count++;
 	if ((wifi_debug_flags & 4) && counter_base_tri)
 		(*(u32 *)(counter_base_tri + 0x18))++;
-	bufid_widx = (bufid_widx + 1 == 5600) ? 0 : bufid_widx + 1;
+	bufid_widx = (bufid_widx == TX_FREE_RING_LAST) ? 0 : bufid_widx + 1;
 	hw_mutex_unlock(bufid_enq_mutex);
 }
 
@@ -120,7 +145,7 @@ static s32 buf_id_alloc_ring(void)
 	s32 id;
 
 	hw_mutex_lock(bufid_deq_mutex);
-	next = (bufid_ridx + 1 == 5600) ? 0 : bufid_ridx + 1;
+	next = (bufid_ridx == TX_FREE_RING_LAST) ? 0 : bufid_ridx + 1;
 	if (bufid_widx == next) {
 		if ((wifi_debug_flags & 4) && counter_base_tri)
 			(*(u32 *)(counter_base_tri + 0x20))++;
@@ -138,20 +163,106 @@ static s32 buf_id_alloc_ring(void)
 
 void bufid_pool_init(void)
 {
-	u16 *ring;
+	u16 *p;
 	u32 i;
 
-	bufid_deq_mutex[0] = 28;
+	bufid_deq_mutex[0] = 12;
 	bufid_deq_mutex[1] = 0;
-	bufid_enq_mutex[0] = 29;
+	bufid_enq_mutex[0] = 13;
 	bufid_enq_mutex[1] = 0;
-	ring = (u16 *)sram_buf_alloc(138);
-	bufid_ring_base = (u32)ring;
-	for (i = 0; i < 5600; i++)
-		ring[i] = (u16)i;
+	tx_force_reset_mutex[0] = 3;
+	tx_force_reset_mutex[1] = 0;
+
+	p = (u16 *)sram_buf_alloc(138);
+	bufid_pool_base = (u32)p;
+	for (i = 0; i < BUFID_POOL_ENTRIES; i++)
+		p[i] = (u16)i;
+
+	p = (u16 *)sram_buf_alloc(18);
+	bufid_ring_base = (u32)p;
+	for (i = 0; i < TX_FREE_RING_ENTRIES; i++)
+		p[i] = (u16)i;
+
+	tx_buf_state_base = sram_buf_alloc(28);
+	npu_memset((void *)tx_buf_state_base, 0, TX_FREE_RING_ENTRIES * 2);
+
+	tdma_rx_ids_base = sram_buf_alloc(29);
+
 	bufid_ridx = 0;
 	bufid_widx = 0;
 }
+
+#ifdef HAS_BME
+/* Recover the buffer ids parked in the TDMA rx descriptors. Each
+ * descriptor keeps the buffer pointer at +8. */
+static u32 tdma_rx_collect_bufids(u16 *out, u32 max)
+{
+	u32 ring, i, n = 0;
+	u32 ptr;
+
+	for (ring = 0; ring < TDMA_RX_RINGS; ring++) {
+		for (i = 0; i < TDMA_RX_RING_DESCS; i++) {
+			ptr = REG32(tdma_rx_dscp_base[ring] +
+				    TDMA_RX_DESC_SIZE * i + 8);
+			out[n++] = (u16)((ptr - npu_tx_pkt_buf_addr) >> 11);
+			if (n > max) {
+				npu_printf("prepared array not enough %d\n",
+					   max);
+				break;
+			}
+		}
+	}
+	return n;
+}
+
+/* Rebuild the transmit free ring: every buffer id except the ones the
+ * TDMA rx descriptors are holding. */
+void np_skb_tx_force_reset(void)
+{
+	u16 *rx_ids = (u16 *)tdma_rx_ids_base;
+	u16 *state = (u16 *)tx_buf_state_base;
+	u16 *ring = (u16 *)bufid_ring_base;
+	u32 in_rx, i, w, id;
+
+	hw_mutex_lock(tx_force_reset_mutex);
+	hw_mutex_lock(bufid_deq_mutex);
+
+	npu_printf("run %s()\n", "np_skb_tx_force_reset");
+
+	for (i = 0; i < TDMA_RX_ID_ENTRIES; i++)
+		rx_ids[i] = 0xFFFF;
+	in_rx = tdma_rx_collect_bufids(rx_ids, TDMA_RX_ID_ENTRIES);
+
+	npu_printf("%s() enter\n", "np_skb_set_tx_buf_state");
+	for (i = 0; i < TX_FREE_RING_ENTRIES; i++)
+		state[i] = 0;
+	for (i = 0; i < in_rx; i++)
+		state[rx_ids[i]] = TX_BUF_STATE_IN_RX;
+
+	/* the ids held by rx go in first, then every id still free */
+	id = 0;
+	for (w = 0; w < TX_FREE_RING_ENTRIES; w++) {
+		if (w < in_rx && rx_ids[w] != 0xFFFF) {
+			ring[w] = rx_ids[w];
+			continue;
+		}
+		while (id < TX_FREE_RING_LAST &&
+		       state[id] == TX_BUF_STATE_IN_RX)
+			id++;
+		ring[w] = (u16)id;
+		id++;
+	}
+
+	bufid_ridx = (u16)in_rx;
+	bufid_widx = 0;
+
+	npu_printf("finish run %s() total_buf_in_tdmaRx:%d(%d)\n",
+		   "np_skb_tx_force_reset", in_rx, TDMA_RX_ID_ENTRIES);
+
+	hw_mutex_unlock(bufid_deq_mutex);
+	hw_mutex_unlock(tx_force_reset_mutex);
+}
+#endif /* HAS_BME */
 
 static void counter_init(u32 band)
 {
@@ -452,11 +563,6 @@ void tdma_tx_init(void)
 #ifdef HAS_BME
 /* TDMA RX init: two 1024-entry rings of 32-byte descriptors, each
  * pointing at a 2KB slot of the host tx packet buffer */
-#define TDMA_RX_RINGS         2
-#define TDMA_RX_RING_DESCS    1024
-#define TDMA_RX_DESC_SIZE     32
-#define TDMA_RX_RING_STRIDE   0x8000
-
 void tdma_rx_init(void)
 {
 	u32 base, phys, ring, i, desc;
@@ -4588,6 +4694,31 @@ static int eagle_rx_ring_init(u32 ring_size, u32 band)
 	return 0;
 }
 
+/* RRO rx ring 10: one 16-byte descriptor per buffer, same shape as the
+ * rx rings but over the tx-done descriptor base */
+static void eagle_rro_ring_fill(u32 ring_size)
+{
+	u16 *ids = (u16 *)eagle_txdone_id_base;
+	u32 i, desc;
+	s32 buf_id;
+
+	if (ring_size == 0 || ids == NULL)
+		return;
+
+	for (i = 0; i < ring_size; i++) {
+		buf_id = buf_id_alloc_ring();
+		if (buf_id == -1)
+			break;
+		ids[i] = (u16)buf_id;
+		desc = eagle_rx_txdone_desc_base + 16 * i;
+		REG32(desc + 4) = 0;
+		REG32(desc) = (((((u32)buf_id << 11) + eagle_pkt_buf_addr) &
+				0x3FFFFFFF) | 0x80000000) + 192;
+		REG32(desc + 8) = 0;
+		REG32(desc + 12) = 0;
+	}
+}
+
 static void npu_mbox_init_rxd_wrapper(u32 ring_size, u32 ring)
 {
 	switch (ring) {
@@ -4611,6 +4742,13 @@ static void npu_mbox_init_rxd_wrapper(u32 ring_size, u32 ring)
 		eagle_ind_cmd_desc_base = eagle_ring_desc_base(6);
 		break;
 	case EAGLE_RING_TXDONE0:
+		eagle_txdone_ring_cnt = (u16)ring_size;
+		eagle_txdone_id_base = sram_buf_alloc(23);
+		eagle_rro_ring_fill(ring_size);
+#ifdef HAS_BME
+		/* AN7581 has no TDMA rx ring to reclaim buffers from */
+		np_skb_tx_force_reset();
+#endif
 		break;
 	case EAGLE_RING_TXDONE1:
 		npu_printf("[NPU] ignore tx done ring1 currently because of no use\n");
