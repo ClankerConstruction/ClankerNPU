@@ -77,6 +77,10 @@
 #define HOSTADPT_RX_MAX_CNT(r)  (NPU_HOSTADPT_BASE + 0x084 + ((r) * 0x10))
 #define HOSTADPT_RX_DMA_IDX(r)  (NPU_HOSTADPT_BASE + 0x088 + ((r) * 0x10))
 #define HOSTADPT_RX_CPU_IDX(r)  (NPU_HOSTADPT_BASE + 0x08C + ((r) * 0x10))
+/* host -> NPU rings, only present where the host offloads WiFi tx */
+#define HOSTADPT_IN_BASE_PTR(r) (NPU_HOSTADPT_BASE - 0x060 + ((r) * 0x10))
+#define HOSTADPT_IN_MAX_CNT(r)  (NPU_HOSTADPT_BASE - 0x05C + ((r) * 0x10))
+#define HOSTADPT_IN_CPU_IDX(r)  (NPU_HOSTADPT_BASE - 0x054 + ((r) * 0x10))
 
 /* PLIC (Platform-Level Interrupt Controller)
  * Sources are 0-based internally; hardware uses 1-based.

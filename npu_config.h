@@ -66,4 +66,12 @@
 #define HAS_BME
 #endif
 
+/* The host pushes WiFi tx frames through the host adaptor ring instead of
+ * the WiFi PCIe ring. Not built for AN7552 or for MT7916; on AN7583 only
+ * the eagle chips carry it. */
+#if defined(HAS_WIFI) && ((defined(AN7581) && !defined(MT7916)) || \
+			  (defined(AN7583) && defined(WIFI_EAGLE)))
+#define HAS_NPU_WIFI_TX
+#endif
+
 #endif /* NPU_CONFIG_H */

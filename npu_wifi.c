@@ -758,26 +758,48 @@ static u32 hostadpt_tx_ring_base;
 static u8  hostadpt_tx_ring_ready;
 static u32 hostadpt_rx_ring_base;
 
+#ifdef HAS_NPU_WIFI_TX
+/* host -> NPU tx rings: 208-byte entries, bit0 of word0 is the own bit */
+#define HOSTADPT_IN_ENTRY     208
+static u32 hostadpt_in_base[2];
+static u32 hostadpt_in_size[2];
+static u32 hostadpt_in_ridx[2];
+#endif
+
 int hostadpt_init(void)
 {
+#ifdef HAS_NPU_WIFI_TX
+	while (REG32(HOSTADPT_IN_BASE_PTR(1)) == 0)
+		;
+	hostadpt_in_base[1] = (REG32(HOSTADPT_IN_BASE_PTR(1)) & 0x3FFFFFFF) |
+			      NPU_ADDR_MASK;
+	hostadpt_in_base[0] = (REG32(HOSTADPT_IN_BASE_PTR(0)) & 0x3FFFFFFF) |
+			      NPU_ADDR_MASK;
+	hostadpt_in_size[0] = REG32(HOSTADPT_IN_MAX_CNT(0));
+	hostadpt_in_size[1] = REG32(HOSTADPT_IN_MAX_CNT(1));
+#endif
 	/* wait for host to configure RX DMA pointer */
 	while (REG32(HOSTADPT_RX_DMA_PTR) == 0)
 		;
 
 	hostadpt_tx_ring_base = (REG32(HOSTADPT_TX_DMA_PTR) & 0x3FFFFFFF) | 0x40000000;
-	hostadpt_tx_ring_ready = 1;
 	hostadpt_rx_ring_base = (REG32(HOSTADPT_RX_DMA_PTR) & 0x3FFFFFFF) | 0x40000000;
+	hostadpt_tx_ring_ready = 1;
 	return 0;
 }
 
-#ifdef WIFI_KITE
+#ifdef HAS_WIFI
 
+#if defined(WIFI_EAGLE) || defined(HAS_NPU_WIFI_TX)
+#define HOSTADPT_BUFFER_LEN  1792
+#else
 #define HOSTADPT_BUFFER_LEN  3500
+#endif
 #define HOSTADPT_RING_SIZE   512
 
 static void host_ring_write_desc(u32 desc_addr, u32 buf_addr, u16 pkt_len,
 				 u16 wcid, u8 amsdu, u8 fwd_type,
-				 u16 orig_len, u8 is_last, u8 classify_result)
+				 u16 orig_len, u8 is_last, u32 info)
 {
 	u32 dma_len;
 	u32 pkt_addr;
@@ -801,7 +823,7 @@ static void host_ring_write_desc(u32 desc_addr, u32 buf_addr, u16 pkt_len,
 
 	bridge_dma_copy(3, buf_addr, pkt_addr, dma_len);
 
-	*(u32 *)(desc_addr + 8) = classify_result;
+	*(u32 *)(desc_addr + 8) = info;
 	*(u32 *)(desc_addr + 4) = (wcid & 0xFFFF) |
 				   ((amsdu & 0x1F) << 16) |
 				   ((fwd_type & 0x3F) << 26);
@@ -816,7 +838,7 @@ static void host_ring_write_desc(u32 desc_addr, u32 buf_addr, u16 pkt_len,
 
 static int host_ring_submit(u32 buf_addr, u16 pkt_len, u32 band,
 			    u16 wcid, u8 amsdu, u8 fwd_type,
-			    u16 orig_len, u8 is_last, u8 classify_result)
+			    u16 orig_len, u8 is_last, u32 info)
 {
 	u32 idx, check_idx, ring_base, desc_addr;
 
@@ -852,8 +874,7 @@ static int host_ring_submit(u32 buf_addr, u16 pkt_len, u32 band,
 
 		desc_addr = ring_base + idx * 24;
 		host_ring_write_desc(desc_addr, buf_addr, pkt_len, wcid,
-				     amsdu, fwd_type, orig_len, is_last,
-				     classify_result);
+				     amsdu, fwd_type, orig_len, is_last, info);
 		idx++;
 		REG32(HOSTADPT_RX_DMA_IDX(0)) = (idx < HOSTADPT_RING_SIZE) ? idx : 0;
 		return 0;
@@ -879,8 +900,7 @@ static int host_ring_submit(u32 buf_addr, u16 pkt_len, u32 band,
 
 		desc_addr = ring_base + idx * 24;
 		host_ring_write_desc(desc_addr, buf_addr, pkt_len, wcid,
-				     amsdu, fwd_type, orig_len, is_last,
-				     classify_result);
+				     amsdu, fwd_type, orig_len, is_last, info);
 		idx++;
 		REG32(HOSTADPT_RX_DMA_IDX(1)) = (idx < HOSTADPT_RING_SIZE) ? idx : 0;
 		return 0;
@@ -891,7 +911,7 @@ static int host_ring_submit(u32 buf_addr, u16 pkt_len, u32 band,
 	}
 }
 
-#endif /* WIFI_KITE */
+#endif /* HAS_WIFI */
 
 /* ================================================================
  * Packet node access (piNode / rxNode descriptors)
