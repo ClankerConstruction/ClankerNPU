@@ -6297,6 +6297,9 @@ void core0_wifi_init_wrapper(void)
 #ifdef HAS_WIFI
 	int result;
 
+	/* after tdma_init: it wipes SRAM and restarts the bump allocator */
+	wifi_pcie_desc_alloc();
+
 #ifdef WIFI_EAGLE
 	eagle_rx_init();
 	eagle_tx_ring_desc[0] = eagle_ring_desc_base(3);

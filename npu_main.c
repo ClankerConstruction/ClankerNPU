@@ -1694,9 +1694,6 @@ void tr471_main_init(void)
 
 static void __attribute__((noinline)) core0_main(void)
 {
-#ifdef HAS_WIFI
-	wifi_pcie_desc_alloc();
-#endif
 	tdma_init();
 
 #ifdef HAS_BME
@@ -1712,8 +1709,8 @@ static void __attribute__((noinline)) core0_main(void)
 	buf_mgr_init();
 #endif
 
-	npu_bridge_buf_init();
 	core0_wifi_init_wrapper();
+	npu_bridge_buf_init();
 	plic_register_isr(59, dbg_cnt_isr);
 
 	npu_printf("%s\n", "core0_main");
