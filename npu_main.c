@@ -121,9 +121,51 @@ wifi_mail_fn_t set_wait_func_table[31] __attribute__((section(".data"))) = {
 	wifi_mail_set_arht_chip_info,
 };
 #else
-/* eagle helpers are not reconstructed; every slot stays NULL */
-wifi_mail_fn_t get_wait_func_table[10];
-wifi_mail_fn_t set_wait_func_table[31];
+wifi_mail_fn_t get_wait_func_table[10] __attribute__((section(".data"))) = {
+	eagle_mail_get_npu_info,
+	eagle_mail_get_last_rate,
+	eagle_mail_get_counter,
+	eagle_mail_get_dbg_counter,
+	eagle_mail_get_rxdesc_base,
+	eagle_mail_get_wcid_dbg_counter,
+	eagle_mail_get_dma_addr,
+	eagle_mail_get_ring_size,
+	eagle_mail_get_mdc_lock,
+	eagle_mail_get_dump_mapping,
+};
+wifi_mail_fn_t set_wait_func_table[31] __attribute__((section(".data"))) = {
+	eagle_mail_set_pcie_addr,
+	eagle_mail_set_desc,
+	eagle_mail_set_init_done,
+	eagle_mail_set_tran_to_cpu,
+	eagle_mail_set_ba_win_size,
+	eagle_mail_set_driver_model,
+	eagle_mail_set_del_sta,
+	eagle_mail_set_dram_ba_node,
+	eagle_mail_set_pkt_buf,
+	eagle_mail_set_test_noba,
+	eagle_mail_set_flushone,
+	eagle_mail_set_flushall,
+	eagle_mail_set_force_cpu,
+	eagle_mail_set_pcie_state,
+	eagle_mail_set_port_type,
+	eagle_mail_set_retry,
+	eagle_mail_set_bar_info,
+	eagle_mail_set_fast_flag,
+	eagle_mail_set_band0_cpu,
+	eagle_mail_set_tx_ring_pcie,
+	eagle_mail_set_tx_desc_hw,
+	eagle_mail_set_tx_buf_hw,
+	eagle_mail_set_rx_txdone_hw,
+	eagle_mail_set_tx_pkt_buf,
+	eagle_mail_set_txrx_reg,
+	eagle_mail_set_debug_flag,
+	eagle_mail_set_inode_cfg,
+	eagle_mail_set_inode_stop,
+	eagle_mail_set_pcie_swap,
+	eagle_mail_set_ratelimit,
+	eagle_mail_set_arht_chip_info,
+};
 #endif
 #endif
 
@@ -495,6 +537,37 @@ u32 apcli_byte_count_5g[2];
 volatile u32 eagle_rro_cfg[26];
 volatile u32 eagle_rro_active;
 mbox_handler_t eagle_event_table[4];
+
+/* Host ring bases, keyed by the ring index the host puts in interfaceID.
+ * The blob keeps one global per ring; the values are the same. */
+u32 eagle_rx_ring_pcie_base[2];
+u32 eagle_msdu_pg_pcie_base;
+u32 eagle_ind_cmd_pcie_base;
+u32 eagle_txdone_pcie_base;
+u16 eagle_txdone_ring_cnt;
+
+u32 eagle_tx_ring_pcie_base[2];
+u32 eagle_tx_ring_pcie_base_r3;
+u16 eagle_tx_ring_cpu_idx;
+u16 eagle_tx_ring_dma_idx;
+
+u32 eagle_tx_buf_space[2];
+u32 eagle_tx_buf_space_pg[2];
+
+u32 eagle_rx_txdone_desc_base;
+u32 eagle_msdu_pg_desc_base;
+
+u32 eagle_pkt_buf_addr;
+u32 eagle_tx_pkt_buf_addr;
+u32 eagle_dram_ba_node_addr;
+u32 eagle_icv_err_table;
+u16 eagle_retry_times;
+u8 eagle_pcie_port_type;
+u8 eagle_pcie_state[2];
+u8 eagle_rro_mode;
+u8 eagle_test_noba;
+u32 eagle_chip_info[6];
+u32 eagle_phy_tx_gpio;
 #endif
 
 #if defined(WIFI_KITE) && defined(HAS_TR471)

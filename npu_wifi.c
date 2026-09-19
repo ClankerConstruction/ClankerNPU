@@ -4246,6 +4246,502 @@ int kite_wifi_config(u32 base, u32 cnt)
 
 #ifdef WIFI_EAGLE
 
+/* ================================================================
+ * WiFi mailbox command wrappers (eagle path)
+ *
+ * MT7991/MT7992/MT7993. Same wrapper shape as kite, one helper per
+ * command, but every helper differs: the host carries a ring index in
+ * interfaceID rather than a band, and the rings are the eagle RRO,
+ * MSDU page and indirect-command rings.
+ * ================================================================ */
+
+/* ring index, carried in interfaceID */
+#define EAGLE_RING_RX0          0
+#define EAGLE_RING_RX1          1
+#define EAGLE_RING_MSDU_PG0     5
+#define EAGLE_RING_MSDU_PG1     6
+#define EAGLE_RING_IND_CMD0     8
+#define EAGLE_RING_IND_CMD1     9
+#define EAGLE_RING_TXDONE0      10
+#define EAGLE_RING_TXDONE1      11
+#define EAGLE_RING_ALL          15
+
+#define EAGLE_RX_RING_MAX_IDX   1535
+
+/* host addresses below 0xC0000000 are outside the window the NPU can reach */
+static int eagle_addr_in_range(u32 addr, const char *who)
+{
+	if (addr < 0xC0000000u)
+		return 1;
+	npu_printf("********** ERROR ***************\n");
+	npu_printf("%s() ERROR !!! out of available range:%x \n", who, addr);
+	return 0;
+}
+
+static void npu_set_pcie_base_eagle(u32 addr, u32 ring)
+{
+	eagle_addr_in_range(addr, "npu_set_pcie_base_eagle");
+
+	switch (ring) {
+	case EAGLE_RING_RX0:
+		eagle_rx_ring_pcie_base[0] = addr;
+		break;
+	case EAGLE_RING_RX1:
+		eagle_rx_ring_pcie_base[1] = addr;
+		break;
+	case EAGLE_RING_MSDU_PG0:
+		eagle_msdu_pg_pcie_base = addr;
+		break;
+	case EAGLE_RING_IND_CMD0:
+	case EAGLE_RING_IND_CMD1:
+		eagle_ind_cmd_pcie_base = addr;
+		break;
+	case EAGLE_RING_TXDONE0:
+		eagle_txdone_pcie_base = addr;
+		break;
+	case EAGLE_RING_ALL:
+		/* every base is in, publish the cpu index of each ring */
+		REG32(eagle_rx_ring_pcie_base[0] + 8) = EAGLE_RX_RING_MAX_IDX;
+		REG32(eagle_rx_ring_pcie_base[1] + 8) = EAGLE_RX_RING_MAX_IDX;
+		REG32(eagle_ind_cmd_pcie_base + 8) = EAGLE_RX_RING_MAX_IDX;
+		REG32(eagle_txdone_pcie_base + 8) = eagle_txdone_ring_cnt - 1;
+		npu_printf("[NPU] set RRO ring cpu idx \n");
+		break;
+	default:
+		npu_printf("%s() wrong input value !!!!!\n",
+			   "npu_set_pcie_base_eagle");
+		break;
+	}
+}
+
+static void npu_set_pcie_base_for_tx_ring_eagle(u32 addr, u32 ring)
+{
+	eagle_addr_in_range(addr, "npu_set_pcie_base_for_tx_ring_eagle");
+
+	switch (ring) {
+	case 0:
+		eagle_tx_ring_pcie_base[0] = addr;
+		eagle_tx_ring_cpu_idx = 0;
+		eagle_tx_ring_dma_idx = 0;
+		break;
+	case 1:
+		eagle_tx_ring_pcie_base[1] = addr;
+		eagle_tx_ring_cpu_idx = 0;
+		eagle_tx_ring_dma_idx = 0;
+		break;
+	case 3:
+		eagle_tx_ring_pcie_base_r3 = addr;
+		break;
+	default:
+		npu_printf("%s() wrong input value!!!\n",
+			   "npu_set_pcie_base_for_tx_ring_eagle");
+		break;
+	}
+}
+
+static void npu_set_rx_ring_for_tx_done_phy_base_eagle(u32 addr, u32 ring)
+{
+	eagle_addr_in_range(addr, "npu_set_rx_ring_for_tx_done_phy_base_eagle");
+
+	if (ring == 0) {
+		eagle_rx_txdone_desc_base = (addr & 0x3FFFFFFF) | NPU_ADDR_MASK;
+		return;
+	}
+	if (ring != EAGLE_RING_MSDU_PG0) {
+		npu_printf("%s() wrong input value!!!\n",
+			   "npu_set_rx_ring_for_tx_done_phy_base_eagle");
+		return;
+	}
+	npu_printf("%s()[NPU] set 2G msdu desc addr, MSDU_PG_RING_DESC_BASE:%x\n",
+		   "npu_set_rx_ring_for_tx_done_phy_base_eagle",
+		   eagle_msdu_pg_desc_base);
+	eagle_msdu_pg_desc_base = (addr & 0x3FFFFFFF) | NPU_ADDR_MASK;
+}
+
+static void npu_set_tx_ring_buf_space_phy_base_eagle(u32 addr, u32 ring)
+{
+	eagle_addr_in_range(addr, "npu_set_tx_ring_buf_space_phy_base_eagle");
+
+	switch (ring) {
+	case 0:
+		eagle_tx_buf_space[0] = (addr & 0x3FFFFFFF) | NPU_ADDR_MASK;
+		break;
+	case 1:
+		eagle_tx_buf_space[1] = (addr & 0x3FFFFFFF) | NPU_ADDR_MASK;
+		break;
+	case EAGLE_RING_MSDU_PG0:
+		eagle_tx_buf_space_pg[0] = (addr & 0x3FFFFFFF) | NPU_ADDR_MASK;
+		break;
+	case EAGLE_RING_MSDU_PG1:
+		eagle_tx_buf_space_pg[1] = (addr & 0x3FFFFFFF) | NPU_ADDR_MASK;
+		break;
+	default:
+		npu_printf("%s() wrong input value!!!\n",
+			   "npu_set_tx_ring_buf_space_phy_base_eagle");
+		break;
+	}
+}
+
+/* del_sta: the host packs wcid in bits[10:0] and tid in bits[14:11] */
+static void eagle_icv_err_mbox_handle(u32 action, u32 arg)
+{
+	u32 wcid = arg & 0x7FF;
+	u32 tid = (arg >> 11) & 0xF;
+	u32 i;
+
+	if (wcid > 0x402 || tid > 8) {
+		npu_printf("%s() invalid wcid:%d or tid:%d \n",
+			   "_icv_err_mbox_handle", wcid, tid);
+		return;
+	}
+	if (eagle_icv_err_table == 0)
+		return;
+
+	switch (action) {
+	case 0:
+		REG32(eagle_icv_err_table + 4 * wcid) |= 1u << tid;
+		break;
+	case 1:
+		REG32(eagle_icv_err_table + 4 * wcid) &= ~(1u << tid);
+		break;
+	case 2:
+		npu_printf("wcid[%04d]:%08x \n", wcid,
+			   REG32(eagle_icv_err_table + 4 * wcid));
+		break;
+	case 3:
+		for (i = 0; i < 1026; i++)
+			REG32(eagle_icv_err_table + 4 * i) = 0;
+		break;
+	default:
+		npu_printf("%s() wrong msg action:%d %x \n",
+			   "_icv_err_mbox_handle", action, arg);
+		break;
+	}
+}
+
+static void npu_mbox_init_rxd_wrapper(u32 ring_size, u32 ring)
+{
+	(void)ring_size;
+
+	switch (ring) {
+	case EAGLE_RING_RX0:
+	case EAGLE_RING_RX1:
+	case EAGLE_RING_MSDU_PG0:
+	case EAGLE_RING_MSDU_PG1:
+	case EAGLE_RING_IND_CMD0:
+	case EAGLE_RING_IND_CMD1:
+	case EAGLE_RING_TXDONE0:
+		/* per-ring descriptor fill is not reconstructed yet */
+		break;
+	case EAGLE_RING_TXDONE1:
+		npu_printf("[NPU] ignore tx done ring1 currently because of no use\n");
+		break;
+	default:
+		npu_printf("%s() wrong input val:%d \n",
+			   "npu_mbox_init_rxd_wrapper", ring);
+		break;
+	}
+}
+
+/* ---- set_wait table ---- */
+
+int eagle_mail_set_pcie_addr(u32 *msg)
+{
+	npu_set_pcie_base_eagle(msg[2], msg[0] & 0xF);
+	return 1;
+}
+
+int eagle_mail_set_desc(u32 *msg)
+{
+	npu_mbox_init_rxd_wrapper(msg[2], msg[0] & 0xF);
+	return 1;
+}
+
+int eagle_mail_set_init_done(u32 *msg)
+{
+	(void)msg;
+	return 1;
+}
+
+int eagle_mail_set_tran_to_cpu(u32 *msg)
+{
+	npu_printf("%s() interfaceID = %u \n", "wifi_mail_set_wait_tran2cpu",
+		   msg[0] & 0xF);
+	return 1;
+}
+
+int eagle_mail_set_ba_win_size(u32 *msg)
+{
+	(void)msg;
+	npu_printf("%s() return due to no BA \n",
+		   "npu_mbox_set_wait_ba_win_size_wrapper");
+	return 1;
+}
+
+int eagle_mail_set_driver_model(u32 *msg)
+{
+	eagle_rro_mode = (u8)msg[2];
+	npu_printf("glb_rro_mode=%d\n", eagle_rro_mode);
+	return 1;
+}
+
+int eagle_mail_set_del_sta(u32 *msg)
+{
+	eagle_icv_err_mbox_handle(msg[0] & 0xF, msg[2]);
+	return 1;
+}
+
+int eagle_mail_set_dram_ba_node(u32 *msg)
+{
+	eagle_addr_in_range(msg[2], "npu_mbox_set_wait_dram_ba_node_addr_wrapper");
+	eagle_dram_ba_node_addr = msg[2];
+	return 1;
+}
+
+int eagle_mail_set_pkt_buf(u32 *msg)
+{
+	eagle_addr_in_range(msg[2], "npu_mbox_set_wait_pkt_buf_addr_wrapper");
+	eagle_pkt_buf_addr = msg[2];
+	npu_printf("pkt_buf_addr=%x\n", eagle_pkt_buf_addr);
+	return 1;
+}
+
+int eagle_mail_set_test_noba(u32 *msg)
+{
+	eagle_test_noba = (u8)msg[2];
+	npu_printf("isforTestNoBA=%s\n", eagle_test_noba ? "true" : "false");
+	if (eagle_test_noba > 1)
+		npu_printf("[ERROR] isforTestNoBA is wrong value !!!\n");
+	return 1;
+}
+
+int eagle_mail_set_flushone(u32 *msg)
+{
+	(void)msg;
+	npu_printf("%s() not support\n",
+		   "npu_mbox_set_wait_flushone_timeout_wrapper");
+	return 1;
+}
+
+int eagle_mail_set_flushall(u32 *msg)
+{
+	(void)msg;
+	npu_printf("%s() not support\n",
+		   "npu_mbox_set_wait_flushall_timeout_wrapper");
+	return 1;
+}
+
+int eagle_mail_set_force_cpu(u32 *msg)
+{
+	wifi_force_to_cpu = (u8)msg[2];
+	npu_printf("isForceToCpu=%s\n", wifi_force_to_cpu ? "true" : "false");
+	if (wifi_force_to_cpu > 1)
+		npu_printf("[ERROR] isForceToCpu is wrong value !!!\n");
+	return 1;
+}
+
+int eagle_mail_set_pcie_state(u32 *msg)
+{
+	u32 band = msg[0] & 0xF;
+
+	if (band > 1) {
+		npu_printf("[ERROR] band_idx is wrong value %d !!!\n", band);
+		return 1;
+	}
+	eagle_pcie_state[band] = 1;
+	return 1;
+}
+
+int eagle_mail_set_port_type(u32 *msg)
+{
+	eagle_pcie_port_type = (u8)msg[2];
+	/* the blob also republishes the per-port PCIe windows at 0x1FA90038
+	 * and 0x1FC28030 from SRAM addresses; that path is not reconstructed */
+	return 1;
+}
+
+int eagle_mail_set_retry(u32 *msg)
+{
+	eagle_retry_times = (u16)msg[2];
+	npu_printf("enq_error_retry_times = %d !!!\n", eagle_retry_times);
+	return 1;
+}
+
+int eagle_mail_set_bar_info(u32 *msg)
+{
+	(void)msg;
+	npu_printf("%s() return due to no BA \n",
+		   "npu_mbox_set_wait_bar_info_wrapper");
+	return 1;
+}
+
+int eagle_mail_set_fast_flag(u32 *msg)
+{
+	(void)msg;
+	npu_printf("%s() not support\n", "npu_mbox_set_wait_fast_flag_wrapper");
+	return 1;
+}
+
+int eagle_mail_set_band0_cpu(u32 *msg)
+{
+	(void)msg;
+	npu_printf("%s L%d not support on kite\n",
+		   "wifi_mail_set_wait_npu_band0_on_cpu_wrapper", 10342);
+	return 1;
+}
+
+int eagle_mail_set_tx_ring_pcie(u32 *msg)
+{
+	npu_set_pcie_base_for_tx_ring_eagle(msg[2], msg[0] & 0xF);
+	return 1;
+}
+
+int eagle_mail_set_tx_desc_hw(u32 *msg)
+{
+	npu_printf("%s: [band_idx=%d] desc phy addr=%lx \n",
+		   "wifi_mail_set_wait_tx_ring_desc_phy_addr",
+		   msg[0] & 0xF, msg[2]);
+	return 1;
+}
+
+int eagle_mail_set_tx_buf_hw(u32 *msg)
+{
+	npu_set_tx_ring_buf_space_phy_base_eagle(msg[2], msg[0] & 0xF);
+	return 1;
+}
+
+int eagle_mail_set_rx_txdone_hw(u32 *msg)
+{
+	npu_set_rx_ring_for_tx_done_phy_base_eagle(msg[2], msg[0] & 0xF);
+	return 1;
+}
+
+int eagle_mail_set_tx_pkt_buf(u32 *msg)
+{
+	eagle_addr_in_range(msg[2],
+			    "npu_mbox_set_wait_tx_pkt_buf_addr_wrapper");
+	eagle_tx_pkt_buf_addr = msg[2];
+	return 1;
+}
+
+int eagle_mail_set_txrx_reg(u32 *msg)
+{
+	(void)msg;
+	return 1;
+}
+
+int eagle_mail_set_debug_flag(u32 *msg)
+{
+	npu_printf("set band:%d debugflag=%d\n", msg[0] & 0xF, msg[2]);
+	return 1;
+}
+
+int eagle_mail_set_inode_cfg(u32 *msg)
+{
+	(void)msg;
+	return 1;
+}
+
+int eagle_mail_set_inode_stop(u32 *msg)
+{
+	npu_printf("%s L%d set. band:%d\n",
+		   "wifi_mail_set_wait_inode_stop_action", 306, msg[0] & 0xF);
+	return 1;
+}
+
+int eagle_mail_set_pcie_swap(u32 *msg)
+{
+	npu_printf("%s L%d set %d\n", "wifi_mail_set_wait_inode_pcie_swap",
+		   322, msg[2]);
+	return 1;
+}
+
+int eagle_mail_set_ratelimit(u32 *msg)
+{
+	npu_printf("%s:%d band_idx=%d bssid_idx=%d ctrl=%d !!!\n",
+		   "wifi_mail_set_wait_ratelimit_ctrl", 460,
+		   msg[2], msg[3], msg[4]);
+	return 1;
+}
+
+int eagle_mail_set_arht_chip_info(u32 *msg)
+{
+	u32 i;
+
+	eagle_phy_tx_gpio = msg[9];
+	for (i = 0; i < 6; i++)
+		eagle_chip_info[i] = msg[2 + i];
+	return 1;
+}
+
+/* ---- get_wait table ---- */
+
+int eagle_mail_get_npu_info(u32 *msg)
+{
+	msg[2] = 0;
+	return 1;
+}
+
+int eagle_mail_get_last_rate(u32 *msg)
+{
+	msg[2] = 222;
+	msg[3] = 3333;
+	return 1;
+}
+
+int eagle_mail_get_counter(u32 *msg)
+{
+	npu_memset(&msg[2], 0, 40);
+	return 1;
+}
+
+int eagle_mail_get_dbg_counter(u32 *msg)
+{
+	msg[2] = 0;
+	return 1;
+}
+
+int eagle_mail_get_rxdesc_base(u32 *msg)
+{
+	u32 band = msg[0] & 0xF;
+
+	if (band > 1)
+		return 1;
+	msg[2] = eagle_rx_ring_pcie_base[band];
+	return 1;
+}
+
+int eagle_mail_get_wcid_dbg_counter(u32 *msg)
+{
+	msg[2] = 0;
+	return 1;
+}
+
+int eagle_mail_get_dma_addr(u32 *msg)
+{
+	msg[2] = 0;
+	return 1;
+}
+
+int eagle_mail_get_ring_size(u32 *msg)
+{
+	msg[2] = 0;
+	npu_printf("%s() not support\n", "wifi_mail_get_wait_ring_size");
+	return 1;
+}
+
+int eagle_mail_get_mdc_lock(u32 *msg)
+{
+	(void)msg;
+	return 1;
+}
+
+int eagle_mail_get_dump_mapping(u32 *msg)
+{
+	msg[2] = 0;
+	return 1;
+}
+
 int eagle_mail_set_event(u32 base, u32 cnt)
 {
 	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);
