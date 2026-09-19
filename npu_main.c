@@ -1716,6 +1716,9 @@ static void __attribute__((noinline)) core0_main(void)
 	plic_register_isr(59, dbg_cnt_isr);
 
 	npu_printf("%s\n", "core0_main");
+#if defined(AN7552) && defined(WIFI_EAGLE)
+	eagle_core0_loop();
+#endif
 }
 
 static void __attribute__((noinline)) core1_main(void)

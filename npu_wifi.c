@@ -5384,6 +5384,28 @@ void __attribute__((noreturn)) eagle_core3_loop(void)
 	}
 }
 
+#if defined(AN7552)
+/* AN7552 has two cores: core 0 carries the queue drain and the refill
+ * that the larger parts give to cores 3 and 4. */
+void __attribute__((noreturn)) eagle_core0_loop(void)
+{
+	while (1) {
+		while (eagle_rx_en == 0)
+			eagle_delay(1000);
+
+		if (hostadpt_tx_ring_ready == 1) {
+			eagle_txq_drain(0);
+			eagle_txq_drain(1);
+			eagle_mseg_drain(1);
+		}
+		eagle_txdone_poll();
+		eagle_rx_ring_sweep(0);
+		eagle_rx_ring_sweep(1);
+		eagle_delay(100);
+	}
+}
+#endif
+
 /* core 4: keep both rx rings stocked */
 void __attribute__((noreturn)) eagle_rx_refill_loop(void)
 {

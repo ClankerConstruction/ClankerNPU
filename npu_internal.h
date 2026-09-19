@@ -169,6 +169,7 @@ void eagle_rxdmad_loop(void);
 void eagle_tx_fast_path(void) __attribute__((noreturn));
 void eagle_core3_loop(void) __attribute__((noreturn));
 void eagle_rx_refill_loop(void) __attribute__((noreturn));
+void eagle_core0_loop(void) __attribute__((noreturn));
 #endif
 
 /* npu_tunnel.c */
