@@ -39,6 +39,8 @@ int tunnel_mail_dispatch(u32 base, u32 cnt)
 #define PPE0_MISC       0x1FB50E1C
 #define PPE1_MISC       0x1FB51E1C
 #define PPE0_PARSER     0x1FB50E88
+#define PPE0_ETYPE_EN   0x1FB50E8C
+#define PPE0_ETYPE_TBL  0x1FB50ED0
 #define PPE1_PARSER     0x1FB51E88
 #define PPE0_SHAPER     0x1FB50E28
 #define PPE0_ENABLE     0x1FB50E50
@@ -436,6 +438,54 @@ static void ppe_ip_check_init(u32 blacklist)
 	}
 }
 
+/* The PPE walks past an ethertype only if it has been told about it.
+ * Sixteen slots, two to a word, with one register holding the enable
+ * bits: inner in the low half, outer in the high. Without at least the
+ * IPv4 slot the PPE cannot reach an IP header, so it cannot match a
+ * flow and cannot decide to send an unmatched one to the CPU. */
+static int ppe_ethertype_set(u32 idx, u32 enable, u32 outer, u32 ethertype)
+{
+	u32 chip_rev = CHIP_FAMILY;
+	u32 bit, reg, val, shift;
+
+	if (idx > 15) {
+		npu_printf("Error index %d, should be 0~15!\n", idx);
+		return 1;
+	}
+
+	bit = 1u << (outer != 0 ? idx + 16 : idx);
+	if (enable != 0)
+		REG32(PPE0_ETYPE_EN) |= bit;
+	else
+		REG32(PPE0_ETYPE_EN) &= ~bit;
+	if (chip_rev == 14)
+		REG32(PPE0_ETYPE_EN + PPE1_OFFSET) = REG32(PPE0_ETYPE_EN);
+
+	shift = 16 * (idx & 1);
+	reg = PPE0_ETYPE_TBL + 4 * (idx >> 1);
+	val = (REG32(reg) & ~(0xFFFFu << shift)) | (ethertype << shift);
+	REG32(reg) = val;
+	if (chip_rev == 14)
+		REG32(reg + PPE1_OFFSET) = val;
+	return 0;
+}
+
+static void ppe_ethertype_init(void)
+{
+	u32 cfg = REG32(GDM_BASE) >> 16;
+
+	ppe_ethertype_set(0, 1, 0, 0x8100);		/* VLAN */
+	ppe_ethertype_set(1, 1, 0, 0x88A8);		/* QinQ */
+	if (cfg != 0x8100 && cfg != 0x88A8)
+		ppe_ethertype_set(2, 1, 0, cfg);
+
+	if (hwnat_ct_joyme4 != 0)
+		return;
+
+	ppe_ethertype_set(3, 1, 0, 0x0800);		/* IPv4 */
+	ppe_ethertype_set(4, 1, 0, 0x86DD);		/* IPv6 */
+}
+
 static void ppe_filter_config(void)
 {
 	u32 chip_rev = CHIP_FAMILY;
@@ -452,7 +502,7 @@ static void ppe_filter_config(void)
 		REG32(PPE1_FLT_BASE + 0x10) = 2024;
 	}
 
-	if (ppe_module_ver != 0)
+	if (hwnat_max_packet_2000 != 0)
 		REG32(0x1FB50514) |= 0x0FA40000;
 	else
 		REG32(0x1FB50514) |= 0x06A40000;
@@ -569,6 +619,7 @@ void tunnel_init(void)
 				if (chip_rev == 14)
 					REG32(PPE1_PARSER) |= 0xC0000u;
 			}
+			ppe_ethertype_init();
 		}
 	}
 
