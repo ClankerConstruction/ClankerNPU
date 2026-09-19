@@ -38,18 +38,20 @@
 #define NPU_CSR_SP(core)        (NPU_DEBUG_BASE + ((core) * 0x10) + 0x04)
 #define NPU_CSR_RA(core)        (NPU_DEBUG_BASE + ((core) * 0x10) + 0x08)
 
-/* Hardware mutex */
+/* Hardware mutex. off = (mutex id * 4) & HW_MUTEX_OFF_MASK; hart field is 2 bits. */
 #define HW_MUTEX_BASE           0x1EC03000
-#define HW_MUTEX_STATUS(hart, idx)  (HW_MUTEX_BASE + ((hart) << 10) + ((idx) * 4))
-#define HW_MUTEX_PRI_ACQ(idx)   (HW_MUTEX_BASE + 0x080 + ((idx) * 4))
-#define HW_MUTEX_TRY_ACQ(idx)   (HW_MUTEX_BASE + 0x100 + ((idx) * 4))
-#define HW_MUTEX_ACQ(idx)       (HW_MUTEX_BASE + 0x180 + ((idx) * 4))
-#define HW_MUTEX_REL(hart, idx) (HW_MUTEX_BASE + 0x200 + ((hart) << 10) + ((idx) * 4))
-#define HW_MUTEX_NOTIFY(hart, idx) (HW_MUTEX_BASE + 0x380 + ((hart) << 10) + ((idx) * 4))
-#ifdef AN7552
-#define HW_MUTEX_IDX_MASK       0x1C
+#define HW_MUTEX_HART(hart)     (((hart) << 10) & 0xC00)
+#define HW_MUTEX_STATUS(hart, off)  (HW_MUTEX_BASE + HW_MUTEX_HART(hart) + (off))
+#define HW_MUTEX_PRI_ACQ(off)   (HW_MUTEX_BASE + 0x080 + (off))
+#define HW_MUTEX_TRY_ACQ(off)   (HW_MUTEX_BASE + 0x100 + (off))
+#define HW_MUTEX_ACQ(off)       (HW_MUTEX_BASE + 0x180 + (off))
+#define HW_MUTEX_REL(hart, off) (HW_MUTEX_BASE + 0x200 + HW_MUTEX_HART(hart) + (off))
+#define HW_MUTEX_NOTIFY(hart, off) (HW_MUTEX_BASE + 0x380 + HW_MUTEX_HART(hart) + (off))
+#define HW_MUTEX_HELD           0x10000
+#ifdef AN7581
+#define HW_MUTEX_OFF_MASK       0x7C		/* 32 mutexes */
 #else
-#define HW_MUTEX_IDX_MASK       0x7C
+#define HW_MUTEX_OFF_MASK       0x3C		/* 16 mutexes */
 #endif
 
 /* Mailbox */

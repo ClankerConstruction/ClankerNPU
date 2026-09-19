@@ -535,44 +535,50 @@ static void wfi_idle(void)
  * Hardware mutex
  * ================================================================ */
 
-void hw_mutex_lock(u32 *desc)
+/* Acquire is a single try: the hardware arbitrates, callers do not spin.
+ * Returns 0 when this hart owns the mutex, -1 otherwise. */
+int hw_mutex_lock(u32 *desc)
 {
-	u32 idx = (desc[0] & HW_MUTEX_IDX_MASK) >> 2;
+	u32 off = (desc[0] * 4) & HW_MUTEX_OFF_MASK;
 	u32 hart = get_hartid();
-	u32 val = (hart << 8) | 0x40;
+	u32 sts;
 
-	REG32(HW_MUTEX_ACQ(idx)) = val;
-	while (!(REG32(HW_MUTEX_STATUS(hart, idx)) & 0x10000))
-		REG32(HW_MUTEX_ACQ(idx)) = val;
+	REG32(HW_MUTEX_ACQ(off)) = (hart << 8) | 0x40;
+	sts = REG32(HW_MUTEX_STATUS(hart, off));
+	if (!(sts & HW_MUTEX_HELD))
+		return -1;
+	return ((sts >> 8) & 0xFF) == hart ? 0 : -1;
 }
 
-void hw_mutex_unlock(u32 *desc)
+int hw_mutex_unlock(u32 *desc)
 {
-	u32 idx = (desc[0] & HW_MUTEX_IDX_MASK) >> 2;
+	u32 off = (desc[0] * 4) & HW_MUTEX_OFF_MASK;
 	u32 hart = get_hartid();
 
-	REG32(HW_MUTEX_REL(hart, idx)) = (hart << 8);
+	REG32(HW_MUTEX_REL(hart, off)) = (hart << 8);
+	return 0;
 }
 
-void hw_mutex_lock_pri(u32 *desc)
+int hw_mutex_lock_pri(u32 *desc)
 {
-	u32 idx = (desc[0] & HW_MUTEX_IDX_MASK) >> 2;
+	u32 off = (desc[0] * 4) & HW_MUTEX_OFF_MASK;
 	u32 hart = get_hartid();
-	u32 val;
+	u32 sts;
 
 	if (desc[1] != 0)
-		val = (hart << 8) | 0x10040;
+		REG32(HW_MUTEX_PRI_ACQ(off)) = (hart << 8) | 0x10040;
 	else
-		val = (hart << 8) | 0x40;
+		REG32(HW_MUTEX_ACQ(off)) = (hart << 8) | 0x40;
 
-	REG32(HW_MUTEX_ACQ(idx)) = val;
-	while (!(REG32(HW_MUTEX_STATUS(hart, idx)) & 0x10000))
-		REG32(HW_MUTEX_ACQ(idx)) = val;
+	sts = REG32(HW_MUTEX_STATUS(hart, off));
+	if (!(sts & HW_MUTEX_HELD))
+		return -1;
+	return ((sts >> 8) & 0xFF) == hart ? 0 : -1;
 }
 
-void hw_mutex_unlock_pri(u32 *desc)
+int hw_mutex_unlock_pri(u32 *desc)
 {
-	hw_mutex_unlock(desc);
+	return hw_mutex_unlock(desc);
 }
 
 

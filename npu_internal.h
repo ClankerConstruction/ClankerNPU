@@ -14,10 +14,10 @@ u32 npu_strlen(const char *s);
 char get_core_char(void);
 
 /* npu_main.c — mutex */
-void hw_mutex_lock(u32 *desc);
-void hw_mutex_unlock(u32 *desc);
-void hw_mutex_lock_pri(u32 *desc);
-void hw_mutex_unlock_pri(u32 *desc);
+int hw_mutex_lock(u32 *desc);
+int hw_mutex_unlock(u32 *desc);
+int hw_mutex_lock_pri(u32 *desc);
+int hw_mutex_unlock_pri(u32 *desc);
 
 /* npu_main.c — PLIC */
 void plic_enable(u32 src);
