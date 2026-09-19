@@ -4636,6 +4636,7 @@ static u32 eagle_ring_desc_base(u32 ring_id)
 #define EAGLE_TXD_BYTES		76
 #define EAGLE_TX_RING_MASK	0x7FF
 #define EAGLE_TX_RING_ROOM	5	/* keep this many slots free */
+#define EAGLE_TX_RING_ENTRIES	2048
 #define EAGLE_REFILL_BUDGET	1536
 #define EAGLE_HOSTADPT_BUDGET	256
 #define EAGLE_TX_DESC_CTRL	0x4C4048
@@ -5668,6 +5669,27 @@ static int eagle_rx_ring_init(u32 ring_size, u32 band)
 	return 0;
 }
 
+/* The WiFi chip stamps each descriptor it writes with a 4-bit
+ * generation. Starting every descriptor on a generation the NPU never
+ * expects is what makes a fresh ring read as empty. */
+static void eagle_ind_cmd_ring_init(u32 ring_size, u32 wide)
+{
+	u32 i;
+
+	if (ring_size - 1 > EAGLE_RX_RING_MAX_IDX) {
+		npu_printf("ERROR! rx_ring_size = %d\n", ring_size);
+		ring_size = EAGLE_RX_RING_MAX_IDX + 1;
+	}
+	for (i = 0; i < ring_size; i++) {
+		if (wide)
+			REG32(eagle_ind_cmd_desc_base + 16 * i + 12) |= 0xF0000000;
+		else
+			REG32(eagle_ind_cmd_desc_base + 8 * i + 4) |= 0xE0000000;
+	}
+	eagle_rxdmad_ridx = 0;
+	eagle_rxdmad_gen = 0;
+}
+
 /* RRO rx ring 10: one 16-byte descriptor per buffer, same shape as the
  * rx rings but over the tx-done descriptor base */
 static void eagle_txdone_ring_fill(u32 ring_size)
@@ -5720,8 +5742,12 @@ static void npu_mbox_init_rxd_wrapper(u32 ring_size, u32 ring)
 			   "npu_rro_msdu_pg_ring_desc_addr", 1);
 		break;
 	case EAGLE_RING_IND_CMD0:
+		eagle_ind_cmd_desc_base = eagle_ring_desc_base(6);
+		eagle_ind_cmd_ring_init(ring_size, 0);
+		break;
 	case EAGLE_RING_IND_CMD1:
 		eagle_ind_cmd_desc_base = eagle_ring_desc_base(6);
+		eagle_ind_cmd_ring_init(ring_size, 1);
 		break;
 	case EAGLE_RING_TXDONE0:
 		eagle_txdone_ring_fill(ring_size);
@@ -5975,9 +6001,29 @@ int eagle_mail_set_arht_chip_info(u32 *msg)
 
 /* ---- get_wait table ---- */
 
+/* The host reads the NPU's own tx ring cursor from here, and polls id 3
+ * to see whether the rx path has come to rest. */
 int eagle_mail_get_npu_info(u32 *msg)
 {
-	msg[2] = 0;
+	u32 id = msg[0] & 0xF;
+
+	switch (id) {
+	case 0:
+		msg[2] = eagle_tx_ring_cpu_idx[0];
+		break;
+	case 1:
+	case 2:
+		msg[2] = eagle_tx_ring_cpu_idx[1];
+		break;
+	case 3:
+		msg[2] = (eagle_rx_stopped == 0) | eagle_rx_busy;
+		break;
+	default:
+		npu_printf("[ERROR]%s() wrong input value %d\n",
+			   "npu_mbox_get_wait_npu_info_wrapper", id);
+		msg[2] = 0;
+		break;
+	}
 	return 1;
 }
 
@@ -6000,13 +6046,45 @@ int eagle_mail_get_dbg_counter(u32 *msg)
 	return 1;
 }
 
+/* Answers with a physical address: the host points the WiFi hardware at
+ * it. Asking for a tx ring (5, 6) also arms that ring - every descriptor
+ * starts owned by the NPU. */
 int eagle_mail_get_rxdesc_base(u32 *msg)
 {
-	u32 band = msg[0] & 0xF;
+	u32 ring = msg[0] & 0xF;
+	u32 base, i;
 
-	if (band > 1)
-		return 1;
-	msg[2] = eagle_rx_ring_pcie_base[band];
+	switch (ring) {
+	case EAGLE_RING_RX0:
+	case EAGLE_RING_RX1:
+		msg[2] = eagle_rx_ring_desc_base[ring] & 0x1FFFFFFF;
+		break;
+	case 5:
+	case 6:
+		base = eagle_tx_ring_desc[ring - 5];
+		if (base == 0) {
+			npu_printf("[NPU][ERROR] wrong tx ring desc pase !!  band_idx=%d \n",
+				   ring - 5);
+			msg[2] = 0;
+			break;
+		}
+		for (i = 0; i < EAGLE_TX_RING_ENTRIES; i++)
+			REG32(base + 16 * i + 4) = 0x80000000;
+		msg[2] = base & 0x1FFFFFFF;
+		break;
+	case EAGLE_RING_IND_CMD0:
+	case EAGLE_RING_IND_CMD1:
+		msg[2] = eagle_ind_cmd_desc_base & 0x1FFFFFFF;
+		break;
+	case EAGLE_RING_TXDONE0:
+		msg[2] = eagle_msdu_pg_desc_base & 0x1FFFFFFF;
+		break;
+	default:
+		npu_printf("[ERROR]%s() wrong input value %d\n",
+			   "npu_mbox_get_wait_rxdesc_base_wrapper", ring);
+		msg[2] = 0;
+		break;
+	}
 	return 1;
 }
 
@@ -6018,14 +6096,18 @@ int eagle_mail_get_wcid_dbg_counter(u32 *msg)
 
 int eagle_mail_get_dma_addr(u32 *msg)
 {
+	npu_printf("%s L%d not support on bellwether\n",
+		   "npu_mbox_txrx_ring_dma_addr_get_wrapper", 10561);
 	msg[2] = 0;
 	return 1;
 }
 
 int eagle_mail_get_ring_size(u32 *msg)
 {
+	npu_printf("%s L%d not support on bellwether\n",
+		   "npu_mbox_txrx_ring_ring_size_get_wrapper", 10555);
 	msg[2] = 0;
-	npu_printf("%s() not support\n", "wifi_mail_get_wait_ring_size");
+	npu_printf("%s get wait size =%d\n", "wifi_mail_get_wait_ring_size", 0);
 	return 1;
 }
 
