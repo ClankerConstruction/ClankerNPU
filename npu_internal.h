@@ -306,8 +306,6 @@ extern u32 l4s_qid;
 extern u32 l4s_qlen;
 extern u32 ppe_module_idx;
 extern u8 ppe_module_ver;
-extern u32 gdm_fwd_mode;
-extern u32 vlan_aware_mode;
 extern u32 fragment_mtu[4];
 extern u32 tunnel_pending[8];
 extern u32 tunnel_test_active;

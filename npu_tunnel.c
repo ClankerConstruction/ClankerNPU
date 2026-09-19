@@ -339,50 +339,55 @@ static void tunnel_ppe_reset(void)
 static void ppe_qdma_config(u32 dir)
 {
 	u32 chip_rev = CHIP_FAMILY;
-	u32 v1;
+	u32 v1, v2, v3, v4, v5, v6, port;
 
 	if (dir == 0) {
-		v1 = (vlan_aware_mode == 0) ? 5 : 3;
-		REG32(PPE_QDMA0) = (REG32(PPE_QDMA0) & 0xFFFFFF00) |
-				    (v1 & 0xF) | 64;
-		REG32(PPE_QDMA0) = (REG32(PPE_QDMA0) & 0xFFFF00FF) |
-				    1024 | 0x4000;
-		return;
+		v1 = 5;
+		v2 = 0;
+		v3 = 0;
+		v4 = 0;
+		v5 = 0;
+		v6 = (hwnat_wan_xsi == 0) ? 0 : 5;
+		port = 0;
+	} else {
+		v1 = 3;
+		if (hwnat_wan_xsi == 0) {
+			v1 = 4;
+			if (chip_rev == 14)
+				v1 = (REG32(PPE1_CTRL) & 1) ? 8 : 4;
+		}
+		v2 = 64;
+		v3 = 1024;
+		v4 = 0x4000;
+		v6 = 4;
+		v5 = (chip_rev == 14 || chip_rev == 16) ? 4 : 0;
+		port = 4;
 	}
 
-	v1 = 3;
-	if (vlan_aware_mode == 0) {
-		v1 = 4;
-		if (chip_rev == 14)
-			v1 = ((REG32(PPE1_CTRL) & 1) == 0) ? 4 : 8;
-	}
+	REG32(PPE_QDMA0) = (REG32(PPE_QDMA0) & 0xFFFFFF00) | port | v2;
+	REG32(PPE_QDMA0) = (REG32(PPE_QDMA0) & 0xFFFF00FF) | v3 | v4;
 
-	REG32(PPE_QDMA0) = (REG32(PPE_QDMA0) & 0xFFFFFF00) |
-			    (v1 & 0xF) | 4 | 64;
-	REG32(PPE_QDMA0) = (REG32(PPE_QDMA0) & 0xFFFF00FF) |
-			    1024 | 0x4000;
-
-	if (gdm_fwd_mode != 1 && (vlan_aware_mode | ppe_module_idx) == 0) {
-		REG32(PPE_QDMA1) = (v1 | (REG32(PPE_QDMA1) & 0xFFFFFFF0));
-		REG32(PPE_QDMA1) = ((16 * v1) | (REG32(PPE_QDMA1) & 0xFFFFFF0F));
+	if (hwnat_wan_mode != 1 && (hwnat_wan_xsi | hwnat_ae_wan_sel) == 0) {
+		REG32(PPE_QDMA1) = v1 | (REG32(PPE_QDMA1) & 0xFFFFFFF0);
+		REG32(PPE_QDMA1) = (16 * v1) | (REG32(PPE_QDMA1) & 0xFFFFFF0F);
 		REG32(PPE_QDMA1) = ((v1 << 8) & 0xFFFF0FFF) |
-				    (REG32(PPE_QDMA1) & 0xFFFF00FF) |
-				    (v1 << 12);
+				   (REG32(PPE_QDMA1) & 0xFFFF00FF) | (v1 << 12);
 	}
 	if (chip_rev == 10) {
-		REG32(PPE_QDMA_EXTRA) = (REG32(PPE_QDMA_EXTRA) & 0xFFFFFFF0) | 4;
-		REG32(PPE_QDMA_EXTRA) = (REG32(PPE_QDMA_EXTRA) & 0xFFFF000F) |
-					(4 << 12) | (4 << 8) | (4 << 4);
+		REG32(PPE_QDMA_EXTRA) = (REG32(PPE_QDMA_EXTRA) & 0xFFFFFFF0) | v6;
+		REG32(PPE_QDMA_EXTRA) = (v6 << 12) | ((v6 << 8) & 0xFFFF0FFF) |
+					((16 * v6) & 0xFFFF00FF) |
+					(REG32(PPE_QDMA_EXTRA) & 0xFFFF000F);
 	}
 	if (chip_rev == 14 || chip_rev == 16) {
-		u32 v5 = 4;
-		REG32(PPE_QDMA2) = (v5 | (REG32(PPE_QDMA2) & 0xFFFFFFF0));
-		REG32(PPE_QDMA2) = ((16 * v5) | (REG32(PPE_QDMA2) & 0xFFFFFF0F));
-		REG32(PPE_QDMA2) = ((v5 << 8) | (REG32(PPE_QDMA2) & 0xFFFFF0FF));
-		REG32(PPE_QDMA2) = ((v5 << 12) | (REG32(PPE_QDMA2) & 0xFFFF0FFF));
+		REG32(PPE_QDMA2) = v5 | (REG32(PPE_QDMA2) & 0xFFFFFFF0);
+		REG32(PPE_QDMA2) = (16 * v5) | (REG32(PPE_QDMA2) & 0xFFFFFF0F);
+		REG32(PPE_QDMA2) = (v5 << 8) | (REG32(PPE_QDMA2) & 0xFFFFF0FF);
+		REG32(PPE_QDMA2) = (v5 << 12) | (REG32(PPE_QDMA2) & 0xFFFF0FFF);
 	}
 
-	if (vlan_aware_mode != 0) {
+	/* Where an unmatched packet goes. */
+	if (hwnat_wan_xsi != 0) {
 		REG32(0x1FB50E48) = 349440;
 		if (chip_rev == 14)
 			REG32(0x1FB51E48) = 349440;
@@ -479,7 +484,7 @@ static void ppe_ethertype_init(void)
 	if (cfg != 0x8100 && cfg != 0x88A8)
 		ppe_ethertype_set(2, 1, 0, cfg);
 
-	if (hwnat_ct_joyme4 != 0)
+	if (hwnat_cds != 0)
 		return;
 
 	ppe_ethertype_set(3, 1, 0, 0x0800);		/* IPv4 */
@@ -628,9 +633,9 @@ void tunnel_init(void)
 	/* GDM egress config */
 	{
 		u32 egr = REG32(PPE0_CTRL2) & 0x10000;
-		if (gdm_fwd_mode == 1)
+		if (hwnat_ppe_type == 1)
 			egr |= 0x8000;
-		else if (gdm_fwd_mode == 3)
+		else if (hwnat_ppe_type == 3)
 			egr |= 0x6A0F7C0;
 		else
 			egr |= 0x620B0C0;

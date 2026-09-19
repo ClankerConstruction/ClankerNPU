@@ -364,8 +364,6 @@ u32 l4s_qid;
 u32 l4s_qlen;
 u32 ppe_module_idx;
 u8 ppe_module_ver;
-u32 gdm_fwd_mode;
-u32 vlan_aware_mode;
 u32 fragment_mtu[4];
 u32 tunnel_pending[8];
 u32 tunnel_test_active;
