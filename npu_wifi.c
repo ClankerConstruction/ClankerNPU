@@ -390,8 +390,8 @@ void tdma_tx_init(void)
 	REG32(TDMA_INT_CFG0) = 1;
 	npu_printf("%s L%d :: ring:%d %x=%x %x=%x\n",
 		   "tdma_set_tx_ring_to_int", 109, 0,
-		   TDMA_INT_CFG1, 16843009,
-		   TDMA_INT_CFG0, 1);
+		   TDMA_INT_CFG1, REG32(TDMA_INT_CFG1),
+		   TDMA_INT_CFG0, REG32(TDMA_INT_CFG0));
 
 	/* init ring 1 descriptors */
 	tdma_tx_ring1_base = ring_base + 0x2000;
@@ -406,8 +406,8 @@ void tdma_tx_init(void)
 	tdma_tx_ring1_cnt = 1023;
 	npu_printf("%s L%d :: ring:%d %x=%x %x=%x\n",
 		   "tdma_set_tx_ring_to_int", 109, 1,
-		   TDMA_INT_CFG1, 33686018,
-		   TDMA_INT_CFG0, 17);
+		   TDMA_INT_CFG1, REG32(TDMA_INT_CFG1),
+		   TDMA_INT_CFG0, REG32(TDMA_INT_CFG0));
 
 	/* global TDMA config */
 	REG32(TDMA_GLB_CFG) = (REG32(TDMA_GLB_CFG) & 0xFF8FFFFE) | 0x400001;
@@ -432,11 +432,14 @@ void tdma_tx_init(void)
 		REG32(TDMA_FC_CFG2) = 3;
 	}
 
-	/* WiFi buffer config */
-#if defined(AN7581)
-	REG32(TDMA_WIFI_BUF_CFG) = (REG32(TDMA_WIFI_BUF_CFG) & 0xFFE200FF) | 0x190100;
+	/* WiFi buffer config: the field layout differs per WiFi chip, not
+	 * per SoC. AN7581 never reaches here - it has no TDMA TX path. */
+#if defined(WIFI_EAGLE)
+	REG32(TDMA_WIFI_BUF_CFG) =
+		(REG32(TDMA_WIFI_BUF_CFG) & 0xFFB300FF) | 0x190100;
 #else
-	REG32(TDMA_WIFI_BUF_CFG) = (REG32(TDMA_WIFI_BUF_CFG) & 0xFFA200FF) | 0x590100;
+	REG32(TDMA_WIFI_BUF_CFG) =
+		(REG32(TDMA_WIFI_BUF_CFG) & 0xFFF300FF) | 0x590100;
 #endif
 	npu_printf("[%s] PPE_WIFI_BUF_CFG=%x, value=%x\n",
 		   "tdma_tx_init", TDMA_WIFI_BUF_CFG, REG32(TDMA_WIFI_BUF_CFG));
