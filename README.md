@@ -243,7 +243,13 @@ set from core entry points.
 
 ### What's Missing
 
-- **TR-471** test infrastructure (~22 functions) for latency/loss
+- **Eagle WiFi mailbox helpers** (~35 functions) the eagle
+  (MT7991/MT7992/MT7993) set_wait and get_wait tables use the same
+  wrapper shape as kite but a different helper behind every command,
+  e.g. `npu_set_pcie_base_eagle` for funcId 0. None are reconstructed,
+  so an eagle build leaves both tables empty and the host sees every
+  WiFi mail command return without acting.
+- **TR-471** test infrastructure (~22 functions) is latency/loss
   measurement per ITU-T Y.1540
 - **Thread manager** (~10 functions) advanced multi-hart scheduling
 - **TDMA TX-done / RX fast-path** (~9 functions) TX completion
