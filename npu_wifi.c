@@ -3683,14 +3683,15 @@ static u32 npu_get_pipeline_queue(u32 band)
 }
 
 /* ================================================================
- * WiFi mailbox command wrappers (kite path)
+ * WiFi mailbox command wrappers
  *
- * These are the host-side mailbox command handlers. On the kite
- * (MT7916/MT7996) path, most return "not support on 791X".
- * The eagle path has full implementations.
+ * Host-side mailbox command handlers, shared by both WiFi paths: the
+ * blob's kite and eagle tables hold the same thin wrappers over the
+ * npu_set_* helpers. The npu_mbox_* helpers below are the kite
+ * behaviour, where the inode commands report "not support on 791X".
  * ================================================================ */
 
-#ifdef WIFI_KITE
+#ifdef HAS_WIFI
 
 static void npu_mbox_txrx_ring_size_get(u32 dir, u32 band, u32 *size)
 {
@@ -4196,7 +4197,7 @@ int wifi_mail_get_dump_mapping(u32 *msg)
 }
 
 
-#ifdef HAS_TR471
+#if defined(HAS_TR471) && defined(WIFI_KITE)
 int kite_wifi_config(u32 base, u32 cnt)
 {
 	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);
@@ -4237,9 +4238,9 @@ int kite_wifi_config(u32 base, u32 cnt)
 	}
 	return 0;
 }
-#endif /* HAS_TR471 */
+#endif /* HAS_TR471 && WIFI_KITE */
 
-#endif /* WIFI_KITE */
+#endif /* HAS_WIFI */
 
 #ifdef WIFI_EAGLE
 
@@ -4326,11 +4327,23 @@ int wifi_mail_dispatch(u32 base, u32 cnt)
 #endif
 	case 3: /* GET_WAIT */
 		func_id = msg[1];
-		if (func_id < 10 && get_wait_func_table[func_id])
+		if (func_id > 9) {
+			npu_printf("Error: exceed max num!interfaceid=%u "
+				   "wifi_mail_data->funcType=%u "
+				   "wifi_mail_data->funcId=%u\n",
+				   msg[0] & 0xF, func_type, func_id);
+			return 1;
+		}
+		if (get_wait_func_table[func_id])
 			return get_wait_func_table[func_id](msg);
-		npu_printf("not support unknow funcType\n");
 		return 1;
 	case 4: /* GET_NO_WAIT */
+		if (msg[1] != 0) {
+			npu_printf("Error: exceed max num!interfaceid=%u "
+				   "wifi_mail_data->funcType=%u "
+				   "wifi_mail_data->funcId=%u\n",
+				   msg[0] & 0xF, func_type, msg[1]);
+		}
 		return 1;
 	default:
 		npu_printf("not support unknow funcType\n");
@@ -4345,9 +4358,15 @@ int __attribute__((noinline)) wifi_mail_set_wait(u32 base, u32 cnt)
 	u32 func_id = msg[1];
 
 	(void)cnt;
-	if (func_id < 31 && set_wait_func_table[func_id])
+	if (func_id > 30) {
+		npu_printf("Error: exceed max num!interfaceid=%u "
+			   "wifi_mail_data->funcType=%u "
+			   "wifi_mail_data->funcId=%u\n",
+			   msg[0] & 0xF, 1, func_id);
+		return 1;
+	}
+	if (set_wait_func_table[func_id])
 		return set_wait_func_table[func_id](msg);
-	npu_printf("wifi_mail_set_wait: unknown cmd %d\n", func_id);
 	return 1;
 }
 

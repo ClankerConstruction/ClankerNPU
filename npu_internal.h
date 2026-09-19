@@ -72,7 +72,7 @@ int wifi_mail_set_wait(u32 base, u32 cnt);
 void wifi_bridge_loop(void);
 void wifi_pipeline_worker(void);
 #endif
-#ifdef WIFI_KITE
+#ifdef HAS_WIFI
 int wifi_mail_get_npu_info(u32 *msg);
 int wifi_mail_get_last_rate(u32 *msg);
 int wifi_mail_get_counter(u32 *msg);
@@ -114,6 +114,8 @@ int wifi_mail_set_wait_inode_stop(u32 *msg);
 int wifi_mail_set_pcie_swap(u32 *msg);
 int wifi_mail_set_ratelimit(u32 *msg);
 int wifi_mail_set_arht_chip_info(u32 *msg);
+#endif
+#ifdef WIFI_KITE
 int wifi_mail_set_event(u32 base, u32 cnt);
 int kite_wifi_config(u32 base, u32 cnt);
 #endif
@@ -401,7 +403,7 @@ extern u8 wifi_port_band_5g[16];
 extern u32 wifi_pipeline_queue_2g;
 extern u32 wifi_pipeline_queue_5g;
 
-#ifdef WIFI_KITE
+#ifdef HAS_WIFI
 extern u32 ratelimit_table[32];
 extern u32 arht_chip_info[6];
 extern u32 arht_phy_tx_gpio;
