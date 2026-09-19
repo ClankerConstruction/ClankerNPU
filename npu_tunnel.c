@@ -28,6 +28,12 @@ int tunnel_mail_dispatch(u32 base, u32 cnt)
 /* PPE register bases for tunnel offload */
 #define PPE0_CTRL       0x1FB50E00
 #define PPE0_CTRL2      0x1FB50E04
+#define PPE0_IPCHK_CFG  0x1FB50E08
+#define PPE0_IPCHK0     0x1FB50E0C
+#define PPE0_IPCHK1     0x1FB50E10
+#define PPE0_IPCHK2     0x1FB50E14
+#define PPE0_IPCHK3     0x1FB50E18
+#define PPE1_OFFSET     0x1000
 #define PPE1_CTRL       0x1FB51E00
 #define PPE1_CTRL2      0x1FB51E04
 #define PPE0_MISC       0x1FB50E1C
@@ -385,6 +391,51 @@ static void ppe_qdma_config(u32 dir)
 	}
 }
 
+/* Which IP protocols the PPE singles out. In black list mode the six it
+ * names - TCP, UDP, IPv6, IPIP, ICMP, ICMPv6 - are the ones it will not
+ * bind a flow for, so they go to the CPU instead of being forwarded in
+ * hardware. White list mode names GRE and ESP instead. The blob picks
+ * black at build time. */
+static void ppe_ip_check_init(u32 blacklist)
+{
+	u32 chip_rev = CHIP_FAMILY;
+
+	REG32(PPE0_IPCHK0) = 0;
+	REG32(PPE0_IPCHK1) = 0;
+	REG32(PPE0_IPCHK2) = 0;
+	REG32(PPE0_IPCHK3) = 0;
+	if (chip_rev == 14) {
+		REG32(PPE0_IPCHK0 + PPE1_OFFSET) = 0;
+		REG32(PPE0_IPCHK1 + PPE1_OFFSET) = 0;
+		REG32(PPE0_IPCHK2 + PPE1_OFFSET) = 0;
+		REG32(PPE0_IPCHK3 + PPE1_OFFSET) = 0;
+	}
+
+	if (blacklist != 0) {
+		npu_printf("IP check use Black List\n");
+		REG32(PPE0_IPCHK_CFG) = 0xF000F;
+		REG32(PPE0_CTRL2) |= 0x10000u;
+		REG32(PPE0_IPCHK0) = 0x04291106;	/* IPIP IPv6 UDP TCP */
+		REG32(PPE0_IPCHK1) = 0x00003A01;	/* ICMPv6 ICMP */
+		if (chip_rev == 14) {
+			REG32(PPE0_IPCHK_CFG + PPE1_OFFSET) = 0xF000F;
+			REG32(PPE0_CTRL2 + PPE1_OFFSET) |= 0x10000u;
+			REG32(PPE0_IPCHK0 + PPE1_OFFSET) = 0x04291106;
+			REG32(PPE0_IPCHK1 + PPE1_OFFSET) = 0x00003A01;
+		}
+	} else {
+		npu_printf("IP check use White List\n");
+		REG32(PPE0_IPCHK_CFG) = 0x70007;
+		REG32(PPE0_CTRL2) &= ~0x10000u;
+		REG32(PPE0_IPCHK0) = 0x0000322F;	/* ESP GRE */
+		if (chip_rev == 14) {
+			REG32(PPE0_IPCHK_CFG + PPE1_OFFSET) = 0x70007;
+			REG32(PPE0_CTRL2 + PPE1_OFFSET) &= ~0x10000u;
+			REG32(PPE0_IPCHK0 + PPE1_OFFSET) = 0x0000322F;
+		}
+	}
+}
+
 static void ppe_filter_config(void)
 {
 	u32 chip_rev = CHIP_FAMILY;
@@ -491,6 +542,8 @@ void tunnel_init(void)
 			REG32(PPE1_MISC) |= 0x8000000u;
 		}
 	}
+
+	ppe_ip_check_init(1);
 
 	/* parser config */
 	{
@@ -1295,6 +1348,7 @@ static void hwnat_set_wait_init(u32 addr)
 	hwnat_wan_mode = REG32(addr + 20);
 	hwnat_ae_wan_sel = REG32(addr + 24);
 	hwnat_ready = 1;
+	tunnel_init();
 }
 
 /* SET_WAIT_API sub-dispatch, keyed by the _hwnat_set_func_id the host
