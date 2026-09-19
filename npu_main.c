@@ -566,10 +566,8 @@ u16 eagle_txdone_ring_cnt;
 
 u32 eagle_tx_ring_pcie_base[2];
 u32 eagle_tx_ring_pcie_base_r3;
-u16 eagle_tx_ring_cpu_idx;
-u16 eagle_tx_ring_dma_idx;
 
-u32 eagle_tx_buf_space[2];
+u32 eagle_txd_space[2];
 u32 eagle_tx_buf_space_pg[2];
 
 u32 eagle_rx_txdone_desc_base;
@@ -588,11 +586,11 @@ u32 eagle_txdone_id_base;
 u32 eagle_chip_info[6];
 u32 eagle_phy_tx_gpio;
 
-u32 eagle_tx_buf_space_r10;
-u32 eagle_tx_buf_space_r11;
-u32 eagle_txdone_desc_base[2];
-u16 eagle_txdone_cpu_idx[2];
-u16 eagle_txdone_dma_idx[2];
+u32 eagle_stage_buf0;
+u32 eagle_stage_buf1;
+u32 eagle_stage_base[2];
+u16 eagle_stage_widx[2];
+u16 eagle_stage_ridx[2];
 
 u32 eagle_rx_ring_desc_base[2];
 u32 eagle_ind_cmd_desc_base;
@@ -600,6 +598,52 @@ u16 eagle_rx_ring_size[2];
 u16 eagle_rx_ring_cpu_idx[2];
 u8 eagle_rx_ring_init_done[2];
 u16 eagle_rx_ring_bufid[2][1536];
+
+/* datapath state the host drives over the mailbox */
+volatile u32 eagle_rx_en;
+volatile u32 eagle_tx_en;
+volatile u32 eagle_init_done;
+volatile u32 eagle_rx_busy;
+volatile u8 eagle_rro_state;
+volatile u8 eagle_txq_state;
+volatile u8 eagle_stopping;
+volatile u8 eagle_rx_stopped;
+volatile u8 eagle_fastpath_en;
+u8 eagle_rxdmad_on_core2;
+u32 eagle_rro_addr_elem[128];
+u32 eagle_session_tbl;
+u32 eagle_emi_cidx;
+u8 eagle_emi_cidx_valid;
+
+/* packet queues between the rxdmad ring and the host adaptor */
+u32 eagle_txq_base[2];
+u16 eagle_txq_widx[2];
+u16 eagle_txq_ridx[2];
+u32 eagle_mseg_base[2];
+u16 eagle_mseg_widx[2];
+u16 eagle_mseg_ridx[2];
+u32 eagle_txq_mutex[2];
+u16 eagle_mseg_retry;
+
+/* rxdmad ring */
+u32 eagle_rxdmad_ridx;
+u8 eagle_rxdmad_gen;
+u8 eagle_rxdmad_abort;
+u8 eagle_rxdmad_segs;
+u32 eagle_rxdmad_seglen;
+u32 eagle_seg_bufid[7];
+u16 eagle_seg_len[7];
+
+/* rx rings */
+u32 eagle_rx_ring_ridx[2];
+
+/* wifi tx rings */
+u32 eagle_tx_ring_desc[2];
+u16 eagle_tx_ring_cpu_idx[2];
+
+/* wifi tx done ring */
+u32 eagle_txdone_ridx;
+u8 eagle_txdone_kick;
 #endif
 
 #if defined(WIFI_KITE) && defined(HAS_TR471)
@@ -1677,7 +1721,10 @@ static void __attribute__((noinline)) core0_main(void)
 static void __attribute__((noinline)) core1_main(void)
 {
 	npu_printf("%s\n", "core1_main");
-#ifdef HAS_WIFI
+#if defined(WIFI_EAGLE)
+	eagle_rxdmad_loop();
+	npu_printf("%s finish\n", "core1_wifi_init_wrapper");
+#elif defined(HAS_WIFI)
 	if (wifi_debug_flags & 1)
 		wifi_pipeline_worker();
 	else
@@ -1690,6 +1737,9 @@ static void __attribute__((noinline)) core2_main(void)
 {
 	npu_printf("%s\n", "core2_main");
 	plic_register_isr(18, timer_isr);
+#ifdef WIFI_EAGLE
+	eagle_tx_fast_path();
+#endif
 }
 
 static void __attribute__((noinline)) core3_main(void)
@@ -1703,7 +1753,9 @@ static void __attribute__((noinline)) core3_main(void)
 
 static void core4_wifi_init_wrapper(void)
 {
-#ifdef HAS_WIFI
+#if defined(WIFI_EAGLE)
+	eagle_rx_refill_loop();
+#elif defined(HAS_WIFI)
 	npu_printf("%s core 4 do nothing\n", "core4_wifi_init_wrapper");
 #endif
 }
