@@ -141,6 +141,36 @@ AN7552 and AN7583, 30 on AN7581.
 0x0C200004           claim and complete
 ```
 
+### TDMA
+
+The TDMA WiFi path exists only where `HAS_BME` does - AN7552 and AN7583
+with a WiFi chip. AN7581 has no `tdma_tx_init`, `tdma_rx_init` or
+`tdma_bme_init` on any of its three WiFi variants, and AN7583_NOWIFI
+has no TDMA ring registers at all.
+
+Within that path the per-variant differences are:
+
+| what | AN7552 / AN7583 |
+|------|-----------------|
+| TX rings | 2, base 0x1FB50800, stride 0x10 |
+| RX rings | 2, base 0x1FB50900, 1024 descriptors of 32 bytes |
+| descriptor pattern | `(d & 0x3FFFC000) \| 0xC0000800` |
+| flow control | runtime chip id check, AN7552 takes 0x1FB501BC |
+
+`TDMA_WIFI_BUF_CFG` at 0x1FB50FE8 is the one field that splits by WiFi
+chip rather than SoC:
+
+| WiFi | write |
+|------|-------|
+| eagle (MT7991/7992/7993) | `(x & 0xFFB300FF) \| 0x190100` |
+| kite (MT7916/7996) | `(x & 0xFFF300FF) \| 0x590100` |
+
+`tdma_set_tx_ring_to_int` writes `0x01010101`/`1` for ring 0 and
+`0x02020202`/`0x11` for ring 1, then reads both registers back to log
+them. The read-back differs from what was written - the hardware does
+not keep bit 0 of 0x1FB50A28 - so a log showing `=0` and `=10` is
+correct.
+
 ### Timers
 
 `NPU_TIMER0_BASE` is `0x1EC10100` and `NPU_TIMER1_BASE` `0x1EC10200`; the
