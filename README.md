@@ -274,7 +274,7 @@ set from core entry points.
 ### What's Implemented
 
 - Full boot sequence (crt0 → per-hart dispatch → core0/core7 init)
-- WiFi bridge TX/RX loop (kite and eagle paths)
+- WiFi bridge TX/RX loop (kite) and the eagle datapath on cores 1-4
 - WiFi mailbox handlers (SET_WAIT: 31 commands, GET_WAIT: 10 commands)
 - Packet classifier and multi-descriptor handler
 - BA (block-ack) reorder engine
@@ -289,27 +289,70 @@ set from core entry points.
 - Timer extensions: watchdog, multi-bank (AN7581), CPU timer init
 - UART debug console
 
+### Eagle datapath
+
+Five rings and two buffer pools carry traffic between the host, the NPU
+and the WiFi chip.
+
+| ring | where | entry | who fills it |
+|------|-------|-------|--------------|
+| rxdmad (`ind_cmd`) | PCIe descriptor block + `0xE0A0` | 16 B | WiFi chip |
+| rx ring 0/1 | PCIe descriptor block + `0`/`0x140A0` | 16 B | core 4 |
+| tx done | `npu_set_rx_ring_for_tx_done_phy_base` | 16 B | WiFi chip |
+| host adaptor in 0/1 | `0x1EC0D0A0` / `0x1EC0D0B0` | 208 B | host |
+| host adaptor out 0/1 | `0x1EC0D180` / `0x1EC0D190` | 24 B | core 3 |
+| WiFi tx 0/1 | PCIe descriptor block + `0x6020`/`0x1A0C0` | 16 B | core 2 |
+
+Buffer pools: 12288 rx buffer ids over the WiFi packet buffer (2 KB per
+id, 192 B headroom), and 13312 tx tokens over the NPU tx packet buffer.
+A tx token is returned by the tx done ring, an rx buffer id by whoever
+finishes with the frame.
+
+Cores:
+
+| core | worker | what it does |
+|-----:|--------|--------------|
+| 1 | `eagle_rxdmad_loop` | one rxdmad descriptor at a time; chains the segments of a frame that spans several rx buffers and queues it |
+| 2 | `eagle_tx_fast_path` | staged frames into the WiFi tx ring, paced by the ring's own dma index |
+| 3 | `eagle_core3_loop` | host adaptor in ring -> staging, packet queue -> host adaptor out ring, and the tx done ring |
+| 4 | `eagle_rx_refill_loop` | refills both rx rings |
+
+Nothing starts until the host sends
+`WIFI_MAIL_API_SET_WAIT_INODE_TXRX_REG_ADDR`: case 2 raises the rx
+flags, case 7 the tx flags, case 4 stops both. Cases 0, 1 and 3 carry
+the RRO address element tables (128 of them, 64 KB each, 8 sessions per
+table) and the particular session table.
+
+The descriptor own bit is bit 31 of word 1 and means the NPU owns the
+slot. A refill hands a slot back by writing `0x07000000`; a tx ring push
+hands one over by writing `0x4C4048`.
+
+### Per-variant differences
+
+| | AN7552 | AN7581 | AN7583 |
+|---|---|---|---|
+| cores | 2 | 8 | 6 |
+| eagle rxdmad | core 1 | core 1 | core 1 |
+| eagle refill / queue drain | core 0 | cores 3-4 | cores 3-4 |
+| host -> NPU tx ring | no | MT7992/MT7996 | eagle only |
+| host ring copy limit | 1792 (eagle) / 3500 | 1792 | 1792 (eagle) / 3500 |
+| TDMA flow control CRs | single gate | pause pair | single gate |
+
+`HAS_NPU_WIFI_TX` selects the host -> NPU tx ring. AN7552 builds print
+`TCSUPPORT_NPU_WIFI_TX is not set` and have no in ring at all; on
+AN7552 core 0 carries the refill and tx done work that the larger parts
+give to cores 3 and 4.
+
 ### What's Missing
 
-- **Datapath workers** runs a polling loop on cores 1, 3 and
-  4; currently no frame moves through the NPU even
-  though every ring is allocated and programmed:
-
-  | core | blob | what it does |
-  |-----:|------|--------------|
-  | 1 | `sub_84012380` | `kite_handle_rxdmad_c_ring`: waits on the ready flags, then loops on `sub_84011686` |
-  | 3 | `sub_84000AA6` | noreturn worker over the per-band dispatch it builds at `0x3E900CC0` |
-  | 4 | `sub_84013B8C` | polls the rx ring at the descriptor base with the cpu index, `sub_84011150` per descriptor |
-
-  `wifi_bridge_loop` and `wifi_pipeline_worker` poll `wifi_tx_pending`
-  and `wifi_rx_pending`, which nothing ever raises - the kite design
-  expects an ISR to set them, and the eagle workers poll the rings
-  directly instead.
-- **Eagle rx descriptor ring fill** `npu_mbox_init_rxd_wrapper`
-  (set_wait funcId 1) validates the ring index but does not populate
-  descriptors. The per-ring initialisers behind it (RRO, MSDU page,
-  indirect command, tx done) are not reconstructed.
-- **Eagle PCIe window publish** set_port_type records the type but
+- **LAN -> WiFi hardware fast path** `sub_84006944` drains the TDMA
+  rx ring straight into the WiFi tx ring through `sub_840146E2`. Not
+  implemented; those frames take the host path instead.
+- **AN7581 TDMA ring init** AN7581 has TDMA rx and tx rings of its
+  own, but only the AN7552/AN7583 (`HAS_BME`) ring init is
+  reconstructed. `tdma_tx_submit` returns -1 while the ring base is
+  unset.
+- **Eagle PCIe window publish** — set_port_type records the type but
   does not rewrite the per-port windows at `0x1FA90038` / `0x1FC28030`.
 - **TR-471** test infrastructure (~22 functions) is latency/loss
   measurement per ITU-T Y.1540
