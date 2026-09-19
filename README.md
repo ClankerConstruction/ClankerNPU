@@ -87,6 +87,48 @@ The hart field is 2 bits, so harts 4-7 alias onto 0-3. Acquire is a
 single write plus one status read — the hardware arbitrates and callers
 never spin. Mutex 15 is the printf lock.
 
+### Mailbox
+
+`0x1EC0C000`, matching the host driver's `CR_MBOX_*` / `CR_MBQ<n>_CTRL*`.
+
+```
++0x000               interrupt status (write 1 to clear)
++0x004 + n*4         interrupt mask n; mask n+1 = 1<<n routes mailbox n+1 to core n
++0x030 + q*0x10      CTRL0 buffer physical address     (q = core id)
++0x034 + q*0x10      CTRL1 length          (16-bit)
++0x038 + q*0x10      CTRL2 doorbell counter, incremented by the sender
++0x03C + q*0x10      CTRL3 arg + status    (16-bit: bit0 wait, bit1 done,
+                                            bits[4:2] return, bits[14:11] func id)
++0x140 + n*4         MIB n
+```
+
+Queue 8 is the NPU-to-host notify channel. The notify mutex id is 14 on
+AN7552 and AN7583, 30 on AN7581.
+
+### PLIC
+
+192 sources, hardware ids are source+1.
+
+```
+0x0C000004 + src*4   priority (16 for every source, 17 for source 95)
+0x0C002000 + w*4     enable
+0x0C003000 + w*4     mask / pending
+0x0C200000           threshold
+0x0C200004           claim and complete
+```
+
+### Timers
+
+`NPU_TIMER0_BASE` is `0x1EC10100` and `NPU_TIMER1_BASE` `0x1EC10200`; the
+CPU timer block is at `0x1EC10900`. AN7581 has 4 timers, AN7552 has 8 and
+AN7583 has 16 across the two banks. Five `.data` tables index them: PLIC
+source, interrupt-clear bit, enable bit, counter register and reload
+register. The reload value is `50000 * period` on AN7583,
+`1000 * period * clk` on AN7552 and `1000 * period * clk / 100` on AN7581.
+
+The ISR acks by rewriting the control word as
+`(ctrl & 0x1E0001EF) | (1 << clear_bit)`.
+
 ## Build
 
 Requires `riscv64-unknown-elf-gcc` (tested with GCC 14.2.0 on Debian).
