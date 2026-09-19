@@ -4679,6 +4679,7 @@ struct eagle_dbg {
 	u32 rxdrop;	/* packets dropped: queue full or enqueue refused */
 	u32 rxseg;	/* segments of a frame spanning several buffers */
 	u32 rxout;	/* packets handed to the host adaptor */
+	u32 rxbig;	/* frames carrying a payload, sampled */
 	u32 rxoutfail;	/* host adaptor ring full */
 	u32 txdone;	/* tx done reports consumed */
 	u32 refill[2];	/* rx ring descriptors refilled */
@@ -4977,11 +4978,14 @@ static int eagle_rxdmad_handle(u8 *chaining)
 		err |= 2;
 	info = (info & 0x0FFFFFFF) | ((dw2 >> 12) << 28);
 
-	if (dbg.rxd == 1 || dbg.rxd == 40 || dbg.rxd == 90) {
+	/* the sampled frames were all 128-byte null data. Take the next few
+	 * that actually carry something instead. */
+	if (((dw1 >> 16) & 0x3FFF) > 200 && dbg.rxbig < 4) {
+		dbg.rxbig++;
 		npu_printf("[NPU]rxdsc n=%d dw1=%x dw2=%x info=%x sdl=%d dst=%d\n",
 			   dbg.rxd, dw1, dw2, info, (dw1 >> 16) & 0x3FFF,
 			   (dw1 >> 11) & 3);
-		npu_hexdump("rxpkt", buf + EAGLE_PKT_HEADROOM, 128);
+		npu_hexdump("rxpkt", buf + EAGLE_PKT_HEADROOM, 208);
 	}
 
 	if ((info & 1) == 0 && *chaining == 0) {
