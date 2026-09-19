@@ -443,6 +443,11 @@ extern u8 wifi_wait_state_5g[16];
 extern u8 wifi_port_band_2g[16];
 extern u8 wifi_port_band_5g[16];
 
+extern u32 npu_tx_pkt_buf_addr;
+extern u32 tdma_rx_dscp_base[2];
+extern u32 tdma_rx_desc_count;
+extern u32 tdma_rx_alloc_fail;
+void tdma_rx_init(void);
 extern u32 wifi_pipeline_queue_2g;
 extern u32 wifi_pipeline_queue_5g;
 
@@ -474,7 +479,7 @@ extern u32 eagle_tx_buf_space_pg[2];
 extern u32 eagle_rx_txdone_desc_base;
 extern u32 eagle_msdu_pg_desc_base;
 extern u32 eagle_pkt_buf_addr;
-extern u32 eagle_tx_pkt_buf_addr;
+
 extern u32 eagle_dram_ba_node_addr;
 extern u32 eagle_icv_err_table;
 extern u16 eagle_retry_times;

@@ -233,6 +233,7 @@ static void bridge_dma_copy(u32 channel, u32 src, u32 dst, u32 len)
 #define TDMA_INT_CFG0         0x1FB50A28
 #define TDMA_INT_CFG1         0x1FB50A2C
 #define TDMA_GLB_CFG          0x1FB50A04
+#define TDMA_RX_CFG           0x1FB54710
 #define TDMA_FC_CFG0          0x1FB521F0
 #define TDMA_FC_CFG1          0x1FB521F4
 #define TDMA_FC_CFG2          0x1FB52230
@@ -389,8 +390,8 @@ void tdma_tx_init(void)
 	REG32(TDMA_INT_CFG0) = 1;
 	npu_printf("%s L%d :: ring:%d %x=%x %x=%x\n",
 		   "tdma_set_tx_ring_to_int", 109, 0,
-		   (u32)&REG32(TDMA_INT_CFG1) - 1492, 16843009,
-		   (u32)&REG32(TDMA_INT_CFG0) - 1496, 1);
+		   TDMA_INT_CFG1, 16843009,
+		   TDMA_INT_CFG0, 1);
 
 	/* init ring 1 descriptors */
 	tdma_tx_ring1_base = ring_base + 0x2000;
@@ -444,6 +445,70 @@ void tdma_tx_init(void)
 	tdma_bme_init();
 #endif
 }
+
+#ifdef HAS_BME
+/* TDMA RX init: two 1024-entry rings of 32-byte descriptors, each
+ * pointing at a 2KB slot of the host tx packet buffer */
+#define TDMA_RX_RINGS         2
+#define TDMA_RX_RING_DESCS    1024
+#define TDMA_RX_DESC_SIZE     32
+#define TDMA_RX_RING_STRIDE   0x8000
+
+void tdma_rx_init(void)
+{
+	u32 base, phys, ring, i, desc;
+	s32 buf_id;
+
+	npu_printf("%s\n", "tdma_rx_init");
+
+	REG32(TDMA_GLB_CFG) &= ~0x80000u;
+	REG32(TDMA_RX_CFG) |= 0x80000000u;
+
+	base = sram_buf_alloc(133);
+	phys = base & 0x1FFFFFFF;
+
+	for (ring = 0; ring < TDMA_RX_RINGS; ring++) {
+		REG32(TDMA_RX_BASE_PTR(ring)) =
+			(base + ring * TDMA_RX_RING_STRIDE) & 0x1FFFFFFF;
+		REG32(TDMA_RX_BASE_PTR(ring) + 4) =
+			(REG32(TDMA_RX_BASE_PTR(ring) + 4) & 0xFFFFF000) |
+			TDMA_RX_RING_DESCS;
+		REG32(TDMA_RX_BASE_PTR(ring) + 4) &= 0x8000FFFFu;
+	}
+
+	/* the host publishes the tx packet buffer over the mailbox */
+	while (npu_tx_pkt_buf_addr == 0)
+		delay_ms(100);
+
+	for (ring = 0; ring < TDMA_RX_RINGS; ring++) {
+		tdma_rx_dscp_base[ring] = base + ring * TDMA_RX_RING_STRIDE;
+
+		for (i = 0; i < TDMA_RX_RING_DESCS; i++) {
+			buf_id = buf_id_alloc_ring();
+			if (buf_id == -1) {
+				tdma_rx_alloc_fail++;
+				npu_printf("%s skbufid=%d index=%d maclloc failed\n",
+					   "tdma_rx_init", -1, i);
+				continue;
+			}
+			desc = tdma_rx_dscp_base[ring] + TDMA_RX_DESC_SIZE * i;
+			REG32(desc + 8) = ((((u32)buf_id << 11) +
+					    npu_tx_pkt_buf_addr) &
+					   0x3FFFFFFF) | 0x80000000;
+			REG32(desc + 4) = (REG32(desc + 4) & 0x7FFF0000) | 0x800;
+			tdma_rx_desc_count++;
+		}
+
+		REG32(TDMA_RX_BASE_PTR(ring) + 8) = TDMA_RX_RING_DESCS - 1;
+		REG32(TDMA_RX_BASE_PTR(ring) + 12) = 0;
+	}
+
+	REG32(TDMA_GLB_CFG) = (REG32(TDMA_GLB_CFG) & 0xFFF8FFFB) | 0x40004;
+
+	npu_printf("%s L%d tdma rx ring dscpBaseAddr_uncache=%x reg:%x tdma used pkt_buf_phy_addr:%x\n",
+		   "tdma_rx_init", 1570, base, phys, npu_tx_pkt_buf_addr);
+}
+#endif /* HAS_BME */
 
 static u32 *tdma_stats_base(u32 band)
 {
@@ -4389,7 +4454,7 @@ static void eagle_txdone_ring_init(u32 band)
 	u32 buf, desc, i;
 
 	/* the host sets the tx packet buffer last; wait for it */
-	while (eagle_tx_pkt_buf_addr == 0)
+	while (npu_tx_pkt_buf_addr == 0)
 		delay_ms(100);
 
 	if (band != 0) {
@@ -4731,7 +4796,7 @@ int eagle_mail_set_tx_pkt_buf(u32 *msg)
 {
 	eagle_addr_in_range(msg[2],
 			    "npu_mbox_set_wait_tx_pkt_buf_addr_wrapper");
-	eagle_tx_pkt_buf_addr = msg[2];
+	npu_tx_pkt_buf_addr = msg[2];
 	return 1;
 }
 
@@ -5005,6 +5070,7 @@ void core0_wifi_init_wrapper(void)
 
 #ifdef HAS_BME
 	tdma_tx_init();
+	tdma_rx_init();
 #endif
 	wifi_bridge_init();
 	npu_printf("%s finish\n", "core0_wifi_init_wrapper");
