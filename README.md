@@ -182,7 +182,7 @@ All `.data` globals stay in `npu_main.c` to preserve `npu_data.bin` layout.
 |------|-----------|---------|
 | `WIFI_KITE` | MT7916 / MT7996 | TDMA RX path, WiFi chip name table, function dispatch tables |
 | `WIFI_EAGLE` | MT7991 / MT7992 / MT7993 | RRO, MSDU page ring, indirect command ring |
-| `HAS_WIFI` | any WiFi chip | WiFi bridge, mailbox handlers, BA reorder |
+| `HAS_WIFI` | any WiFi chip | WiFi bridge, mailbox handlers and dispatch tables, BA reorder |
 | `HAS_TUNNEL` | AN758X | Tunnel offload (IPv4/IPv6/SRv6), L4S ECN |
 | `HAS_DBA` | AN7583 + WiFi | GPON DBA (dynamic bandwidth allocation) |
 | `HAS_TR471` | AN7581 + WiFi | TR-471 latency/loss measurement |
