@@ -352,7 +352,7 @@ static void wcid_counter_init(u32 band)
  * register set: src, dst, ctrl. Channel 3 used for host ring DMA.
  * ================================================================ */
 
-#ifdef WIFI_KITE
+#ifdef HAS_WIFI
 static void bridge_dma_copy(u32 channel, u32 src, u32 dst, u32 len)
 {
 	u32 mask = 1u << channel;
@@ -498,6 +498,7 @@ void tdma_bmgr_init(void)
 }
 #endif /* HAS_BME */
 
+#ifdef HAS_WIFI
 #ifdef HAS_BME
 /* TDMA TX init: configure TX descriptor rings */
 void tdma_tx_init(void)
@@ -655,6 +656,7 @@ void tdma_rx_init(void)
 		   "tdma_rx_init", 1570, base, phys, npu_tx_pkt_buf_addr);
 }
 #endif /* HAS_BME */
+#endif /* HAS_BME */
 
 static u32 *tdma_stats_base(u32 band)
 {
@@ -674,6 +676,10 @@ static int __attribute__((noinline)) tdma_tx_submit(u32 port, u32 pkt_len,
 	u32 hw_idx, free_slots;
 	u32 *desc;
 	u32 next;
+
+	/* TODO AN7581 has TDMA rings of its own but no ring init here yet */
+	if (tdma_tx_ring_base[band] == 0)
+		return -1;
 
 	while (1) {
 		hw_idx = *hw_idx_reg;
@@ -718,7 +724,7 @@ static int __attribute__((noinline)) tdma_tx_submit(u32 port, u32 pkt_len,
 	tdma_tx_sw_idx[band + 3] = next;
 	return 0;
 }
-#endif /* HAS_BME */
+#endif /* HAS_WIFI */
 
 /* Software buffer manager init (non-TDMA path) */
 void buf_mgr_init(void)
