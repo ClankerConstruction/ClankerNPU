@@ -354,6 +354,115 @@ physical address (`& 0x1FFFFFFF`), and it is per ring id, not per band:
 | 8, 9 | rxdmad / indirect command ring base |
 | 10 | MSDU page ring base |
 
+### Core map and data flow
+
+Three SoCs, three core counts, the same datapath spread differently. The
+eagle configuration is shown; kite differences are in the matrix below.
+
+**AN7583 - six cores**
+
+```mermaid
+flowchart LR
+  subgraph HOST["ARM host"]
+    DRV["WiFi driver"]
+    LAN["bridge / PPE / ethernet"]
+  end
+  subgraph NPU["NPU"]
+    C0["core 0<br/>init, then<br/>tunnel offload"]
+    C1["core 1<br/>rxdmad"]
+    C2["core 2<br/>timer ISR<br/>tx fast path"]
+    C3["core 3<br/>host adaptor<br/>tx done"]
+    C4["core 4<br/>rx refill"]
+    C5["core 5<br/>DBA"]
+  end
+  WIFI["MT7993"]
+
+  DRV -->|"in ring<br/>208B x1024"| C3
+  C3 -->|"staging<br/>16B x512"| C2
+  C2 -->|"tx ring<br/>16B x2048"| WIFI
+  WIFI -->|"rxdmad<br/>16B x1536"| C1
+  C1 -->|"queue 12B x512"| C3
+  C3 -->|"out ring<br/>24B x512"| DRV
+  C1 -.->|"dst_sel=1<br/>TDMA 8B x1024"| LAN
+  WIFI -->|"tx done 16B x512"| C3
+  C4 -->|"rx rings<br/>16B x1536 x2"| WIFI
+```
+
+**AN7581 - eight cores**
+
+```mermaid
+flowchart LR
+  subgraph HOST["ARM host"]
+    DRV["WiFi driver"]
+    LAN["bridge / PPE / ethernet"]
+  end
+  subgraph NPU["NPU"]
+    C0["core 0<br/>init, returns"]
+    C1["core 1<br/>rxdmad"]
+    C2["core 2<br/>timer ISR<br/>tx fast path"]
+    C3["core 3<br/>host adaptor<br/>tx done"]
+    C4["core 4<br/>rx refill"]
+    C56["cores 5, 6<br/>idle"]
+    C7["core 7<br/>tunnel offload<br/>+ TR-471"]
+  end
+  WIFI["MT7992 / MT7996"]
+
+  DRV -->|"in ring"| C3
+  C3 -->|"staging"| C2
+  C2 -->|"tx ring"| WIFI
+  WIFI -->|"rxdmad"| C1
+  C1 -->|"queue"| C3
+  C3 -->|"out ring"| DRV
+  C1 -.->|"dst_sel=1"| LAN
+  WIFI -->|"tx done"| C3
+  C4 -->|"rx rings"| WIFI
+```
+
+**AN7552 - two cores**
+
+```mermaid
+flowchart LR
+  subgraph HOST["ARM host"]
+    DRV["WiFi driver"]
+    LAN["bridge / PPE / ethernet"]
+  end
+  subgraph NPU["NPU"]
+    C0["core 0<br/>init, then<br/>queue drain,<br/>tx done,<br/>rx refill"]
+    C1["core 1<br/>rxdmad"]
+  end
+  WIFI["MT7991 / MT7993"]
+
+  WIFI -->|"rxdmad"| C1
+  C1 -->|"queue"| C0
+  C0 -->|"out ring"| DRV
+  C1 -.->|"dst_sel=1"| LAN
+  WIFI -->|"tx done"| C0
+  C0 -->|"rx rings"| WIFI
+  DRV -.->|"no in ring:<br/>TCSUPPORT_NPU_WIFI_TX<br/>is not set"| C0
+```
+
+### Per-variant matrix
+
+| | AN7552 | AN7581 | AN7583 |
+|---|---|---|---|
+| cores | 2 | 8 | 6 |
+| timers | 8 | 4 | 16 |
+| `HAS_BME` | yes | no | yes |
+| `HAS_TUNNEL` | no | core 7 | core 0 |
+| `HAS_TR471` | no | yes | no |
+| `HAS_DBA` | no | no | core 5 |
+| `HAS_NPU_WIFI_TX` | no | not MT7916 | eagle only |
+| host ring copy cap | 1792 / 3500 | 1792 | 1792 / 3500 |
+| tunnel offload core | none built | 7 | 0 |
+
+| | kite (MT7916, MT7996) | eagle (MT7991/2/3) |
+|---|---|---|
+| rx path | rxnode / pinode drain, BA reorder in the NPU | rxdmad ring, reorder in the WiFi chip |
+| core 3 | drains both bands' nodes | host adaptor and tx done |
+| core 4 | idle | rx ring refill |
+| buffer ids | hardware allocator | 12288-entry software pool |
+| BME | started | never started |
+
 ### SRAM allocation order
 
 `sram_buf_alloc(type)` is a bump allocator over 0x3E800000, keyed by
