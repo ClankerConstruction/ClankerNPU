@@ -9,8 +9,8 @@ SIZE    := $(CROSS)size
 SOC     ?= AN7583
 # WiFi: MT7916, MT7991, MT7992, MT7993, MT7996, NOWIFI
 WIFI    ?= MT7996
-# 1 logs every WiFi mailbox command
-MAILTRACE ?= 1
+# 1 logs every WiFi mailbox command, from inside the mailbox ISR
+MAILTRACE ?= 0
 # 0 stages host tx frames but never writes the WiFi tx ring
 NPUTX ?= 1
 

@@ -47,6 +47,12 @@ typedef int (*mbox_handler_t)(u32 base_ptr, u32 max_cnt);
 static inline void irq_disable(void) { csr_clear_imm(mstatus, 8); }
 static inline void irq_enable(void)  { csr_set_imm(mstatus, 8); }
 
+/* Returns the previous mstatus.MIE, to be handed back to irq_restore.
+ * Enabling unconditionally inside an ISR lets the next interrupt in
+ * before the PLIC claim is completed. */
+static inline u32 irq_save(void) { return (u32)csr_clear_imm(mstatus, 8) & 8; }
+static inline void irq_restore(u32 mie) { if (mie) irq_enable(); }
+
 static inline u32 get_hartid(void) { return (u32)csr_read(mhartid); }
 
 #endif /* NPU_TYPES_H */

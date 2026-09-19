@@ -767,6 +767,8 @@ static void default_isr(int src)
 		   "default_isr", src);
 }
 
+/* The claim has to be completed on every path or the PLIC never offers
+ * that source again. */
 void call_isr_by_src(u32 src)
 {
 	get_hartid();
@@ -775,7 +777,8 @@ void call_isr_by_src(u32 src)
 			   "call_isr_bySrc", src, 191);
 		return;
 	}
-	plic_isr_table[src](src);
+	if (plic_isr_table[src] != NULL)
+		plic_isr_table[src](src);
 	REG32(PLIC_CLAIM_REG) = src + 1;
 }
 

@@ -176,10 +176,17 @@ static int npu_vsprintf(char *buf, const char *fmt, u32 *args)
  * UART / Printf
  * ================================================================ */
 
+/* The host console shares this UART. Give up on a byte rather than spin
+ * forever holding the printf mutex, which would stall every other core
+ * on the acquire. */
 static void uart_putc(char c)
 {
-	while (!(REG32(UART_TX_STATUS) & UART_TX_READY_BIT))
-		;
+	u32 spin = 200000;
+
+	while (!(REG32(UART_TX_STATUS) & UART_TX_READY_BIT)) {
+		if (--spin == 0)
+			return;
+	}
 	REG32(UART_TX_DATA) = (u32)c;
 }
 
@@ -273,13 +280,14 @@ bad_cmd:
 int npu_printf(const char *fmt, ...)
 {
 	int len;
+	u32 mie;
 	__builtin_va_list ap;
 
 	/* check if printing is suppressed by host */
 	if (REG32(NPU_MIB(21)) != 0)
 		return 0;
 
-	irq_disable();
+	mie = irq_save();
 	hw_mutex_lock_pri(printf_mutex_desc);
 
 	/* format into buffer */
@@ -299,7 +307,7 @@ int npu_printf(const char *fmt, ...)
 	uart_puts_raw(printf_buf);
 
 	hw_mutex_unlock_pri(printf_mutex_desc);
-	irq_enable();
+	irq_restore(mie);
 
 	return len;
 }
