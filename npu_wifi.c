@@ -95,6 +95,7 @@ static u32 wcid_counter_base_5g;
  * tdma_rx_ids  the ids recovered from the rx rings, up to 2048
  */
 #define BUFID_POOL_ENTRIES    12288
+#define BUFID_POOL_LAST       (BUFID_POOL_ENTRIES - 1)
 #define TX_FREE_RING_ENTRIES  13312
 #define TX_FREE_RING_LAST     (TX_FREE_RING_ENTRIES - 1)
 #define TDMA_RX_ID_ENTRIES    2048
@@ -109,34 +110,33 @@ static u32 wcid_counter_base_5g;
 static u32 bufid_pool_base;
 static u32 tx_buf_state_base;
 static u32 tdma_rx_ids_base;
-static u32 tx_force_reset_mutex[2];
 
-/* buf_id recycle ring */
-static u32 bufid_enq_mutex[2];
-static u16 bufid_widx;
+/* rx buffer id ring: 12288 ids over the WiFi packet buffer */
+static u32 rx_bufid_alloc_mutex[2];
+static u32 rx_bufid_free_mutex[2];
+static u16 rx_bufid_ridx;
+static u16 rx_bufid_widx;
+static u32 rx_bufid_alloc_count;
+
+/* tx token ring: 13312 tokens over the NPU tx packet buffer */
 static u32 bufid_ring_base;
-static u32 bufid_enq_count;
-static u32 bufid_deq_mutex[2];
+static u32 tx_token_alloc_mutex[2];
+static u32 tx_token_free_mutex[2];
 static u16 bufid_ridx;
+static u16 bufid_widx;
 static u32 bufid_deq_count;
-
-static void __attribute__((noinline)) bufid_ring_mutex_init(void)
-{
-	bufid_enq_mutex[0] = 29;
-	bufid_enq_mutex[1] = 0;
-	bufid_deq_mutex[0] = 28;
-	bufid_deq_mutex[1] = 0;
-}
+static u32 bufid_enq_count;
 
 static void buf_id_return(u16 buf_id)
 {
-	hw_mutex_lock(bufid_enq_mutex);
-	*(u16 *)(bufid_ring_base + 2 * (u32)bufid_widx) = buf_id;
-	bufid_enq_count++;
+	u16 next = (rx_bufid_widx == BUFID_POOL_LAST) ? 0 : rx_bufid_widx + 1;
+
+	hw_mutex_lock(rx_bufid_free_mutex);
+	*(u16 *)(bufid_pool_base + 2 * (u32)rx_bufid_widx) = buf_id;
 	if ((wifi_debug_flags & 4) && counter_base_tri)
 		(*(u32 *)(counter_base_tri + 0x18))++;
-	bufid_widx = (bufid_widx == TX_FREE_RING_LAST) ? 0 : bufid_widx + 1;
-	hw_mutex_unlock(bufid_enq_mutex);
+	rx_bufid_widx = next;
+	hw_mutex_unlock(rx_bufid_free_mutex);
 }
 
 static s32 buf_id_alloc_ring(void)
@@ -144,20 +144,53 @@ static s32 buf_id_alloc_ring(void)
 	u16 next;
 	s32 id;
 
-	hw_mutex_lock(bufid_deq_mutex);
+	hw_mutex_lock(rx_bufid_alloc_mutex);
+	next = (rx_bufid_ridx == BUFID_POOL_LAST) ? 0 : rx_bufid_ridx + 1;
+	if (rx_bufid_widx == next) {
+		if ((wifi_debug_flags & 4) && counter_base_tri)
+			(*(u32 *)(counter_base_tri + 0x20))++;
+		hw_mutex_unlock(rx_bufid_alloc_mutex);
+		return -1;
+	}
+	rx_bufid_alloc_count++;
+	if ((wifi_debug_flags & 4) && counter_base_tri)
+		(*(u32 *)(counter_base_tri + 0x1C))++;
+	id = *(s16 *)(bufid_pool_base + 2 * (u32)rx_bufid_ridx);
+	rx_bufid_ridx = next;
+	hw_mutex_unlock(rx_bufid_alloc_mutex);
+	return id;
+}
+
+static void tx_token_free(u16 token)
+{
+	hw_mutex_lock(tx_token_free_mutex);
+	*(u16 *)(bufid_ring_base + 2 * (u32)bufid_widx) = token;
+	bufid_enq_count++;
+	if ((wifi_debug_flags & 4) && counter_base_tri)
+		(*(u32 *)(counter_base_tri + 0x4C))++;
+	bufid_widx = (bufid_widx == TX_FREE_RING_LAST) ? 0 : bufid_widx + 1;
+	hw_mutex_unlock(tx_token_free_mutex);
+}
+
+static s32 tx_token_alloc(void)
+{
+	u16 next;
+	s32 id;
+
+	hw_mutex_lock(tx_token_alloc_mutex);
 	next = (bufid_ridx == TX_FREE_RING_LAST) ? 0 : bufid_ridx + 1;
 	if (bufid_widx == next) {
 		if ((wifi_debug_flags & 4) && counter_base_tri)
-			(*(u32 *)(counter_base_tri + 0x20))++;
-		hw_mutex_unlock(bufid_deq_mutex);
+			(*(u32 *)(counter_base_tri + 0x54))++;
+		hw_mutex_unlock(tx_token_alloc_mutex);
 		return -1;
 	}
 	bufid_deq_count++;
 	if ((wifi_debug_flags & 4) && counter_base_tri)
-		(*(u32 *)(counter_base_tri + 0x1C))++;
+		(*(u32 *)(counter_base_tri + 0x50))++;
 	id = *(s16 *)(bufid_ring_base + 2 * (u32)bufid_ridx);
 	bufid_ridx = next;
-	hw_mutex_unlock(bufid_deq_mutex);
+	hw_mutex_unlock(tx_token_alloc_mutex);
 	return id;
 }
 
@@ -166,17 +199,21 @@ void bufid_pool_init(void)
 	u16 *p;
 	u32 i;
 
-	bufid_deq_mutex[0] = 12;
-	bufid_deq_mutex[1] = 0;
-	bufid_enq_mutex[0] = 13;
-	bufid_enq_mutex[1] = 0;
-	tx_force_reset_mutex[0] = 3;
-	tx_force_reset_mutex[1] = 0;
+	rx_bufid_alloc_mutex[0] = 12;
+	rx_bufid_alloc_mutex[1] = 0;
+	rx_bufid_free_mutex[0] = 13;
+	rx_bufid_free_mutex[1] = 0;
+	tx_token_alloc_mutex[0] = 3;
+	tx_token_alloc_mutex[1] = 0;
+	tx_token_free_mutex[0] = 4;
+	tx_token_free_mutex[1] = 0;
 
 	p = (u16 *)sram_buf_alloc(138);
 	bufid_pool_base = (u32)p;
 	for (i = 0; i < BUFID_POOL_ENTRIES; i++)
 		p[i] = (u16)i;
+	rx_bufid_ridx = 0;
+	rx_bufid_widx = 0;
 
 	p = (u16 *)sram_buf_alloc(18);
 	bufid_ring_base = (u32)p;
@@ -224,8 +261,8 @@ void np_skb_tx_force_reset(void)
 	u16 *ring = (u16 *)bufid_ring_base;
 	u32 in_rx, i, w, id;
 
-	hw_mutex_lock(tx_force_reset_mutex);
-	hw_mutex_lock(bufid_deq_mutex);
+	hw_mutex_lock(tx_token_alloc_mutex);
+	hw_mutex_lock(tx_token_free_mutex);
 
 	npu_printf("run %s()\n", "np_skb_tx_force_reset");
 
@@ -259,8 +296,8 @@ void np_skb_tx_force_reset(void)
 	npu_printf("finish run %s() total_buf_in_tdmaRx:%d(%d)\n",
 		   "np_skb_tx_force_reset", in_rx, TDMA_RX_ID_ENTRIES);
 
-	hw_mutex_unlock(bufid_deq_mutex);
-	hw_mutex_unlock(tx_force_reset_mutex);
+	hw_mutex_unlock(tx_token_free_mutex);
+	hw_mutex_unlock(tx_token_alloc_mutex);
 }
 #endif /* HAS_BME */
 
@@ -593,7 +630,7 @@ void tdma_rx_init(void)
 		tdma_rx_dscp_base[ring] = base + ring * TDMA_RX_RING_STRIDE;
 
 		for (i = 0; i < TDMA_RX_RING_DESCS; i++) {
-			buf_id = buf_id_alloc_ring();
+			buf_id = tx_token_alloc();
 			if (buf_id == -1) {
 				tdma_rx_alloc_fail++;
 				npu_printf("%s skbufid=%d index=%d maclloc failed\n",
@@ -3377,7 +3414,6 @@ static void wifi_bridge_init(void)
 {
 #ifdef HAS_WIFI
 	wifi_queue_mutex_init();
-	bufid_ring_mutex_init();
 	wifi_pkt_queue_init(0);
 	wifi_pkt_queue_init(1);
 	wifi_ba_node_init();
