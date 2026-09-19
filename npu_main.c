@@ -222,6 +222,7 @@ u32 dba_alloc_mask = 0xFFFF;
 #endif
 
 u32 npu_reset_pending = 1;
+u32 tdma_bmgr_mode;
 u32 npu_printf_prefix = 1;
 
 #ifdef HAS_DBA
@@ -908,10 +909,10 @@ static void delay_1ms(u32 ms)
 /* PLL clock: selector picks a frequency, bits[2:0]+1 is the divider */
 #define PLL_CFG_REG 0x1FA201FC
 #if defined(AN7583)
-#define PLL_SEL_SHIFT   7
+#define PLL_SEL_SHIFT   9
 #define PLL_FREQ_TABLE  { 666, 800, 720, 600 }
 #else
-#define PLL_SEL_SHIFT   6
+#define PLL_SEL_SHIFT   8
 #define PLL_FREQ_TABLE  { 800, 750, 720, 600 }
 #endif
 
@@ -1616,11 +1617,20 @@ void tr471_main_init(void)
 
 static void __attribute__((noinline)) core0_main(void)
 {
+#ifdef HAS_WIFI
+	wifi_pcie_desc_alloc();
+#endif
 	tdma_init();
 
 #ifdef HAS_BME
-	bufid_pool_init();
-	tdma_bmgr_init();
+	/* the BMGR path is only taken when the host asks for it; AN7583
+	 * runs the buffer id pool instead and never touches the BMGR */
+	if (tdma_bmgr_mode != 0) {
+		npu_printf("do tdma_bmgr_init\n");
+		tdma_bmgr_init();
+	} else {
+		bufid_pool_init();
+	}
 #elif defined(HAS_WIFI)
 	buf_mgr_init();
 #endif

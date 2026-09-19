@@ -51,6 +51,7 @@ void usb_powerdown(void);
 
 /* npu_printf.c */
 int npu_printf(const char *fmt, ...);
+void wifi_pcie_desc_alloc(void);
 int boot_printf(const char *fmt, ...);
 void boot_uart_init(void);
 
@@ -199,6 +200,7 @@ void tr471_main_init(void);
 /* shared globals (defined in npu_main.c) */
 extern u32 npu_max_frame_size;
 extern u32 npu_reset_pending;
+extern u32 tdma_bmgr_mode;
 extern u32 npu_printf_prefix;
 extern u32 sim_mode_flag;
 extern u32 config_flags;

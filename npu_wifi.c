@@ -3158,7 +3158,7 @@ static void wifi_ba_node_init(void)
 }
 
 /* WiFi PCIe desc alloc: allocate PCIe descriptor ring buffer */
-static void wifi_pcie_desc_alloc(void)
+void wifi_pcie_desc_alloc(void)
 {
 	wifi_pcie_desc_base = sram_buf_alloc(1);
 	npu_printf("PCIE_TOTAL_DESC_BASE=%x\n", wifi_pcie_desc_base);
@@ -5006,7 +5006,6 @@ void core0_wifi_init_wrapper(void)
 #ifdef HAS_BME
 	tdma_tx_init();
 #endif
-	wifi_pcie_desc_alloc();
 	wifi_bridge_init();
 	npu_printf("%s finish\n", "core0_wifi_init_wrapper");
 
