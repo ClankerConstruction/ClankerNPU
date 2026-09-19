@@ -9,12 +9,14 @@ SIZE    := $(CROSS)size
 SOC     ?= AN7583
 # WiFi: MT7916, MT7991, MT7992, MT7993, MT7996, NOWIFI
 WIFI    ?= MT7996
+# 1 logs every WiFi mailbox command
+MAILTRACE ?= 1
 
 ARCH    := -march=rv32imc_zicsr_zifencei -mabi=ilp32
 CFLAGS  := $(ARCH) -Os -ffunction-sections -fdata-sections \
            -fno-builtin -ffreestanding -nostdlib \
            -Wall -Wno-unused-function \
-           -D$(SOC) -D$(WIFI)
+           -D$(SOC) -D$(WIFI) $(if $(filter 1,$(MAILTRACE)),-DNPU_MAIL_TRACE)
 ASFLAGS := $(ARCH) -D$(SOC) -D$(WIFI)
 LIBGCC  := $(shell $(CC) $(ARCH) -print-libgcc-file-name)
 LDFLAGS := -m elf32lriscv -T link.ld -nostdlib --gc-sections --relax \

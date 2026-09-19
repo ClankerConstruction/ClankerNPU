@@ -5096,6 +5096,17 @@ static int eagle_tx_ring_push(u32 band)
 		desc = eagle_tx_ring_desc[band] + 16 * cpu;
 		txd = (cpu << 8) + eagle_txd_space[band];
 
+		if (eagle_tx_first_push[band] == 0) {
+			eagle_tx_first_push[band] = 1;
+			npu_printf("[NPU]tx%d stage=%x/%d tok=%x len=%d ring=%x cpu=%d dw1=%x txd=%x pcie=%x\n",
+				   band, eagle_stage_base[band], idx,
+				   *(volatile u16 *)(e + 8),
+				   *(volatile u16 *)(e + 10),
+				   eagle_tx_ring_desc[band], cpu,
+				   REG32(desc + 4), txd,
+				   eagle_tx_ring_pcie_base[band]);
+		}
+
 		for (wait = 1000; wait != 0 && eagle_stopping == 0; wait--) {
 			if ((s32)REG32(desc + 4) < 0)
 				break;
@@ -5725,6 +5736,9 @@ static void eagle_txdone_ring_fill(u32 ring_size)
 
 static void npu_mbox_init_rxd_wrapper(u32 ring_size, u32 ring)
 {
+#ifdef NPU_MAIL_TRACE
+	npu_printf("[NPU]rxd init ring=%d size=%d\n", ring, ring_size);
+#endif
 	switch (ring) {
 	case EAGLE_RING_RX0:
 		eagle_queue_init(0);
@@ -6076,6 +6090,7 @@ int eagle_mail_get_rxdesc_base(u32 *msg)
 	case EAGLE_RING_IND_CMD1:
 		msg[2] = eagle_ind_cmd_desc_base & 0x1FFFFFFF;
 		break;
+
 	case EAGLE_RING_TXDONE0:
 		msg[2] = eagle_msdu_pg_desc_base & 0x1FFFFFFF;
 		break;
@@ -6085,6 +6100,9 @@ int eagle_mail_get_rxdesc_base(u32 *msg)
 		msg[2] = 0;
 		break;
 	}
+#ifdef NPU_MAIL_TRACE
+	npu_printf("[NPU]rxdesc base ring=%d -> %x\n", ring, msg[2]);
+#endif
 	return 1;
 }
 
@@ -6192,6 +6210,12 @@ int wifi_mail_dispatch(u32 base, u32 cnt)
 	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);
 	u32 func_type = (msg[0] >> 4) & 0xF;
 	u32 func_id;
+
+#ifdef NPU_MAIL_TRACE
+	if (func_type != 3 || msg[1] != 0)
+		npu_printf("[MAIL]t%d f%d i%d %x %x %x\n", func_type, msg[1],
+			   msg[0] & 0xF, msg[2], msg[3], msg[4]);
+#endif
 
 	switch (func_type) {
 	case 1: /* SET_WAIT */

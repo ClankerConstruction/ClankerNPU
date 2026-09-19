@@ -643,6 +643,7 @@ u16 eagle_tx_ring_cpu_idx[2];
 
 /* wifi tx done ring */
 u32 eagle_txdone_ridx;
+u8 eagle_tx_first_push[2];
 u8 eagle_txdone_kick;
 #endif
 
