@@ -94,6 +94,9 @@
 #define PLIC_CLAIM_REG          0x0C200004
 #define PLIC_MAX_SOURCE         192
 
+/* mcause: interrupt bit set, code 11 */
+#define MCAUSE_MACHINE_EXT_IRQ  0x8000000BU
+
 /* NPU bridge (DMA channels) */
 #define NPU_BRIDGE_BASE         0x1EC0C000
 #define BRIDGE_CH_BASE(ch)      (NPU_BRIDGE_BASE + ((ch) * 0x40))

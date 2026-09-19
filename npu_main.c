@@ -1660,6 +1660,25 @@ void core_dispatch(int a0, int a1)
  * Trap vector (machine-mode exception/interrupt handler)
  * ================================================================ */
 
+/* Returns the mepc to resume at. Only the machine external interrupt goes to
+ * the PLIC; anything else is reported and stepped over. Routing an exception
+ * through the ISR table lands in default_isr, whose npu_printf re-enters a
+ * printf that already holds the printf mutex, and a held-mutex acquire stalls
+ * the NPU bus. */
+u32 trap_dispatch(u32 mcause, u32 mepc, u32 *sp, u32 ra)
+{
+	if (mcause == MCAUSE_MACHINE_EXT_IRQ) {
+		call_isr_by_src(REG32(PLIC_CLAIM_REG) - 1);
+		return mepc;
+	}
+
+	npu_printf("UnKnow Interrupts (mcause:0x%x, RA:0x%x, SP:0x%x, EPC:%x)\n",
+		   mcause, ra, (u32)sp, mepc);
+
+	/* step over the faulting instruction; it may be compressed */
+	return mepc + (((*(volatile u16 *)mepc) & 3) == 3 ? 4 : 2);
+}
+
 void __attribute__((naked, aligned(4))) trap_vector(void)
 {
 	__asm__ volatile(
@@ -1693,16 +1712,13 @@ void __attribute__((naked, aligned(4))) trap_vector(void)
 		"sw s10,104(sp)\n"
 		"sw s11,108(sp)\n"
 		"csrr a0, mcause\n"
-		"bgez a0, 1f\n"
-		/* interrupt: claim from PLIC, dispatch ISR */
-		"lui a0, 0x0C200\n"
-		"lw a0, 4(a0)\n"
-		"addi a0, a0, -1\n"
-		"call call_isr_by_src\n"
-		"j 2f\n"
-		"1:\n"
-		"call call_isr_by_src\n"
-		"2:\n"
+		"csrr a1, mepc\n"
+		"mv a2, sp\n"
+		"mv a3, ra\n"
+		"call trap_dispatch\n"
+		"csrw mepc, a0\n"
+		"li t0, 0x1800\n"
+		"csrs mstatus, t0\n"
 		"lw ra,   0(sp)\n"
 		"lw t0,   4(sp)\n"
 		"lw t1,   8(sp)\n"
