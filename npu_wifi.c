@@ -5006,6 +5006,7 @@ void core0_wifi_init_wrapper(void)
 #ifdef HAS_BME
 	tdma_tx_init();
 #endif
+	wifi_pcie_desc_alloc();
 	wifi_bridge_init();
 	npu_printf("%s finish\n", "core0_wifi_init_wrapper");
 

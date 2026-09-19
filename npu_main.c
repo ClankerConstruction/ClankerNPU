@@ -1305,13 +1305,59 @@ static u32 sram_buf_alloc_impl(u16 addr_type, u32 size_class)
 	return (u32)base;
 }
 
+/* Reserved size per address type. Two classes: types up to 128 are the
+ * WiFi rings and tables, 129 and above the bridge and tunnel buffers. */
+struct sram_size_ent {
+	u16 addr_type;
+	u32 size;
+};
+
+static const struct sram_size_ent sram_size_lo[] = {
+	{   1, 0x220C0 }, {   2, 0x01818 }, {   3, 0x01818 }, {   9, 0x003E8 },
+	{  10, 0x003E8 }, {  11, 0x00078 }, {  14, 0x00600 }, {  15, 0x00600 },
+	{  22, 0x01008 }, {  25, 0x00040 }, {  26, 0x00010 }, {  30, 0x00100 },
+	{  18, 0x06800 }, {  16, 0x02020 }, {  17, 0x02020 }, {  28, 0x06800 },
+	{  29, 0x01000 }, {  23, 0x00800 },
+};
+
+static const struct sram_size_ent sram_size_hi[] = {
+	{ 138, 0x06000 }, { 129, 0x13FFF }, { 132, 0x04000 }, { 133, 0x10000 },
+	{ 134, 0x01000 }, { 136, 0x08010 }, { 130, 0x00004 }, { 137, 0x00004 },
+};
+
+static u32 sram_type_size(u32 addr_type)
+{
+	const struct sram_size_ent *t;
+	u32 n, i;
+
+	if (addr_type <= 128) {
+		t = sram_size_lo;
+		n = sizeof(sram_size_lo) / sizeof(sram_size_lo[0]);
+	} else {
+		t = sram_size_hi;
+		n = sizeof(sram_size_hi) / sizeof(sram_size_hi[0]);
+	}
+	for (i = 0; i < n; i++) {
+		if (t[i].addr_type == addr_type)
+			return t[i].size;
+	}
+	return 0;
+}
+
 u32 sram_buf_alloc(u32 addr_type)
 {
-	u32 result;
+	u32 size, result;
 
-	if (addr_type > 256)
+	if (addr_type == 0 || addr_type > 255)
 		return 0;
-	result = sram_buf_alloc_impl((u16)addr_type, addr_type);
+
+	size = sram_type_size(addr_type);
+	if (size == 0) {
+		npu_printf("alloc fail!! unknown AddrType=%d\n", addr_type);
+		return 0;
+	}
+
+	result = sram_buf_alloc_impl((u16)addr_type, size);
 	if (result == SRAM_ERROR_ADDR)
 		return 0;
 	return result;
