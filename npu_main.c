@@ -17,37 +17,59 @@
 u32 npu_max_frame_size = 1500;
 static u32 __data_pad0[3];
 
-/* 0x010: WiFi HW queue-to-AC mapping (3 bands x 16 entries) */
-u32 wifi_queue_map_b0[16] = {
+/* 0x010 - 0x14C: five per-timer tables. AN7583 has a second bank of 8
+ * timers at 0x1EC10200; AN7581 exposes only 4. */
+u32 timer_irq_map[NPU_TIMER_NUM] = {
+#if defined(AN7581)
+	18, 19, 20, 21
+#elif defined(AN7552)
+	18, 19, 20, 52, 53, 54, 55, 21
+#else
 	18, 19, 20, 52, 53, 54, 55, 21, 24, 25, 26, 27, 28, 29, 30, 31
+#endif
 };
-u32 wifi_queue_map_b1[8] = {
+u32 timer_clr_bit[NPU_TIMER_NUM] = {
+#if defined(AN7581)
+	16, 17, 18, 21
+#elif defined(AN7552)
 	16, 17, 18, 21, 22, 23, 24, 19
+#else
+	16, 17, 18, 21, 22, 23, 24, 19, 16, 17, 18, 21, 22, 23, 24, 19
+#endif
 };
-u32 wifi_queue_map_b2[8] = {
-	16, 17, 18, 21, 22, 23, 24, 19
-};
-
-/* 0x090: timer bit-index table */
-u32 timer_bit_map[16] = {
+u32 timer_bit_map[NPU_TIMER_NUM] = {
+#if defined(AN7581)
+	0, 1, 2, 5
+#elif defined(AN7552)
+	0, 1, 2, 5, 6, 7, 8, 3
+#else
 	0, 1, 2, 5, 6, 7, 8, 3, 0, 1, 2, 5, 6, 7, 8, 3
+#endif
 };
-
-/* 0x0D0: PLIC source-to-register mapping (2 sets of 16) */
-u32 plic_src_reg_map[32] = {
-	0x1EC10108, 0x1EC10110, 0x1EC10118, 0x1EC10120,
-	0x1EC10128, 0x1EC10130, 0x1EC10138, 0x1EC10140,
-	0x1EC10148, 0x1EC10150, 0x1EC10158, 0x1EC10160,
-	0x1EC10168, 0x1EC10170, 0x1EC10178, 0x1EC10180,
-	0x1EC10108, 0x1EC10110, 0x1EC10118, 0x1EC10120,
-	0x1EC10128, 0x1EC10130, 0x1EC10138, 0x1EC10140,
-	0x1EC10148, 0x1EC10150, 0x1EC10158, 0x1EC10160,
-	0x1EC10168, 0x1EC10170, 0x1EC10178, 0x1EC10180,
+u32 timer_counter_reg[NPU_TIMER_NUM] = {
+	0x1EC10108, 0x1EC10110, 0x1EC10118, 0x1EC10130,
+#if !defined(AN7581)
+	0x1EC10140, 0x1EC10120, 0x1EC10128, 0x1EC10154,
+#endif
+#if !defined(AN7581) && !defined(AN7552)
+	0x1EC10208, 0x1EC10210, 0x1EC10218, 0x1EC10230,
+	0x1EC10240, 0x1EC10220, 0x1EC10228, 0x1EC10254,
+#endif
 };
-
-/* 0x150+: additional PLIC config and WiFi handler pointers
- * (exact layout TBD - placeholder for binary matching) */
-u32 plic_config_ext[16];
+u32 timer_reload_reg[NPU_TIMER_NUM] = {
+	0x1EC10104, 0x1EC1010C, 0x1EC10114, 0x1EC1012C,
+#if !defined(AN7581)
+	0x1EC1013C, 0x1EC1011C, 0x1EC10124, 0x1EC10150,
+#endif
+#if !defined(AN7581) && !defined(AN7552)
+	0x1EC10204, 0x1EC1020C, 0x1EC10214, 0x1EC1022C,
+	0x1EC1023C, 0x1EC1021C, 0x1EC10224, 0x1EC10250,
+#endif
+};
+#if !defined(AN7581)
+/* timers 3..6 share a control bit with another block; clear it on enable */
+u32 timer_pair_bit[4] = { 0x19, 0x1a, 0x1b, 0x1c };
+#endif
 
 /* 0x180: GET_WAIT function table (indexed by SDK WIFI_MAIL_Get_Wait_Func_t) */
 #ifdef HAS_WIFI
@@ -205,6 +227,9 @@ u8 printf_flag;
 /* timer subsystem */
 volatile u32 timer_raw_tick;
 volatile u32 timer_slow_tick;
+u32 timer_int_count;
+u32 timer_prev_ctrl;
+u32 timer_clk_mhz;
 u32 timer_tod_sec;
 u32 timer_tod_usec;
 u32 timer_context[10];
@@ -703,14 +728,13 @@ static u32 timer_get_bit(u32 src)
 {
 	u32 idx;
 
-	if (src >= 24 && src <= 31)
-		idx = src - 24 + 8;
-	else
-		idx = src - 16;
-
-	if (idx < 16)
-		return timer_bit_map[idx];
-	return 0;
+	for (idx = 0; idx < NPU_TIMER_NUM; idx++) {
+		if (timer_irq_map[idx] == src)
+			return timer_clr_bit[idx];
+	}
+	npu_printf("Error: %s can't find intrBit for intSrc:%d\n",
+		   "get_tmrIntrBit_byIntSrc", src);
+	return 20;
 }
 
 static void timer_isr(int src)
@@ -724,9 +748,10 @@ static void timer_isr(int src)
 	else
 		base = NPU_TIMER0_BASE;
 
-	/* clear timer interrupt */
-	REG32(base) |= (1u << bit);
-	REG32(base) &= ~(1u << bit);
+	/* ack: rewrite the control word with only this timer's clear bit set */
+	timer_prev_ctrl = REG32(base);
+	REG32(base) = (timer_prev_ctrl & 0x1E0001EF) | (1u << bit);
+	timer_int_count++;
 
 	tick = timer_raw_tick + 1;
 	timer_raw_tick = tick;
@@ -744,18 +769,45 @@ static void timer_isr(int src)
 
 void timer_init(int timer, int enable, int period)
 {
-	u32 base = NPU_TIMER0_BASE;
-	u32 clk_mhz = 25;
-	u32 reload;
+	u32 base = (timer >= 8) ? NPU_TIMER1_BASE : NPU_TIMER0_BASE;
+	u32 pair = 0;
+	u32 ctrl;
 
+	timer_int_count = 0;
+	if ((u32)timer >= NPU_TIMER_NUM) {
+		npu_printf("%s timer_no:%d is wrong, should be smaller than %d\n",
+			   "timer_init", timer, NPU_TIMER_NUM);
+		return;
+	}
+#if !defined(AN7581)
+	if ((u32)(timer - 3) <= 3)
+		pair = timer_pair_bit[timer - 3];
+#endif
 	if (!enable) {
-		REG32(base) &= ~(1u << timer);
+		REG32(base) &= ~(1u << timer_bit_map[timer]);
 		return;
 	}
 
-	reload = (u32)((u64)1000 * period * clk_mhz / 100);
-	REG32(base + 0x10 + timer * 4) = reload;
-	REG32(base) |= (1u << timer);
+#if defined(AN7583)
+	timer_clk_mhz = 50;
+	npu_printf("%s: Timer clk is running at %d Mhz\n", "timer_init", 50);
+	REG32(timer_reload_reg[timer]) = 50000 * (u32)period;
+#else
+	timer_clk_mhz = cpu_clock_div4();
+	npu_printf("%s: Timer clk is running at %d Mhz\n", "timer_init",
+		   timer_clk_mhz);
+#if defined(AN7581)
+	REG32(timer_reload_reg[timer]) =
+		(u32)period * cpu_clock_div4() * 1000 / 100;
+#else
+	REG32(timer_reload_reg[timer]) = 1000 * (u32)period * cpu_clock_div4();
+	plic_enable(timer_irq_map[timer]);
+#endif
+#endif
+	ctrl = REG32(base) | (1u << timer_bit_map[timer]);
+	if (pair)
+		ctrl &= ~(1u << pair);
+	REG32(base) = ctrl;
 }
 
 static void delay_1ms(u32 ms)

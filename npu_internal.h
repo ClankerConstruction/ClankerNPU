@@ -169,16 +169,18 @@ extern u32 plic_cfg[3];
 extern u32 plic_state;
 extern u32 mbox_notify_mutex[2];
 
-extern u32 timer_bit_map[16];
-extern u32 plic_src_reg_map[32];
-extern u32 plic_config_ext[16];
+extern u32 timer_irq_map[NPU_TIMER_NUM];
+extern u32 timer_clr_bit[NPU_TIMER_NUM];
+extern u32 timer_bit_map[NPU_TIMER_NUM];
+extern u32 timer_counter_reg[NPU_TIMER_NUM];
+extern u32 timer_reload_reg[NPU_TIMER_NUM];
 extern volatile u32 timer_raw_tick;
 extern volatile u32 timer_slow_tick;
+extern u32 timer_int_count;
+extern u32 timer_prev_ctrl;
+extern u32 timer_clk_mhz;
 extern u32 timer_context[10];
 
-extern u32 wifi_queue_map_b0[16];
-extern u32 wifi_queue_map_b1[8];
-extern u32 wifi_queue_map_b2[8];
 
 #ifdef HAS_WIFI
 extern wifi_mail_fn_t get_wait_func_table[];

@@ -144,8 +144,8 @@
 
 /* Timer */
 #define NPU_TIMER0_BASE         0x1EC10100
-#define NPU_TIMER1_BASE         0x1EC10110
-#define NPU_CPU_TIMER_BASE      0x1EC10120
+#define NPU_TIMER1_BASE         0x1EC10200
+#define NPU_CPU_TIMER_BASE      0x1EC10900
 #define NPU_TIMER_CTRL          0x1EC10100
 #define NPU_TIMER_CTRL2         0x1EC10108
 #define NPU_TIMER_WDT_RELOAD    (NPU_TIMER0_BASE + 0x34)

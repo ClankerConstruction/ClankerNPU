@@ -22,13 +22,16 @@
 
 #if defined(AN7552)
 #define MAX_CORE_NUM    2
+#define NPU_TIMER_NUM   8
 #define AN75XX
 #elif defined(AN7581)
 #define MAX_CORE_NUM    8
+#define NPU_TIMER_NUM   4
 #define AN75XX
 #define AN758X
 #elif defined(AN7583)
 #define MAX_CORE_NUM    6
+#define NPU_TIMER_NUM   16
 #define AN75XX
 #define AN758X
 #else
