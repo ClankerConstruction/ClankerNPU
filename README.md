@@ -36,8 +36,56 @@ ORed with 0x40000000 for DRAM DMA addresses.
 
 ### Clock
 
-PLL register at 0x1FA201FC, bits[7:6] select base frequency from
-{800, 750, 720, 600} MHz, bits[2:0]+1 is the divider.
+PLL register at 0x1FA201FC. bits[2:0]+1 is the divider; the frequency
+selector differs per SoC:
+
+| SoC | Selector | Table (MHz) |
+|-----|----------|-------------|
+| AN7552, AN7581 | bits[7:6] | 800, 750, 720, 600 |
+| AN7583 | bits[8:7] | 666, 800, 720, 600 |
+
+### Boot Reset Sequence
+
+Hart 0 runs this once, gated by `npu_reset_pending` (set to 1 in
+`.data`, cleared on the first pass). Secondary harts wait 10ms, then
+poll `core_sync_flag` every 100ms until hart 0 sets it.
+
+```
+MIB21 (0x1EC0C194) saved            printf gate, lost across the reset
+sim_mode_flag = MIB12 (0x1EC0C170)
+RSTCTRL1 (0x1EC11834) = 0x10001788  assert reset on the NPU internal bus
+delay 1ms
+RSTCTRL1 = 0                        release
+delay 1ms
+THREAD_ENABLE (0x1EC00F00) = 4, 1
+delay 1ms
+MIB0 (0x1EC0C140) = 0xFFFFFFFF
+boot UART init (0x1EC10000)
+MIB21 restored
+"core freq at %d MHz"
+```
+
+RSTCTRL1 is at SCU+0x834, not SCU+0x000. Writing SCU+0x000 stops the
+NPU internal bus: the next MMIO access never completes and the hart
+hangs with no UART output.
+
+### Hardware Mutex
+
+Block at 0x1EC03000. A descriptor is two words — the mutex id and a
+priority flag.
+
+```
+off  = (id * 4) & mask      mask 0x3C on AN7552/AN7583 (16 mutexes)
+                            mask 0x7C on AN7581 (32 mutexes)
+0x000 + hart*0x400 + off    status: bit16 held, bits[15:8] owner hart
+0x080 + off                 priority acquire, write (hart<<8)|0x10040
+0x180 + off                 acquire, write (hart<<8)|0x40
+0x200 + hart*0x400 + off    release, write hart<<8
+```
+
+The hart field is 2 bits, so harts 4-7 alias onto 0-3. Acquire is a
+single write plus one status read — the hardware arbitrates and callers
+never spin. Mutex 15 is the printf lock.
 
 ## Build
 
@@ -158,7 +206,10 @@ set from core entry points.
   a minimal trap handler)
 - **Pre-computed .data tables** BA session SRAM pointer table (~2KB),
   tunnel template headers, TR-471 config structs, MIB address arrays.
-  Current .data is 212 bytes; the tables are not yet populated.
+  Current .data is 116 bytes (AN7583_MT7993); the tables are not yet
+  populated.
+- **Boot UART RX console** `uart_debug_cmd` parses `rd`/`wt`, but no
+  ISR is registered on PLIC source 22, which `npu_init` enables.
 
 ## Verification
 
