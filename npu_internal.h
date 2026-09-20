@@ -181,9 +181,10 @@ void eagle_rx_refill_loop(void) __attribute__((noreturn));
 void eagle_core0_loop(void) __attribute__((noreturn));
 #endif
 
-/* npu_tunnel.c */
+/* npu_tunnel.c, npu_ppe.c, npu_l4s.c */
 int tunnel_mail_dispatch(u32 base, u32 cnt);
 #ifdef HAS_TUNNEL
+void tunnel_ppe_reset(void);
 int tunnel_mail_store_hdr(u32 base, u32 cnt);
 int tunnel_mail_store_srv6(u32 base, u32 cnt);
 int tunnel_mail_set_srv6_addr(u32 base, u32 cnt);

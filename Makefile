@@ -46,7 +46,8 @@ SRCS_C  := npu_globals.c \
            npu_main.c npu_util.c npu_mutex.c npu_plic.c npu_timer.c \
            npu_mbox.c npu_sram.c npu_bridge.c npu_printf.c \
            npu_dba.c npu_tr471.c \
-           npu_wifi.c npu_tunnel.c
+           npu_wifi.c \
+           npu_tunnel.c npu_ppe.c npu_l4s.c
 OBJS    := $(patsubst %.S,$(BUILD)/%.o,$(SRCS_S)) \
            $(patsubst %.c,$(BUILD)/%.o,$(SRCS_C))
 FLAGS   := $(BUILD)/.flags
