@@ -46,7 +46,10 @@ SRCS_C  := npu_globals.c \
            npu_main.c npu_util.c npu_mutex.c npu_plic.c npu_timer.c \
            npu_mbox.c npu_sram.c npu_bridge.c npu_printf.c \
            npu_dba.c npu_tr471.c \
-           npu_wifi.c \
+           npu_wifi.c npu_wifi_bufid.c npu_wifi_fwd.c npu_wifi_ba.c \
+           npu_wifi_rx.c npu_wifi_init.c \
+           npu_wifi_kite.c npu_wifi_eagle.c npu_wifi_eagle_dp.c \
+           npu_tdma.c npu_hostadpt.c \
            npu_tunnel.c npu_ppe.c npu_l4s.c
 OBJS    := $(patsubst %.S,$(BUILD)/%.o,$(SRCS_S)) \
            $(patsubst %.c,$(BUILD)/%.o,$(SRCS_C))
@@ -67,7 +70,8 @@ FORCE:
 $(BUILD)/%.o: %.S npu_config.h $(FLAGS) | $(BUILD)
 	$(CC) $(ASFLAGS) -c -o $@ $<
 
-$(BUILD)/%.o: %.c npu_config.h npu_regs.h npu_types.h npu_internal.h $(FLAGS) | $(BUILD)
+$(BUILD)/%.o: %.c npu_config.h npu_regs.h npu_types.h npu_internal.h \
+		 npu_wifi.h $(FLAGS) | $(BUILD)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(ELF): $(OBJS) link.ld
