@@ -14,10 +14,18 @@ Airoha xPON-family SoCs (AN7552, AN7581, AN7583).
 The NPU is a bare-metal RV32IMC cluster with no OS, no MMU. Each hart runs
 a tight polling loop processing packets from the host kernel driver.
 
-**Core assignment (AN7581 example):**
-- Core 0: init + WiFi 2G RX/TX bridge loop
-- Core 7: WiFi 5G pipeline + mailbox polling
-- Cores 1–6: idle WFI (reserved for future offload)
+**Core assignment (AN7581 with an eagle chip):**
+- Core 0: SRAM and ring init, then returns
+- Core 1: rxdmad ring
+- Core 2: timer ISR, then the WiFi tx ring
+- Core 3: host adaptor both ways, tx done ring
+- Core 4: rx ring refill
+- Core 5: WiFi bridge loop
+- Core 6: nothing
+- Core 7: tunnel offload, and TR-471 init
+
+`core_dispatch()` in `npu_main.c` is the whole map. The Core map and
+data flow section below has one diagram per SoC.
 
 ### Memory Map
 
@@ -550,10 +558,8 @@ give to cores 3 and 4.
   every packet whose flow it cannot find instead of sending it to the
   CPU, and a DHCP discover leaves the chip and never comes back.
 - **LAN -> WiFi hardware fast path** `sub_84006944` drains the TDMA
-- **PPE configuration** `tunnel_init` programs the PPE, but no blob
-  calls it from the tunnel offload loop, so it has no caller. The blob
-  configures the PPE from a mailbox command instead (the one that logs
-  `IP check use Black List`), which is not implemented.
+  rx ring straight into the WiFi tx ring through `sub_840146E2`. Not
+  implemented; those frames take the host path instead.
 - **TR-471** test infrastructure (~22 functions) is latency/loss
   measurement per ITU-T Y.1540
 - **Thread manager** (~10 functions) advanced multi-hart scheduling
@@ -565,8 +571,9 @@ give to cores 3 and 4.
   a minimal trap handler)
 - **Pre-computed .data tables** BA session SRAM pointer table (~2KB),
   tunnel template headers, TR-471 config structs, MIB address arrays.
-  Current .data is 116 bytes (AN7583_MT7993); the tables are not yet
-  populated.
+  Current .data is 488 bytes (AN7583_MT7993), which is the three
+  function-pointer tables and the five timer tables; the rest are not
+  yet populated.
 - **Boot UART RX console** `uart_debug_cmd` parses `rd`/`wt`, but no
   ISR is registered on PLIC source 22, which `npu_init` enables.
 
