@@ -7,40 +7,48 @@
 
 typedef int (*wifi_mail_fn_t)(u32 *msg);
 
-/* npu_main.c — utility */
+/* npu_util.c */
 void *npu_memset(void *dst, int c, u32 n);
 void *npu_memcpy(void *dst, const void *src, u32 n);
 u32 npu_strlen(const char *s);
 char get_core_char(void);
 
-/* npu_main.c — mutex */
+/* npu_mutex.c */
 int hw_mutex_lock(u32 *desc);
 int hw_mutex_unlock(u32 *desc);
 int hw_mutex_lock_pri(u32 *desc);
 int hw_mutex_unlock_pri(u32 *desc);
 
-/* npu_main.c — PLIC */
+/* npu_plic.c */
+void plic_init(void);
 void plic_enable(u32 src);
 void plic_disable(u32 src);
 void plic_enable_wrapper(u32 src);
 void plic_register_isr(u32 src, isr_fn_t handler);
+void call_isr_by_src(u32 src);
 
-/* npu_main.c — timer */
+/* npu_timer.c */
 void timer_init(int timer, int enable, int period);
+void timer_isr(int src);
+u32 timer_get_bit(u32 src);
 u32 cpu_clock_get(void);
 u32 cpu_clock_div4(void);
 void delay_us(u32 us);
 void delay_ms(u32 ms);
+void delay_1ms(u32 ms);
+void delay_ms_mcycle(u32 ms);
 
-/* npu_main.c — mailbox */
+/* npu_mbox.c */
+void mailbox_init(void);
+void mbox_isr(int src);
 int mbox_notify_host(u32 core_id, u32 func_id, u32 len);
 
-/* npu_main.c — SRAM */
+/* npu_sram.c */
 u32 sram_buf_alloc(u32 addr_type);
 void sram_buf_init(void);
 void sram_buf_dump(void);
 
-/* npu_main.c — NPU bridge */
+/* npu_bridge.c */
 void npu_bridge_buf_init(void);
 u32 npu_bridge_addr(void);
 extern u32 npu_bridge_pkt_base;
@@ -191,7 +199,7 @@ void tunnel_pkt_drop(u32 port, u32 pkt_len, u32 desc);
 void l4s_ecn_process(u32 port);
 #endif
 
-/* npu_main.c — DBA */
+/* npu_dba.c */
 #ifdef HAS_DBA
 int dba_mail_handler(u32 base, u32 cnt);
 void dba_init(void);
@@ -199,12 +207,12 @@ void dba_timer_handler(int src);
 void dba_main_loop(void);
 #endif
 
-/* npu_main.c — TR-471 */
+/* npu_tr471.c */
 #ifdef HAS_TR471
 void tr471_main_init(void);
 #endif
 
-/* shared globals (defined in npu_main.c) */
+/* shared globals (defined in npu_globals.c) */
 extern u32 npu_max_frame_size;
 extern u32 npu_reset_pending;
 extern u32 tdma_bmgr_mode;
@@ -229,7 +237,12 @@ extern volatile u32 timer_slow_tick;
 extern u32 timer_int_count;
 extern u32 timer_prev_ctrl;
 extern u32 timer_clk_mhz;
+extern u32 timer_tod_sec;
+extern u32 timer_tod_usec;
 extern u32 timer_context[10];
+#if !defined(AN7581)
+extern u32 timer_pair_bit[4];
+#endif
 
 
 #ifdef HAS_WIFI

@@ -40,7 +40,13 @@ MAP     := $(BUILD)/firmware.map
 DIS     := $(BUILD)/firmware.dis
 
 SRCS_S  := crt0.S
-SRCS_C  := npu_main.c npu_printf.c npu_wifi.c npu_tunnel.c
+# npu_globals.c must stay first: it is the only source of .data, so its
+# order fixes the layout of npu_data.bin.
+SRCS_C  := npu_globals.c \
+           npu_main.c npu_util.c npu_mutex.c npu_plic.c npu_timer.c \
+           npu_mbox.c npu_sram.c npu_bridge.c npu_printf.c \
+           npu_dba.c npu_tr471.c \
+           npu_wifi.c npu_tunnel.c
 OBJS    := $(patsubst %.S,$(BUILD)/%.o,$(SRCS_S)) \
            $(patsubst %.c,$(BUILD)/%.o,$(SRCS_C))
 FLAGS   := $(BUILD)/.flags
