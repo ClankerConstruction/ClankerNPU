@@ -112,6 +112,7 @@ void core0_wifi_init_wrapper(void)
 
 #ifdef WIFI_EAGLE
 	eagle_rx_init();
+#ifdef HAS_NPU_WIFI_TX
 	eagle_tx_ring_desc[0] = eagle_ring_desc_base(3);
 	eagle_tx_ring_desc[1] = eagle_ring_desc_base(4);
 	if (eagle_tx_ring_desc[0] == 0)
@@ -120,6 +121,7 @@ void core0_wifi_init_wrapper(void)
 	if (eagle_tx_ring_desc[1] == 0)
 		npu_printf("%s:[ERROR]!!!! can't get tx ring1 desc base:%x\n",
 			   "npu_offload_wifi_tx_ring_init", 0);
+#endif
 #endif
 
 #ifdef WIFI_EAGLE

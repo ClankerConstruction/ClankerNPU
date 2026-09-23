@@ -115,12 +115,25 @@ static void npu_set_rx_ring_for_tx_done_phy_base_eagle(u32 addr, u32 ring)
  * block, by the ring's own id. */
 u32 eagle_ring_desc_base(u32 ring_id)
 {
+#if defined(AN7552)
+	/* rx0, rx1, pg, ind; no tx rings 3/4 */
+	static const u32 off[6] = {
+		0x00000, 0x0C080, 0, 0, 0x06000, 0x06080
+	};
+
+	if (ring_id - 1 > 5 || ring_id == 3 || ring_id == 4) {
+		npu_printf("not support type[wificase:%d,wifisubcase:%d]\n",
+			   1, ring_id);
+		return 0;
+	}
+#else
 	static const u32 off[6] = {
 		0x00000, 0x140A0, 0x06020, 0x1A0C0, 0x0E020, 0x0E0A0
 	};
 
 	if (ring_id - 1 > 5)
 		return 0;
+#endif
 	return wifi_pcie_desc_base + off[ring_id - 1];
 }
 
@@ -671,12 +684,20 @@ int eagle_mail_set_pcie_state(u32 *msg)
  * The window is a base and an end. Port type 0 and 1 give one port the
  * whole block; 2 and 3 split it, band 0 taking everything up to rx ring
  * 1 and band 1 the rest. */
+#if defined(AN7552)
+#define EAGLE_RX0_WIN	0xC080
+#define EAGLE_RX1_WIN	0x6000
+#else
+#define EAGLE_RX0_WIN	0x140A0
+#define EAGLE_RX1_WIN	0xE020
+#endif
+
 static void eagle_pcie_window_publish(u32 band)
 {
 	u32 rx1 = eagle_ring_desc_base(2);
-	u32 rx1_end = rx1 + 0xE020;
+	u32 rx1_end = rx1 + EAGLE_RX1_WIN;
 	u32 rx0 = eagle_ring_desc_base(1);
-	u32 rx0_end = rx0 + 0x140A0;
+	u32 rx0_end = rx0 + EAGLE_RX0_WIN;
 
 	switch (eagle_pcie_port_type) {
 	case 0:

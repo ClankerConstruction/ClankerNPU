@@ -144,6 +144,19 @@ static const struct sram_size_ent sram_size_hi[] = {
 };
 #endif
 #endif
+#elif defined(AN7552)
+/* AN7552 eagle */
+static const struct sram_size_ent sram_size_lo[] = {
+	{   1, 0x12080 }, {   2, 0x01800 }, {   3, 0x01800 }, {   9, 0x002A8 },
+	{  10, 0x002A8 }, {  11, 0x00078 }, {  14, 0x00600 }, {  15, 0x00600 },
+	{  22, 0x01008 }, {  25, 0x00090 }, {  26, 0x00010 }, {  30, 0x00100 },
+	{  31, 0x02BC0 },
+};
+
+static const struct sram_size_ent sram_size_hi[] = {
+	{ 138, 0x05780 }, { 129, 0x10FFF }, { 132, 0x04000 }, { 134, 0x01000 },
+	{ 137, 0x00004 },
+};
 #else
 static const struct sram_size_ent sram_size_lo[] = {
 	{   1, 0x220C0 }, {   2, 0x01818 }, {   3, 0x01818 }, {   9, 0x003E8 },
