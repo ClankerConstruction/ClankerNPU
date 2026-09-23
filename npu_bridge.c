@@ -59,6 +59,7 @@ int npu_bridge_egress(u32 ch, u32 w0, u32 w1, u32 w2,
 	u32 base;
 
 	if ((REG32(0x1EC12050 + ch * 4) & 0xFF00) == 0) {
+		NDBG_CNT(NC_BRIDGE_EGRESS_FAIL);
 		npu_printf("npu bridge egress fail, channel-%d, epkt_info_w0=%x, epkt_info_w1=%x, epkt_info_w2=0x%x \n",
 			   ch, w0, w1, w2);
 		return -1;

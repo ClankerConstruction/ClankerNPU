@@ -67,6 +67,7 @@ int wifi_mail_dispatch(u32 base, u32 cnt)
 		npu_printf("[MAIL]t%d f%d i%d %x %x %x\n", func_type, msg[1],
 			   msg[0] & 0xF, msg[2], msg[3], msg[4]);
 #endif
+	NDBG_TRACE(NDBG_WIFI, func_type << 8 | (msg[1] & 0xFF), msg[2], msg[3]);
 	switch (func_type) {
 	case 1:
 		if (msg[1] > 30)

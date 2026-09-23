@@ -466,6 +466,8 @@ int __attribute__((noinline)) tdma_tx_submit(u32 token, u32 pkt_len,
 		if ((wifi_debug_flags & 4))
 			(*(tdma_stats_base(band) + 63))++;
 		if (--retries == 0) {
+			NDBG_CNT(NC_TDMA_TX_FULL);
+			NDBG_TRACE(NDBG_TDMA, band, sw_idx, hw_idx);
 			if ((wifi_debug_flags & 4))
 				(*(tdma_stats_base(band) + 64))++;
 #ifdef WIFI_KITE

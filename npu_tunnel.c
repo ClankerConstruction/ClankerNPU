@@ -581,19 +581,32 @@ s32 tunnel_offload_handler(u32 port, u32 pkt_len, u32 *desc)
 	u32 opcode = (w1 >> 28) & 7;
 	u32 udf;
 
-	if (opcode == 1)
+	if (opcode == 1) {
+		NDBG_CNT(NC_TUN_FRAG);
 		return tunnel_fragment(port, pkt_len, desc);
-	if (opcode == 2)
+	}
+	if (opcode == 2) {
+		NDBG_CNT(NC_TUN_REASM);
 		return tunnel_reassemble(port, pkt_len, desc);
+	}
 
 	udf = ((u8 *)desc)[20];
-	if ((u8)(udf - 1) <= 39)
+	if ((u8)(udf - 1) <= 39) {
+		NDBG_CNT(udf <= 20 ? NC_TUN_VXLAN_ENC : NC_TUN_VXLAN_DEC);
 		return tunnel_vxlan(port, pkt_len, desc, udf);
-	if ((u8)(udf - 41) <= 15)
+	}
+	if ((u8)(udf - 41) <= 15) {
+		NDBG_CNT(udf <= 48 ? NC_TUN_SRV6_ENC : NC_TUN_SRV6_END);
 		return tunnel_srv6(port, pkt_len, desc, udf);
-	if ((u8)(udf - 65) <= 3)
+	}
+	if ((u8)(udf - 65) <= 3) {
+		NDBG_CNT(NC_TUN_MAP);
 		return tunnel_map(port, pkt_len, desc, udf, w1 & 0x3FFFF,
 				  ((u16 *)desc)[8]);
+	}
+
+	NDBG_CNT(NC_TUN_INVALID);
+	NDBG_TRACE(NDBG_TUNNEL, 2, udf, w1);
 
 	npu_printf("invalid, hop_flags %d udf %d in %s,%d\n",
 		   opcode, udf, "npu_tunnel_offload_common_op", 187);

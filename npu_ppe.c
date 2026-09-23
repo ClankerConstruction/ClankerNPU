@@ -954,6 +954,9 @@ int hwnat_mail_dispatch(u32 base, u32 cnt)
 		break;
 	}
 
+	NDBG_CNT(NC_PPE_MAILS);
+	NDBG_SET(NC_PPE_LAST, func_id << 8 | (result & 0xFF));
+	NDBG_TRACE(NDBG_PPE, func_id, result, *(volatile u32 *)(addr + 8));
 	if (result == 0)
 		npu_printf("hwnat_mail_set_wait_operation fail !\n");
 	return result;

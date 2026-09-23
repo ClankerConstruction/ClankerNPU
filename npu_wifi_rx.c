@@ -694,7 +694,9 @@ static void kite_rx_5g(void)
 /* core 1 */
 void __attribute__((noreturn)) kite_core1_loop(void)
 {
+	npu_dbg_loop(NDBG_TAG('K', 'R', 'X', '1'));
 	while (1) {
+		npu_dbg_poll();
 		if (rxd_5g_init_done != 0)
 			goto rx_5g;
 #if MAX_CORE_NUM > 2
@@ -740,9 +742,11 @@ static void __attribute__((noreturn)) kite_pipeline_worker(void)
 
 	npu_printf("[NPU1]  %s...\n", "npu_offload_5G_2");
 	while (rxd_5g_init_done == 0)
-		;
+		npu_dbg_poll();
 
+	npu_dbg_loop(NDBG_TAG('K', 'P', 'I', 'P'));
 	while (1) {
+		npu_dbg_poll();
 		slot = (volatile u32 *)(wifi_pipeline_base + ridx * 8);
 		id = (s32)*slot;
 		if (id == -1)
@@ -765,8 +769,11 @@ static void __attribute__((noreturn)) kite_pipeline_worker(void)
 /* core 2, after the timer ISR */
 void __attribute__((noreturn)) kite_core2_loop(void)
 {
-	while (!(kite_fast_flag() & 1))
+	npu_dbg_loop(NDBG_TAG('K', 'R', 'X', '2'));
+	while (!(kite_fast_flag() & 1)) {
+		npu_dbg_poll();
 		kite_core2_rx_2g();
+	}
 	kite_pipeline_worker();
 }
 #endif
@@ -813,6 +820,5 @@ void wifi_bridge_init(void)
 /* AN7581 core 5 has nothing to do */
 void __attribute__((noreturn)) wifi_bridge_loop(void)
 {
-	while (1)
-		;
+	npu_dbg_idle();
 }

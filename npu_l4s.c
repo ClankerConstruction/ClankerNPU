@@ -144,9 +144,12 @@ void l4s_ecn_process(u32 port)
 				l4s_qlen = 0;
 			}
 		}
+		NDBG_CNT(NC_L4S_PKTS);
+		NDBG_SET(NC_L4S_QLEN, l4s_qlen);
 		if (l4s_qlen > l4s_qlen_thresh) {
 			l4s_ecn_mark((u8 *)d + 32);
 			l4s_mark_count++;
+			NDBG_CNT(NC_L4S_MARKS);
 		}
 
 		while (credits == 0) {

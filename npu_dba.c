@@ -485,6 +485,8 @@ int dba_mail_handler(u32 base, u32 cnt)
 						 NPU_ADDR_MASK);
 
 	(void)cnt;
+	NDBG_CNT(NC_DBA_MAILS);
+	NDBG_TRACE(NDBG_DBA, m->func_type, base, 0);
 
 	switch (m->func_type) {
 	case DBA_SET_WAIT:
@@ -2130,10 +2132,13 @@ void core5_dba_main(void)
 
 	dba_cfg_init();
 
+	npu_dbg_loop(NDBG_TAG('D', 'B', 'A', '5'));
 	while (1) {
+		npu_dbg_poll();
 		if (!(fttr_rd(FTTR_INT_STS) & 3))
 			continue;
 		fttr_wr(FTTR_INT_STS, 3);
+		NDBG_CNT(NC_DBA_FRAMES);
 		dba_frame_handler();
 	}
 }
