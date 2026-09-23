@@ -126,18 +126,29 @@ struct dba_tcont_cfg {
 struct dba_alloc {
 	struct dba_tcont_cfg cfg;
 	u8 ring_idx;		/* 3:0 read slot, 7:4 write slot */
-	u8 f21;
-	u8 f22;
-	s8 f23;
+	u8 step_cnt;		/* states 1, 2 and 5 */
+	u8 grow_cnt;		/* state 4 */
+	s8 hold_cnt;		/* state 3 */
 	struct dba_rpt ring[2];
-	s32 cur_bw;
-	u16 f40;
-	u16 f42;
-	u32 f44;
-	u8 state;
-	u8 f49;
-	u8 f50;
-	u8 f51;
+	s32 cur_bw;		/* grant for the next map */
+	u16 ref_dbru;
+	u16 pad;
+	u32 idle_avg;		/* running average of unused grant */
+	u8 state;		/* 2:0 state, 5:3 group, bit 6 last step went down */
+	u8 pad1[3];
+};
+
+/* upstream budget of one map, filled by dba_budget_calc */
+struct dba_budget {
+	u16 total;
+	u16 pad;
+	s32 remain;
+	u16 cnt;
+	u16 share;
+	u32 demand;
+	u32 over_share;
+	s32 left;
+	u32 over_assure;
 };
 
 /* alloc id <-> index layout per FTTR map mode */
@@ -171,6 +182,7 @@ static u32 npu_fttr_base;
 
 static u32 dba_frame_cnt;
 static u8 dba_mode;
+static u8 dba_bwmap_left;
 static u32 dba_non_idle_cnt1;
 static u32 dba_non_idle_cnt2;
 static u32 dba_sw_bwmap_test;
@@ -183,6 +195,9 @@ static u32 dba_print_no_idle_en;
 static u32 dba_clean_no_idle;
 static u32 dba_no_idle_dump;
 static u32 dba_rpt_dump;
+
+static u8 dba_act_onus;
+static u8 dba_dual_frame;
 
 
 /* ================================================================
@@ -532,6 +547,551 @@ static void dba_rpt_drain(void)
 
 
 /* ================================================================
+ * Bandwidth budget
+ * ================================================================ */
+
+/* upstream bytes left once fixed and assured grants are taken */
+static int dba_budget_calc(struct dba_alloc *ctx, struct dba_budget *b)
+{
+	u8 mode = dba_tcont.mode;
+	const struct dba_map *m = &dba_map_tbl[mode > 3 ? 3 : mode];
+	u8 olt = dba_tcont.olt_mode;
+	u8 dual = dba_dual_frame;
+	u8 n_full = 0, n_act = 0;
+	s32 sum = 0;
+	struct dba_alloc *a;
+	u16 onu, ovh;
+	int first;
+	u8 t;
+
+	for (onu = 0; onu < m->n_onu; onu++) {
+		if ((ctx[onu].cfg.flags & 3) == 3)
+			n_full++;
+		first = 1;
+		for (t = 0; t < m->n_tc; t++) {
+			a = &ctx[(u16)((s16)onu | t << m->idx_shift)];
+			if (!(a->cfg.flags & 1))
+				continue;
+			if (first)
+				n_act++;
+			first = 0;
+			switch (a->cfg.dba_type) {
+			case 1:
+				sum += a->cfg.fix_bw;
+				break;
+			case 2:
+				sum += a->cfg.assure_bw;
+				break;
+			case 3:
+			case 5:
+				b->cnt++;
+				sum += a->cfg.assure_bw;
+				break;
+			case 4:
+				b->cnt++;
+				break;
+			}
+		}
+	}
+
+	if (olt) {
+		ovh = (u16)dba_burst_ovh;
+	} else {
+		ovh = n_full ? 64 : 46;
+		dba_burst_ovh = ovh;
+	}
+	if (dual)
+		b->total = (u16)(0x97E0 - ovh * dba_act_onus);
+	else
+		b->total = (u16)(0x4B8C - n_full * 36 - (u16)(ovh * n_act));
+	b->remain = b->total - sum;
+	if (b->remain > 0 && b->cnt)
+		b->share = b->remain / b->cnt;
+	else
+		b->share = 0;
+	return 0;
+}
+
+
+/* ================================================================
+ * Per alloc id grants
+ * ================================================================ */
+
+/* insertion step: sink list[start + n - 1] below larger grants */
+static int dba_sort_bw(struct dba_alloc *ctx, u16 *list, u32 n, int start)
+{
+	u16 last;
+	s32 key;
+	int i;
+
+	if (n <= 1)
+		return 0;
+	last = list[start + n - 1];
+	key = (u16)ctx[last].cur_bw;
+	for (i = start + n - 2; i >= start; i--) {
+		if (key >= ctx[list[i]].cur_bw)
+			break;
+		list[i + 1] = list[i];
+		list[i] = last;
+	}
+	return 0;
+}
+
+#define DBA_ST_MASK	0x07	/* state bits 2:0 */
+#define DBA_ST_DEC	0x40	/* last step decreased cur_bw */
+#define DBA_GRP_MASK	0x38	/* bits 5:3: 8 above share, 0x10 above assured */
+#define DBA_GRP_SHARE	0x08
+#define DBA_GRP_ASSURE	0x10
+
+static inline void dba_set_state(struct dba_alloc *a, u8 st)
+{
+	a->state = (a->state & ~DBA_ST_MASK) | st;
+}
+
+/* adapt a->cur_bw from the read and write report slots */
+static int dba_alloc_adapt(struct dba_alloc *a)
+{
+	u32 w = a->ring_idx;
+	u8 dual = dba_dual_frame;
+	u32 wr = (w >> 4) & 15;
+	u32 rd = w & 15;
+	struct dba_rpt *cur = &a->ring[wr];
+	struct dba_rpt *prev = &a->ring[rd];
+	u16 gap_r = 0, gap_w = 0, mx, mid;
+	u32 need, acc, avg, d, lim, mode;
+	s32 bw;
+	u8 type;
+
+	if (dual) {
+		int ni = cur->non_idle + prev->non_idle;
+		int bwb = cur->bwmap_byte + prev->bwmap_byte;
+
+		if (!prev->dbru && ni < bwb)
+			gap_r = bwb - ni;
+		if (!cur->dbru && ni < bwb)
+			gap_w = bwb - ni;
+		need = cur->dbru * 48;
+		if (ni > 7 || (a->state & DBA_ST_MASK) != 3)
+			acc = a->idle_avg + gap_r + gap_w;
+		else
+			acc = a->idle_avg + (gap_r >> 3) + (u16)(gap_w >> 3);
+	} else {
+		if (rd == wr) {
+			if (!a->cur_bw)
+				a->cur_bw = 2;
+			return 0;
+		}
+		need = cur->dbru * 48;
+		if (!prev->dbru && prev->non_idle < prev->bwmap_byte)
+			gap_r = prev->bwmap_byte - prev->non_idle;
+		if (!cur->dbru && cur->non_idle < cur->bwmap_byte)
+			gap_w = cur->bwmap_byte - cur->non_idle;
+		if (prev->non_idle > 7 || (a->state & DBA_ST_MASK) != 3)
+			a->idle_avg += gap_r;
+		else
+			a->idle_avg += gap_r >> 3;
+		if (cur->non_idle > 7 || (a->state & DBA_ST_MASK) != 3)
+			acc = a->idle_avg + gap_w;
+		else
+			acc = a->idle_avg + (u16)(gap_w >> 3);
+	}
+	avg = acc >> 1;
+	a->idle_avg = avg;
+
+	switch (a->state & DBA_ST_MASK) {
+	case 1:
+		bw = a->cur_bw;
+		if (gap_w | gap_r) {
+			a->step_cnt = 2;
+			dba_set_state(a, 2);
+			d = (avg << 1) >> 3;
+			if (dba_tcont.olt_mode)
+				d = (avg << 1) >> 4;
+			bw -= d;
+			a->cur_bw = bw;
+			a->state |= DBA_ST_DEC;
+			break;
+		}
+		mx = prev->dbru;
+		if (mx < cur->dbru)
+			mx = cur->dbru;
+		if (a->ref_dbru < mx) {
+			d = (u32)(mx - a->ref_dbru) * 48;
+			a->ref_dbru = mx;
+			a->step_cnt = 0;
+			d = dba_tcont.olt_mode ? d >> 2 : d >> 1;
+			bw += d;
+			a->cur_bw = bw;
+			break;
+		}
+		lim = bw * 2;
+		if ((s32)lim < 2000)
+			lim = 2000;
+		if (need + lim >= (u32)(bw * 10)) {
+			d = bw;
+			if (bw < 1000)
+				d = 1000;
+			a->step_cnt = 0;
+			if (dba_tcont.olt_mode)
+				d >>= 1;
+			bw += d;
+			a->cur_bw = bw;
+			break;
+		}
+		if (cur->dbru < prev->dbru) {
+			d = prev->dbru - cur->dbru;
+			if (cur->dbru < d)
+				d -= cur->dbru;
+			d = (d * 48) >> 3;
+			a->step_cnt = 2;
+			if (dba_tcont.olt_mode)
+				d >>= 1;
+			bw -= d;
+			a->cur_bw = bw;
+		}
+		dba_set_state(a, 2);
+		a->ref_dbru = mx;
+		break;
+	case 2:
+		a->step_cnt += 2;
+		mid = (cur->dbru + prev->dbru) >> 1;
+		if (acc > 1)
+			a->state |= DBA_ST_DEC;
+		if (a->ref_dbru < mid || a->step_cnt > 15) {
+			dba_set_state(a, 3);
+			a->ref_dbru = cur->dbru;
+			a->idle_avg = 0;
+			a->step_cnt = 0;
+			a->grow_cnt = 0;
+			a->hold_cnt = 0;
+			d = 0;
+		} else if (a->state & DBA_ST_DEC) {
+			d = (avg << 1) / a->step_cnt;
+		} else if (cur->dbru >= prev->dbru) {
+			d = (u32)(a->ref_dbru - mid) * 48;
+			d = d > 127 ? d >> 3 : 16;
+			a->ref_dbru = mid;
+		} else {
+			d = prev->dbru - cur->dbru;
+			if (cur->dbru < d)
+				d -= cur->dbru;
+			d = (d * 48) >> 3;
+			a->ref_dbru = mid;
+		}
+		bw = a->cur_bw;
+		if (dba_tcont.olt_mode)
+			bw -= d >> 1;
+		else
+			bw -= d;
+		a->cur_bw = bw;
+		break;
+	case 3:
+		mx = cur->dbru;
+		if (mx < prev->dbru)
+			mx = prev->dbru;
+		bw = a->cur_bw;
+		if (bw * 10 < mx * 48) {
+			a->grow_cnt = 2;
+			dba_set_state(a, 4);
+			a->ref_dbru = 0;
+		} else {
+			a->grow_cnt = 0;
+		}
+		if ((a->state & DBA_ST_MASK) == 3 && gap_w > 16 && gap_r > 16) {
+			dba_set_state(a, 5);
+			a->step_cnt = 2;
+		}
+		if (a->hold_cnt < 0)
+			break;
+		a->hold_cnt += 2;
+		if (a->state & DBA_ST_DEC) {
+			if (acc <= 1)
+				break;
+		} else {
+			if (mx) {
+				lim = bw * 2;
+				if ((s32)lim < 2000)
+					lim = 2000;
+				if (bw * 10 < (s32)(mx * 48 + lim))
+					break;
+			}
+			if (acc <= 1) {
+				if (mx < a->ref_dbru) {
+					bw -= dba_tcont.olt_mode ? 8 : 16;
+					a->cur_bw = bw;
+				}
+				break;
+			}
+		}
+		d = avg;
+		if (d > 16)
+			d = 16;
+		if (dba_tcont.olt_mode)
+			d >>= 1;
+		bw -= d;
+		a->cur_bw = bw;
+		a->idle_avg = 0;
+		a->state |= DBA_ST_DEC;
+		break;
+	case 4:
+		bw = a->cur_bw;
+		if (bw * 10 >= cur->dbru * 48) {
+			if (cur->dbru <= 0x3ffe) {
+				a->grow_cnt = 0;
+				dba_set_state(a, 3);
+				break;
+			}
+			d = 0;
+		} else {
+			a->grow_cnt += 2;
+			if (a->grow_cnt <= 7)
+				break;
+			d = cur->dbru * 48 - bw * 10;
+			if (a->ref_dbru) {
+				if (a->ref_dbru < cur->dbru)
+					d = (cur->dbru - a->ref_dbru) * 48;
+				else
+					d = bw / 10 + 16;
+			}
+			lim = bw * 2;
+			if ((s32)lim < 2000)
+				lim = 2000;
+			if (lim + bw * 2 < d) {
+				d >>= 3;
+				dba_set_state(a, 1);
+			} else {
+				d >>= 3;
+				if ((u32)(bw / 10 + 16) < d)
+					d = bw / 10 + 16;
+			}
+			d = avg < d ? d - avg : 0;
+		}
+		a->idle_avg = 0;
+		if (dba_tcont.olt_mode)
+			d >>= 1;
+		bw += d;
+		a->cur_bw = bw;
+		a->step_cnt = 0;
+		a->state &= ~DBA_ST_DEC;
+		a->grow_cnt = 0;
+		a->hold_cnt = 0;
+		a->ref_dbru = cur->dbru;
+		break;
+	case 5:
+		bw = a->cur_bw;
+		if (gap_w <= 16 || gap_r <= 16) {
+			a->step_cnt = 0;
+			dba_set_state(a, 3);
+			break;
+		}
+		a->step_cnt += 2;
+		if ((a->state & DBA_ST_MASK) != 5 || a->step_cnt <= 7)
+			break;
+		d = bw / 10 + 16;
+		if (d * 2 < (acc >> 4)) {
+			dba_set_state(a, 2);
+			a->step_cnt = 0;
+		} else if ((acc >> 4) < d) {
+			d = acc >> 4;
+		}
+		if (dba_tcont.olt_mode)
+			d >>= 1;
+		bw -= d;
+		a->cur_bw = bw;
+		mx = cur->dbru;
+		if (prev->dbru < mx)
+			mx = prev->dbru;
+		a->ref_dbru = mx;
+		a->idle_avg = 0;
+		a->grow_cnt = 0;
+		a->hold_cnt = 0;
+		a->state |= DBA_ST_DEC;
+		break;
+	default:
+		dba_set_state(a, 1);
+		bw = need >> 1;
+		if (dba_tcont.olt_mode)
+			bw = need >> 2;
+		a->cur_bw = bw;
+		a->ref_dbru = cur->dbru;
+		break;
+	}
+
+	/* clamp to the T-CONT contract */
+	if (bw <= 8)
+		a->state &= ~DBA_ST_MASK;
+	if (bw < 2)
+		bw = 2;
+	type = a->cfg.dba_type;
+	a->cur_bw = bw;
+	if ((u8)(type - 3) <= 2) {
+		if (dual) {
+			if ((u32)bw >= a->cfg.max_bw * 2)
+				bw = a->cfg.max_bw * 2;
+		} else if ((u32)bw > a->cfg.max_bw) {
+			bw = a->cfg.max_bw;
+		}
+		a->cur_bw = bw;
+		if (type == 5 && (u32)bw < a->cfg.fix_bw)
+			a->cur_bw = a->cfg.fix_bw;
+	} else if (type == 2) {
+		if ((u32)bw >= a->cfg.assure_bw)
+			bw = a->cfg.assure_bw;
+		a->cur_bw = bw;
+	}
+
+	/* report consumed: read slot catches up with write slot */
+	a->ring_idx = (a->ring_idx & 0xf0) | wr;
+	mode = (a->cfg.flags >> 2) & 3;
+	if (mode == 0 || mode == 1 || mode == 2) {
+		if (a->cfg.alloc_id & ~31)
+			return 0;
+	} else if (a->cfg.alloc_id & ~63) {
+		return 0;
+	}
+	bw = a->cur_bw;
+	if (dual) {
+		if (bw <= 14)
+			a->cur_bw = 15;
+		else if (bw > 192)
+			a->cur_bw = 192;
+	} else if (bw < 27) {
+		a->cur_bw = 27;
+	}
+	return 0;
+}
+
+/* per-alloc demand into b, then fair share of the rest */
+static int dba_bw_request(struct dba_alloc *ctx, struct dba_budget *b)
+{
+	u16 list[128];
+	struct dba_alloc *a = ctx, *p;
+	s16 n = 0, n_over = 0;
+	u16 cnt, share;
+	s32 bw, rem;
+	int i, k, j, first;
+	u8 st;
+
+	npu_memset(list, 0, sizeof(list));
+	dba_bwmap_left = 0;
+	for (i = 0; i < 128; i++, a++) {
+		if (!(a->cfg.flags & 1))
+			continue;
+		dba_bwmap_left++;
+		if (a->cfg.dba_type != 1)
+			dba_alloc_adapt(a);
+		switch (a->cfg.dba_type) {
+		case 1:
+			bw = a->cfg.fix_bw;
+			if (dba_dual_frame)
+				bw <<= 1;
+			a->cur_bw = bw;
+			break;
+		case 2:
+			bw = a->cur_bw;
+			break;
+		case 3:
+		case 5:
+			bw = a->cur_bw;
+			if ((u32)bw <= a->cfg.assure_bw || bw <= b->share)
+				break;
+			a->state = (a->state & ~DBA_GRP_MASK) | DBA_GRP_SHARE;
+			list[n] = i;
+			n++;
+			dba_sort_bw(ctx, list, (u16)n, 0);
+			bw = a->cur_bw;
+			b->over_share += bw;
+			if (b->share >= a->cfg.assure_bw)
+				break;
+			b->over_assure += bw - a->cfg.assure_bw;
+			n_over++;
+			a->state = (a->state & ~DBA_GRP_MASK) | DBA_GRP_ASSURE;
+			break;
+		case 4:
+			bw = a->cur_bw;
+			if (bw <= b->share) {
+				a->state &= ~DBA_GRP_MASK;
+				break;
+			}
+			a->state = (a->state & ~DBA_GRP_MASK) | DBA_GRP_SHARE;
+			list[n] = i;
+			n++;
+			dba_sort_bw(ctx, list, (u16)n, 0);
+			bw = a->cur_bw;
+			b->over_share += bw;
+			break;
+		default:
+			a->cur_bw = 2;
+			bw = 2;
+			break;
+		}
+		b->demand += bw;
+	}
+
+	if (b->demand <= b->total)
+		return 0;
+	rem = b->total - b->demand + b->over_share;
+	b->left = rem;
+	if (rem <= 0) {
+		for (k = 0; k < n; k++)
+			ctx[list[k]].cur_bw = 0;
+		return 0;
+	}
+
+	/* list is sorted by cur_bw, smallest first */
+	cnt = n;
+	if (!cnt)
+		return 0;
+	first = 0;
+	for (k = 0; k < cnt; ) {
+		if (rem < 0)
+			rem = 0;
+		share = n > 0 ? rem / n : rem;
+		p = &ctx[(u8)list[k]];
+		st = p->state & DBA_GRP_MASK;
+		if (share < p->cur_bw && !first) {
+			/* first overflow: assured-only entries drop back */
+			for (j = k; j < cnt; j++) {
+				struct dba_alloc *q = &ctx[(u8)list[j]];
+
+				if ((q->state & DBA_GRP_MASK) != DBA_GRP_ASSURE)
+					continue;
+				if (q->cfg.assure_bw >= share)
+					continue;
+				n_over--;
+				b->over_assure -= (u16)(q->cur_bw - q->cfg.assure_bw);
+				q->state = (q->state & ~DBA_GRP_MASK) | DBA_GRP_SHARE;
+			}
+			n -= n_over > 0 ? n_over : 0;
+			rem += b->over_assure;
+			first = 1;
+			continue;
+		}
+		if (first) {
+			if (st == DBA_GRP_ASSURE) {
+				bw = p->cfg.assure_bw;
+			} else {
+				n--;
+				bw = share;
+			}
+			p->cur_bw = bw;
+			rem -= bw;
+		} else {
+			if (st == DBA_GRP_ASSURE) {
+				b->over_assure -= (u16)(p->cur_bw - p->cfg.assure_bw);
+				n_over--;
+			}
+			n--;
+			rem -= p->cur_bw;
+		}
+		k++;
+	}
+	b->left = rem;
+	return 0;
+}
+
+
+/* ================================================================
  * Frame handler
  * ================================================================ */
 
@@ -575,6 +1135,8 @@ static void dba_frame_stats(void)
 /* run once per FTTR frame interrupt */
 static void dba_frame_handler(void)
 {
+	struct dba_budget bud = { 0 };
+
 	(void)csr_read(mcycle);
 	if (dba_get_timer_en) {
 		dba_frame_stats();
@@ -590,6 +1152,11 @@ static void dba_frame_handler(void)
 
 	if (!dba_log_en && dba_rpt_tick % 16000 == 0)
 		dba_log_en = 1;
+
+	if ((dba_frame_cnt & 1) && dba_do_timer_en) {
+		dba_budget_calc(dba_ctx, &bud);
+		dba_bw_request(dba_ctx, &bud);
+	}
 	dba_frame_cnt++;
 }
 
