@@ -538,17 +538,9 @@ static int eagle_rxdmad_handle(u8 *chaining)
 		REG32(buf) = info;
 
 		if (err == 0 && wifi_force_to_cpu == 0 && (dw2 & 0x80) == 0) {
-#ifdef EAGLE_HW_FASTPATH
-			/* dst_sel 1 means the WiFi chip has already reordered
-			 * the frame and says where its ethernet header starts,
-			 * so the NPU may put it on the wired side itself. That
-			 * needs a PPE that knows to punt an unmatched flow to
-			 * the CPU; without one a DHCP discover leaves on the
-			 * LAN port instead of reaching the host. The info word
-			 * carries hw_rro and eth_hdr_ofst either way, which is
-			 * what the driver's own rx path uses to strip the
-			 * header, so handing these to the host is correct, just
-			 * not offloaded. */
+			/* dst_sel 1: the chip reordered the frame and gives its
+			 * ethernet header offset; send it to the wired side. The
+			 * PPE returns unbound flows via ppe_wifi_bufid_isr. */
 			if (info & 2) {
 				u32 off = (info >> 16) & 0xFE;
 
@@ -560,9 +552,7 @@ static int eagle_rxdmad_handle(u8 *chaining)
 					dbg.rxdrop++;
 					buf_id_return((u16)buf_id);
 				}
-			} else
-#endif
-			if (eagle_pkt_enqueue((u16)buf_id, seg_len, 0, 0,
+			} else if (eagle_pkt_enqueue((u16)buf_id, seg_len, 0, 0,
 						     1, 2, seg_len) != 0) {
 				dbg.rxdrop++;
 				buf_id_return((u16)buf_id);

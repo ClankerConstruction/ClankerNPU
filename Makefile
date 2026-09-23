@@ -15,9 +15,6 @@ MAILTRACE ?= 0
 NPUTX ?= 1
 # 1 reports the datapath counters every two seconds
 NPUDBG ?= 0
-# 1 forwards reordered frames to the wired side instead of the host,
-# which needs a configured PPE
-HWFAST ?= 0
 
 ARCH    := -march=rv32imc_zicsr_zifencei -mabi=ilp32
 CFLAGS  := $(ARCH) -Os -ffunction-sections -fdata-sections \
@@ -25,8 +22,7 @@ CFLAGS  := $(ARCH) -Os -ffunction-sections -fdata-sections \
            -Wall -Wno-unused-function \
            -D$(SOC) -D$(WIFI) $(if $(filter 1,$(MAILTRACE)),-DNPU_MAIL_TRACE) \
            $(if $(filter 0,$(NPUTX)),-DEAGLE_NO_TX_PUSH) \
-           $(if $(filter 1,$(NPUDBG)),-DNPU_DATAPATH_DBG) \
-           $(if $(filter 1,$(HWFAST)),-DEAGLE_HW_FASTPATH)
+           $(if $(filter 1,$(NPUDBG)),-DNPU_DATAPATH_DBG)
 ASFLAGS := $(ARCH) -D$(SOC) -D$(WIFI)
 LIBGCC  := $(shell $(CC) $(ARCH) -print-libgcc-file-name)
 LDFLAGS := -m elf32lriscv -T link.ld -nostdlib --gc-sections --relax \
