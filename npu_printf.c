@@ -193,16 +193,15 @@ static void uart_putc(char c)
 static void uart_puts_raw(const char *s)
 {
 	while (*s) {
-		if (*s == '\n') {
+		uart_putc(*s);
+		if (*s++ == '\n')
 			uart_putc('\r');
-		}
-		uart_putc(*s++);
 	}
 }
 
 static void printf_enable(int enable)
 {
-	npu_printf_prefix = (u32)enable;
+	npu_printf_prefix = enable != 0;
 }
 
 static const char *uart_debug_cmd(char c)
@@ -295,8 +294,10 @@ int npu_printf(const char *fmt, ...)
 	len = npu_vsprintf(printf_buf, fmt, (u32 *)ap);
 	__builtin_va_end(ap);
 
-	/* print core prefix if enabled */
-	if (npu_printf_prefix) {
+	/* "[Cn]" prefix; a cleared flag skips it once */
+	if (!npu_printf_prefix) {
+		npu_printf_prefix = 1;
+	} else {
 		uart_putc('[');
 		uart_putc('C');
 		uart_putc(get_core_char());
