@@ -699,7 +699,7 @@ static int eagle_txdone_poll(void)
 				u32 lo = w & 0x7FFF;
 				u32 hi = (w >> 15) & 0x7FFF;
 
-				if ((s32)w < 0)
+				if ((s32)w < 0 || (w & 0x40000000))
 					continue;
 				if (lo != 0x7FFF) {
 					n++;
@@ -713,16 +713,20 @@ static int eagle_txdone_poll(void)
 				}
 			}
 		} else {
+			/* any other event belongs to the host: pass the
+			 * buffer up and give the slot a fresh one */
 			buf_id = buf_id_alloc_ring();
 			if (buf_id == -1) {
 				npu_printf("txdone alloc buffid fail\n");
 			} else {
 				u16 old = ids[idx];
+				u16 len = (dw1 >> 16) & 0x3FFF;
 
 				ids[idx] = (u16)buf_id;
-				REG32(eagle_buf_uncached((u16)buf_id)) =
-					(8 * ((dw1 >> 16) & 0x3FFF)) | 0x8000000;
-				if (old != 0)
+				REG32(eagle_buf_uncached(old)) =
+					(8 * len) | 0x8000000;
+				if (eagle_pkt_enqueue(old, len, 0, 0, 0, 2,
+						      len) != 0)
 					buf_id_return(old);
 			}
 		}
