@@ -225,7 +225,7 @@ void tdma_tx_init(void)
 	/* AN7552-specific flow control */
 	if (REG32(CHIP_ID_REG) >> 16 == 15) {
 		npu_printf("set AN7552 flow ctrl\n");
-		REG32(TDMA_FC_CFG0) = 0x80004004;
+		REG32(TDMA_FC_CFG0) = 0x80048004;
 		REG32(AN7552_FC_REG) = 15401194;
 	} else {
 		REG32(TDMA_FC_CFG2) = 3;
