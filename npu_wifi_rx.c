@@ -13,6 +13,7 @@
 #include "npu_internal.h"
 #include "npu_wifi.h"
 
+#ifdef WIFI_KITE
 
 /* ================================================================
  * WiFi packet classifier
@@ -1067,3 +1068,14 @@ void __attribute__((noreturn)) wifi_pipeline_worker(void)
 		;
 #endif
 }
+
+#else /* !WIFI_KITE */
+
+/* AN7581 core 5: nothing to do without a kite chip */
+void __attribute__((noreturn)) wifi_bridge_loop(void)
+{
+	while (1)
+		;
+}
+
+#endif /* WIFI_KITE */

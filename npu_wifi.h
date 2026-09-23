@@ -105,11 +105,6 @@ int host_ring_submit(u32 buf_addr, u16 pkt_len, u32 band,
  * npu_wifi_fwd.c
  * ================================================================ */
 
-extern u16 rxnode_widx_2g;
-extern u16 rxnode_widx_5g;
-extern u16 pinode_widx_2g;
-extern u16 pinode_widx_5g;
-
 extern u32 stats_bytes_2g[32];
 extern u32 stats_pkts_2g[32];
 extern u32 stats_bytes_5g[32];
@@ -119,8 +114,46 @@ int pkt_forward(u32 buf_id, u32 pkt_len, s16 wcid, u8 amsdu,
 		u32 band, u8 fwd_type, u32 orig_len,
 		int classify_result, u8 tunnel);
 #ifdef WIFI_KITE
+void wifi_pkt_queue_init(u32 band);
 void pinode_drain(u32 band);
 void rxnode_drain(u32 band);
+int pkt_forward_bme(s32 buf_id, u32 wcid, u32 info);
+
+/* bump a counter of the band's debug block when counters are on */
+static inline void wifi_cnt_inc(u32 band, u32 off)
+{
+	u32 base;
+
+	if (!(wifi_debug_flags & 4))
+		return;
+	base = (band == 1) ? counter_base_5g :
+	       (band != 0) ? counter_base_tri : counter_base_2g;
+	if (base)
+		(*(u32 *)(base + off))++;
+}
+
+/* NPU view of a buffer in the host packet buffer */
+static inline u32 wifi_pkt_va(u32 buf_id)
+{
+	return ((wifi_pkt_buf_addr & 0x3FFFFFFF) | 0x40000000) +
+	       (buf_id << 12);
+}
+
+/* bus address of a buffer, for the WiFi DMA and the host adaptor */
+static inline u32 wifi_pkt_dma(u32 buf_id)
+{
+	return (((buf_id << 12) + wifi_pkt_buf_addr) & 0x3FFFFFFF) |
+	       0x80000000;
+}
+
+/* 64-bit counter kept as a lo/hi pair */
+static inline void wifi_u64_add(u32 *c, u32 v)
+{
+	u32 lo = c[0];
+
+	c[0] = lo + v;
+	c[1] += c[0] < lo;
+}
 #endif
 
 /* ================================================================
@@ -155,10 +188,6 @@ extern u32 wifi_pipeline_base;
  * ================================================================ */
 
 void wifi_queue_mutex_init(void);
-void wifi_pkt_queue_init(u32 band);
-void wifi_ba_node_init(void);
-void wifi_queue_mutex_init(void);
-void wifi_pkt_queue_init(u32 band);
 void wifi_ba_node_init(void);
 void __attribute__((noinline)) wifi_npu_init(u32 band);
 void __attribute__((noinline)) npu_set_pcie_base(u32 addr, u32 band);

@@ -459,14 +459,6 @@ extern u32 wifi_pkt_buf_addr;
 extern u32 wifi_dram_ba_node_addr;
 extern u32 wifi_pcie_desc_base;
 
-extern u16 pkt_queue_widx_2g;
-extern u16 pkt_queue_widx_5g;
-extern u32 pkt_queue_base_2g;
-extern u32 pkt_queue_base_5g;
-extern u16 pkt_queue_rx_widx_2g;
-extern u16 pkt_queue_rx_ridx_2g;
-extern u32 pkt_queue_rx_base_2g;
-extern u32 pkt_queue_rx_base_5g;
 
 extern u32 queue_mutex_2g[2];
 extern u32 queue_mutex_5g[2];

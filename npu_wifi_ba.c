@@ -11,6 +11,7 @@
 #include "npu_internal.h"
 #include "npu_wifi.h"
 
+#ifdef WIFI_KITE
 
 /* ================================================================
  * Reorder node management
@@ -742,3 +743,5 @@ void ba_flush_all(u32 band)
 		}
 	}
 }
+
+#endif /* WIFI_KITE */

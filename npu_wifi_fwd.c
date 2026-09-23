@@ -1,167 +1,21 @@
 /*
  * AN75XX NPU firmware - packet forwarding rings (kite)
  *
- * piNode and rxNode hand a frame from the core that received it to the
- * core that gives it to the host. A frame whose length the NPU changed
- * takes the 16-byte piNode path, one it did not takes the 12-byte
- * rxNode path.
+ * piNode and rxNode hand a frame from the core that received it to
+ * core 3, which gives it to the host. A frame that fits one buffer takes
+ * the 16-byte piNode ring; a segment of a longer frame takes the 12-byte
+ * rxNode ring, where core 3 puts the segments back together.
  */
 
 #include "npu_internal.h"
 #include "npu_wifi.h"
 
 
-/* ================================================================
- * Packet node access (piNode / rxNode descriptors)
- *
- * piNode: 16-byte descriptor for packet info
- * rxNode: 12-byte descriptor for RX ring state
- * ================================================================ */
-
-static u32 pinode_base_2g;
-static u32 pinode_base_5g;
-static u32 rxnode_base_2g;
-static u32 rxnode_base_5g;
-
-static u32 get_pinode(u32 idx, u32 band)
-{
-	if (band != 0)
-		return pinode_base_5g + idx * 16;
-	return pinode_base_2g + idx * 16;
-}
-
-static u32 get_rxnode(u32 idx, u32 band)
-{
-	if (band != 0)
-		return rxnode_base_5g + idx * 12;
-	return rxnode_base_2g + idx * 12;
-}
-
-/* ================================================================
- * Packet forwarding engine
- *
- * Enqueues packets to piNode/rxNode rings for core-to-core handoff.
- * Per-band byte/packet statistics updated inline.
- * ================================================================ */
-
-/* per-band ring write indices */
-u16 rxnode_widx_2g;
-u16 rxnode_widx_5g;
-u16 pinode_widx_2g;
-u16 pinode_widx_5g;
-
-/* per-band ring read indices (drain side, core3) */
-static u16 rxnode_ridx_2g;
-static u16 rxnode_ridx_5g;
-static u16 pinode_ridx_2g;
-static u16 pinode_ridx_5g;
-static u16 rxnode_retry_limit;
-
-/* per-band per-queue stats: 16 queues x {u64 bytes, u64 pkts} */
+/* per-band per-queue stats: 16 queues x u64 */
 u32 stats_bytes_2g[32];
 u32 stats_pkts_2g[32];
 u32 stats_bytes_5g[32];
 u32 stats_pkts_5g[32];
-
-static u32 fwd_mutex[2];
-
-int pkt_forward(u32 buf_id, u32 pkt_len, s16 wcid, u8 amsdu,
-		       u32 band, u8 fwd_type, u32 orig_len,
-		       int classify_result, u8 tunnel)
-{
-	u32 node_base, widx, *node;
-	u32 pkt_info_addr;
-	u32 queue_id;
-
-	if (orig_len != pkt_len) {
-		/* different original length: use piNode path */
-		hw_mutex_lock(fwd_mutex);
-
-		if (band != 0) {
-			widx = pinode_widx_5g;
-			node_base = pinode_base_5g + widx * 16;
-		} else {
-			widx = pinode_widx_2g;
-			node_base = pinode_base_2g + widx * 16;
-		}
-
-		node = (u32 *)node_base;
-		if (node[2] & 1) {
-			/* ring full */
-			hw_mutex_unlock(fwd_mutex);
-			return 1;
-		}
-
-		*(u8 *)(node_base + 12) = (classify_result == -2);
-		*(u16 *)(node_base + 6) = (u16)pkt_len;
-		*(u16 *)(node_base + 8) = (u16)orig_len;
-		node[0] = buf_id;
-		*(u16 *)(node_base + 4) = wcid;
-		*(u8 *)(node_base + 11) = amsdu;
-		*(u8 *)(node_base + 10) = fwd_type | 1;
-
-		if (band != 0) {
-			widx++;
-			pinode_widx_5g = (widx != 512) ? widx : 0;
-		} else {
-			widx++;
-			pinode_widx_2g = (widx != 256) ? widx : 0;
-		}
-		hw_mutex_unlock(fwd_mutex);
-	} else {
-		/* same length: use rxNode path */
-		if (band != 0) {
-			widx = rxnode_widx_5g;
-			node_base = rxnode_base_5g + widx * 12;
-		} else {
-			widx = rxnode_widx_2g;
-			node_base = rxnode_base_2g + widx * 12;
-		}
-
-		if (*(u8 *)(node_base + 8) & 1)
-			return 1;
-
-		*(u16 *)(node_base + 4) = (u16)pkt_len;
-		*(u16 *)(node_base + 6) = (u16)orig_len;
-		*(u32 *)node_base = buf_id;
-		*(u8 *)(node_base + 8) = fwd_type | 1;
-
-		widx++;
-		if (band != 0)
-			rxnode_widx_5g = (widx & 0xFFFF) != 128 ? widx : 0;
-		else
-			rxnode_widx_2g = (widx & 0xFFFF) != 128 ? widx : 0;
-	}
-
-	/* per-queue byte/packet stats */
-	pkt_info_addr = (sram_buf_pad[0] & 0x3FFFFFFF) | 0x40000000;
-	pkt_info_addr += buf_id << 12;
-	queue_id = REG32(pkt_info_addr + 0x88) & 0x3F;
-	if (queue_id & 0x30)
-		queue_id = (u8)(queue_id - 16);
-
-	if (queue_id <= 15 && tunnel == 0) {
-		u32 adj_len = (orig_len - 98) & 0xFFFF;
-
-		if (band == 1) {
-			stats_bytes_5g[queue_id * 2] += adj_len;
-			stats_pkts_5g[queue_id * 2]++;
-		} else {
-			stats_bytes_2g[queue_id * 2] += adj_len;
-			stats_pkts_2g[queue_id * 2]++;
-		}
-	}
-
-	return 0;
-}
-
-/* ================================================================
- * Host ring drain functions (kite only)
- *
- * pinode_drain: reads 16B piNode entries, submits to host ring
- * rxnode_drain: reads 12B rxNode entries, group/scatter logic
- * Both run on core3 in the drain loop.
- * ================================================================ */
 
 #ifdef WIFI_KITE
 
@@ -169,12 +23,176 @@ int pkt_forward(u32 buf_id, u32 pkt_len, s16 wcid, u8 amsdu,
 #define PINODE_RING_SIZE_5G  512
 #define RXNODE_RING_SIZE     128
 
+/* ring bases (SRAM types 3/2 and 15/14) and indices */
+static u32 pinode_base_2g;
+static u32 pinode_base_5g;
+static u32 rxnode_base_2g;
+static u32 rxnode_base_5g;
+static u16 pinode_widx_2g;
+static u16 pinode_widx_5g;
+static u16 pinode_ridx_2g;
+static u16 pinode_ridx_5g;
+static u16 rxnode_widx_2g;
+static u16 rxnode_widx_5g;
+static u16 rxnode_ridx_2g;
+static u16 rxnode_ridx_5g;
+
+/* pkt_queue_init, from npu_init */
+void wifi_pkt_queue_init(u32 band)
+{
+	u32 i, count, node;
+
+	if (band != 0) {
+		npu_printf("[NPU]%s  %s...\n", "5G", "pkt_queue_init");
+		if (band != 1)
+			return;
+		pinode_widx_5g = 0;
+		pinode_ridx_5g = 0;
+		pinode_base_5g = sram_buf_alloc(2);
+		rxnode_widx_5g = 0;
+		rxnode_ridx_5g = 0;
+		rxnode_base_5g = sram_buf_alloc(14);
+		count = PINODE_RING_SIZE_5G;
+	} else {
+		npu_printf("[NPU]%s  %s...\n", "2.4", "pkt_queue_init");
+		pinode_widx_2g = 0;
+		pinode_ridx_2g = 0;
+		pinode_base_2g = sram_buf_alloc(3);
+		rxnode_widx_2g = 0;
+		rxnode_ridx_2g = 0;
+		rxnode_base_2g = sram_buf_alloc(15);
+		count = PINODE_RING_SIZE_2G;
+	}
+
+	for (i = 0; i < count; i++) {
+		node = (band ? pinode_base_5g : pinode_base_2g) + i * 16;
+		*(u32 *)node = 0xFFFFFFFF;
+		*(u32 *)(node + 4) = 0;
+		*(u16 *)(node + 8) = 0;
+		*(u8 *)(node + 11) = 0;
+		*(u8 *)(node + 10) = 0;
+	}
+
+	for (i = 0; i < RXNODE_RING_SIZE; i++) {
+		node = (band ? rxnode_base_5g : rxnode_base_2g) + i * 12;
+		*(u32 *)node = 0xFFFFFFFF;
+		*(u32 *)(node + 4) = 0;
+		*(u8 *)(node + 8) = 0;
+	}
+}
+
+/* ================================================================
+ * Packet forwarding engine
+ *
+ * Queues a frame for core 3. Returns 1 when the ring is full.
+ * ================================================================ */
+
+int pkt_forward(u32 buf_id, u32 pkt_len, s16 wcid, u8 amsdu,
+		u32 band, u8 fwd_type, u32 orig_len,
+		int classify_result, u8 tunnel)
+{
+	u32 node, widx, info, q;
+
+	if (orig_len != pkt_len) {
+		/* one segment of a longer frame */
+		if (band != 0) {
+			widx = rxnode_widx_5g;
+			node = rxnode_base_5g + widx * 12;
+		} else {
+			widx = rxnode_widx_2g;
+			node = rxnode_base_2g + widx * 12;
+		}
+		if (*(u8 *)(node + 8) & 1)
+			return 1;
+
+		*(u16 *)(node + 4) = (u16)pkt_len;
+		*(u16 *)(node + 6) = (u16)orig_len;
+		*(u32 *)node = buf_id;
+		*(u8 *)(node + 8) = fwd_type | 1;
+		wifi_cnt_inc(band, 148);
+
+		widx = (widx + 1 != RXNODE_RING_SIZE) ? widx + 1 : 0;
+		if (band != 0)
+			rxnode_widx_5g = widx;
+		else
+			rxnode_widx_2g = widx;
+	} else {
+		/* a whole frame; cores 1 and 2 both fill this ring */
+		hw_mutex_lock(queue_mutex_2g);
+		if (band != 0) {
+			widx = pinode_widx_5g;
+			node = pinode_base_5g + widx * 16;
+		} else {
+			widx = pinode_widx_2g;
+			node = pinode_base_2g + widx * 16;
+		}
+		if (*(u8 *)(node + 10) & 1) {
+			hw_mutex_unlock(queue_mutex_2g);
+			wifi_cnt_inc(band, 28);
+			return 1;
+		}
+
+		*(u8 *)(node + 12) = (classify_result == -2);
+		*(u16 *)(node + 6) = (u16)pkt_len;
+		*(u16 *)(node + 8) = (u16)orig_len;
+		*(u32 *)node = buf_id;
+		*(u16 *)(node + 4) = wcid;
+		*(u8 *)(node + 11) = amsdu;
+		*(u8 *)(node + 10) = fwd_type | 1;
+		wifi_cnt_inc(band, 24);
+
+		widx++;
+		if (band != 0)
+			pinode_widx_5g = (widx != PINODE_RING_SIZE_5G) ? widx : 0;
+		else
+			pinode_widx_2g = (widx != PINODE_RING_SIZE_2G) ? widx : 0;
+		hw_mutex_unlock(queue_mutex_2g);
+	}
+
+	/* per-queue byte/packet stats; errored frames do not count */
+	info = *(u32 *)(wifi_pkt_va(buf_id) + 0x88);
+	if (info & 0x32000000)
+		return 0;
+	q = info & 0x3F;
+	if (info & 0x30)
+		q = (u8)(q - 16);
+	if (q > 15 || tunnel != 0)
+		return 0;
+
+	if (band == 1) {
+		wifi_u64_add(&stats_bytes_5g[q * 2], (orig_len - 98) & 0xFFFF);
+		wifi_u64_add(&stats_pkts_5g[q * 2], 1);
+	} else {
+		wifi_u64_add(&stats_bytes_2g[q * 2], (orig_len - 98) & 0xFFFF);
+		wifi_u64_add(&stats_pkts_2g[q * 2], 1);
+	}
+	return 0;
+}
+
+/* a frame the BME returned: hand it to the host */
+int pkt_forward_bme(s32 buf_id, u32 wcid, u32 info)
+{
+	u32 buf = wifi_pkt_va(buf_id);
+	u16 len = *(u16 *)buf;
+
+	return pkt_forward(buf_id, len, (s16)wcid, (u8)info,
+			   *(u8 *)(buf + 13) >= 36, 2, len, 0, 1);
+}
+
+/* ================================================================
+ * Host ring drains, core 3
+ *
+ * pinode_drain: one whole frame per call
+ * rxnode_drain: the segments of one frame
+ * ================================================================ */
+
 void pinode_drain(u32 band)
 {
 	u16 ridx;
 	u32 *entry;
 	u32 ring_size;
 	s32 buf_id;
+	int ret;
 
 	if (band != 0) {
 		ridx = pinode_ridx_5g;
@@ -187,72 +205,31 @@ void pinode_drain(u32 band)
 	}
 
 	if (!(*(u8 *)((u32)entry + 10) & 1)) {
-		if (!(wifi_debug_flags & 4))
-			return;
-		goto drain_stat;
+		wifi_cnt_inc(band == 1, 20);
+		return;
 	}
 
-	if (wifi_debug_flags & 4) {
-		if (band == 1)
-			(*(u32 *)(counter_base_5g + 36))++;
-		else
-			(*(u32 *)(counter_base_2g + 36))++;
-	}
+	wifi_cnt_inc(band == 1, 36);
 
 	buf_id = (s32)entry[0];
-	if (buf_id >= 0) {
-		if (*(u16 *)((u32)entry + 6) == 0) {
-			if (wifi_debug_flags & 4) {
-				if (band == 1)
-					(*(u32 *)(counter_base_5g + 44))++;
-				else
-					(*(u32 *)(counter_base_2g + 44))++;
-			}
-			goto clear;
-		}
-
-		{
-			u32 buf_addr = ((((u32)buf_id << 12) +
-					wifi_buf_id_base) & 0x3FFFFFFF) |
-				       0x80000000;
-			int ret = host_ring_submit(
-				buf_addr,
-				*(u16 *)((u32)entry + 6),
-				band,
-				*(u16 *)((u32)entry + 4),
-				*(u8 *)((u32)entry + 11),
-				*(u8 *)((u32)entry + 10) >> 2,
-				*(u16 *)((u32)entry + 8),
-				(*(u8 *)((u32)entry + 10) >> 1) & 1,
-				*(u8 *)((u32)entry + 12));
-
-			if (ret != 0) {
-				if (wifi_debug_flags & 4) {
-					if (band == 1)
-						(*(u32 *)(counter_base_5g + 108))++;
-					else
-						(*(u32 *)(counter_base_2g + 108))++;
-				}
-			} else {
-				if (wifi_debug_flags & 4) {
-					if (band == 1)
-						(*(u32 *)(counter_base_5g + 48))++;
-					else
-						(*(u32 *)(counter_base_2g + 48))++;
-				}
-			}
-		}
-		buf_id_return(*(u16 *)entry);
+	if (buf_id < 0) {
+		wifi_cnt_inc(band == 1, 40);
+	} else if (*(u16 *)((u32)entry + 6) == 0) {
+		wifi_cnt_inc(band == 1, 44);
 	} else {
-		if (wifi_debug_flags & 4) {
-			if (band == 1)
-				(*(u32 *)(counter_base_5g + 40))++;
-			else
-				(*(u32 *)(counter_base_2g + 40))++;
-		}
+		ret = host_ring_submit(wifi_pkt_dma(buf_id),
+				       *(u16 *)((u32)entry + 6),
+				       band,
+				       *(u16 *)((u32)entry + 4),
+				       *(u8 *)((u32)entry + 11),
+				       *(u8 *)((u32)entry + 10) >> 2,
+				       *(u16 *)((u32)entry + 8),
+				       (*(u8 *)((u32)entry + 10) >> 1) & 1,
+				       *(u8 *)((u32)entry + 12));
+		wifi_cnt_inc(band == 1, ret ? 108 : 48);
+		buf_id_free(0, band, *(u16 *)entry);
 	}
 
-clear:
 	entry[0] = (u32)-1;
 	entry[1] = 0;
 	*(u16 *)((u32)entry + 8) = 0;
@@ -260,34 +237,29 @@ clear:
 	*(u8 *)((u32)entry + 10) = 0;
 
 	ridx = ((ridx + 1) != ring_size) ? ridx + 1 : 0;
-
-	if (band == 0) {
-		pinode_ridx_2g = ridx;
-		if (!(wifi_debug_flags & 4))
-			return;
-		(*(u32 *)(counter_base_2g + 20))++;
-		return;
-	}
-	pinode_ridx_5g = ridx;
-	if (!(wifi_debug_flags & 4))
-		return;
-drain_stat:
-	if (band == 1)
-		(*(u32 *)(counter_base_5g + 20))++;
+	if (band != 0)
+		pinode_ridx_5g = ridx;
 	else
-		(*(u32 *)(counter_base_2g + 20))++;
+		pinode_ridx_2g = ridx;
+	wifi_cnt_inc(band == 1, 20);
+}
+
+static int rxnode_submit(u32 node, u32 band)
+{
+	return host_ring_submit(wifi_pkt_dma(*(u32 *)node),
+				*(u16 *)(node + 4), band, 0, 0,
+				*(u8 *)(node + 8) >> 2,
+				*(u16 *)(node + 6),
+				(*(u8 *)(node + 8) & 2) != 0, 0);
 }
 
 void rxnode_drain(u32 band)
 {
-	u16 ridx;
-	u32 base;
-	u32 retry = 0;
-	u32 group_count = 0;
-	u32 scan_idx;
-	u32 submit;
-	u32 entry_addr;
-	u8 flags;
+	u16 ridx, scan;
+	u32 base, node, flags, total, seg, next;
+	u32 tries = 0, count = 0, submit = 0;
+	u32 cb = (band == 1);
+	u32 retry;
 
 	if (band == 0) {
 		ridx = rxnode_ridx_2g;
@@ -298,237 +270,86 @@ void rxnode_drain(u32 band)
 	}
 
 	if (!(*(u8 *)(base + (u32)ridx * 12 + 8) & 1)) {
-		if (wifi_debug_flags & 4) {
-			if (band == 1)
-				(*(u32 *)(counter_base_5g + 152))++;
-			else
-				(*(u32 *)(counter_base_2g + 152))++;
-		}
+		wifi_cnt_inc(cb, 152);
 		return;
 	}
 
-	scan_idx = ridx;
-
+	/* find how many segments make the frame at ridx */
+	scan = ridx;
 	while (1) {
-		if (wifi_debug_flags & 4) {
-			if (band == 1)
-				(*(u32 *)(counter_base_5g + 156))++;
-			else
-				(*(u32 *)(counter_base_2g + 156))++;
-		}
-
-		entry_addr = base + scan_idx * 12;
-		if (!(*(u8 *)(entry_addr + 8) & 1)) {
-			retry++;
-			if (retry > rxnode_retry_limit) {
-				if (wifi_debug_flags & 4) {
-					if (band == 1)
-						(*(u32 *)(counter_base_5g + 184))++;
-					else
-						(*(u32 *)(counter_base_2g + 184))++;
-				}
-				goto finish;
-			}
-			continue;
-		}
-
-		if (wifi_debug_flags & 4) {
-			if (band == 1)
-				(*(u32 *)(counter_base_5g + 160))++;
-			else
-				(*(u32 *)(counter_base_2g + 160))++;
-		}
-
-		flags = *(u8 *)(entry_addr + 8);
-		{
-			u32 group_flag = flags & 2;
-			u32 total_count = (u32)flags >> 5;
-			u32 group_index = ((u32)flags >> 2) & 7;
-			u32 expected = (group_count + 1) & 0xFFFF;
-
-			if (group_flag) {
-				if (wifi_debug_flags & 4) {
-					if (band == 1)
-						(*(u32 *)(counter_base_5g + 168))++;
-					else
-						(*(u32 *)(counter_base_2g + 168))++;
-				}
-
-				if (total_count == expected) {
-					if (group_index != expected) {
-						submit = 0;
-						if (wifi_debug_flags & 4) {
-							if (band == 1)
-								(*(u32 *)(counter_base_5g + 172))++;
-							else
-								(*(u32 *)(counter_base_2g + 172))++;
-						}
-						group_count = expected;
-					} else {
-						if (wifi_debug_flags & 4) {
-							if (band == 1)
-								(*(u32 *)(counter_base_5g + 164))++;
-							else
-								(*(u32 *)(counter_base_2g + 164))++;
-						}
-						submit = 1;
-						group_count = expected;
-					}
-				} else {
-					if (total_count == group_index ||
-					    !(wifi_debug_flags & 4)) {
-						submit = 0;
-						if (wifi_debug_flags & 4) {
-							if (band == 1)
-								(*(u32 *)(counter_base_5g + 176))++;
-							else
-								(*(u32 *)(counter_base_2g + 176))++;
-						}
-						group_count = expected;
-					} else {
-						if (wifi_debug_flags & 4) {
-							if (band == 1)
-								(*(u32 *)(counter_base_5g + 172))++;
-							else
-								(*(u32 *)(counter_base_2g + 172))++;
-						}
-						submit = 0;
-						if (total_count != expected) {
-							if (wifi_debug_flags & 4) {
-								if (band == 1)
-									(*(u32 *)(counter_base_5g + 176))++;
-								else
-									(*(u32 *)(counter_base_2g + 176))++;
-							}
-						}
-						group_count = expected;
-					}
-				}
+		wifi_cnt_inc(cb, 156);
+		node = base + (u32)scan * 12;
+		if (!(*(u8 *)(node + 8) & 1)) {
+			if (++tries > wifi_retry_limit) {
+				wifi_cnt_inc(cb, 184);
 				goto process;
 			}
-
-			if (expected >= total_count)
-				break;
-
-			group_count = expected;
-			scan_idx = ((scan_idx + 1) != RXNODE_RING_SIZE) ?
-				   scan_idx + 1 : 0;
-
-			if (retry > rxnode_retry_limit) {
-				if (wifi_debug_flags & 4) {
-					if (band == 1)
-						(*(u32 *)(counter_base_5g + 184))++;
-					else
-						(*(u32 *)(counter_base_2g + 184))++;
-				}
-				goto finish;
-			}
 			continue;
 		}
-	}
 
-	if (wifi_debug_flags & 4) {
-		if (band == 1)
-			(*(u32 *)(counter_base_5g + 180))++;
-		else
-			(*(u32 *)(counter_base_2g + 180))++;
-	}
+		wifi_cnt_inc(cb, 160);
+		flags = *(u8 *)(node + 8);
+		total = flags >> 5;
+		seg = (flags >> 2) & 7;
+		next = (count + 1) & 0xFFFF;
 
-finish:
-	submit = 0;
-	if (group_count == 0)
-		goto done;
-
-process:
-	{
-		u32 proc_addr = base + ridx * 12;
-		s32 buf_id = *(s32 *)proc_addr;
-
-		while (1) {
-			if (submit) {
-				u32 buf_a = (((buf_id << 12) +
-					     wifi_buf_id_base) &
-					    0x3FFFFFFF) | 0x80000000;
-				int ret = host_ring_submit(
-					buf_a,
-					*(u16 *)(proc_addr + 4),
-					band, 0, 0,
-					(u32)*(u8 *)(proc_addr + 8) >> 2,
-					*(u16 *)(proc_addr + 6),
-					(*(u8 *)(proc_addr + 8) & 2) != 0,
-					0);
-
-				if (ret != 0) {
-					if (wifi_debug_flags & 4) {
-						if (band == 1)
-							(*(u32 *)(counter_base_5g + 136))++;
-						else
-							(*(u32 *)(counter_base_2g + 136))++;
-					}
-
-					u32 retries = rxnode_retry_limit;
-					while (retries) {
-						buf_id = *(s32 *)proc_addr;
-						retries--;
-						buf_a = (((buf_id << 12) +
-							 wifi_buf_id_base) &
-							0x3FFFFFFF) |
-							0x80000000;
-						ret = host_ring_submit(
-							buf_a,
-							*(u16 *)(proc_addr + 4),
-							band, 0, 0,
-							(u32)*(u8 *)(proc_addr + 8) >> 2,
-							*(u16 *)(proc_addr + 6),
-							(*(u8 *)(proc_addr + 8) & 2) != 0,
-							0);
-						if (ret == 0) {
-							buf_id = *(s32 *)proc_addr;
-							if (wifi_debug_flags & 4) {
-								if (band == 1)
-									(*(u32 *)(counter_base_5g + 188))++;
-								else
-									(*(u32 *)(counter_base_2g + 188))++;
-							}
-							goto drop_entry;
-						}
-					}
-				} else {
-					buf_id = *(s32 *)proc_addr;
-					if (wifi_debug_flags & 4) {
-						if (band == 1)
-							(*(u32 *)(counter_base_5g + 0xBC))++;
-						else
-							(*(u32 *)(counter_base_2g + 0xBC))++;
-					}
-				}
+		if (flags & 2) {
+			/* last segment: submit only a complete frame */
+			wifi_cnt_inc(cb, 168);
+			if (total == next && seg == next) {
+				wifi_cnt_inc(cb, 164);
+				submit = 1;
+			} else if (total == next) {
+				wifi_cnt_inc(cb, 172);
+			} else if (total == seg) {
+				wifi_cnt_inc(cb, 176);
+			} else {
+				wifi_cnt_inc(cb, 172);
+				wifi_cnt_inc(cb, 176);
 			}
+			count = next;
+			goto process;
+		}
 
-drop_entry:
-			ridx = ((ridx + 1) != RXNODE_RING_SIZE) ?
-			       ridx + 1 : 0;
-			buf_id_return((u16)buf_id);
-			group_count--;
-			*(u32 *)proc_addr = (u32)-1;
-			*(u32 *)(proc_addr + 4) = 0;
-			*(u8 *)(proc_addr + 8) = 0;
-
-			if (wifi_debug_flags & 4) {
-				if (band == 1)
-					(*(u32 *)(counter_base_5g + 192))++;
-				else
-					(*(u32 *)(counter_base_2g + 192))++;
-			}
-
-			if (group_count == 0)
-				goto done;
-
-			proc_addr = base + ridx * 12;
-			buf_id = *(s32 *)proc_addr;
+		if (next >= total) {
+			wifi_cnt_inc(cb, 180);
+			goto process;
+		}
+		count = next;
+		scan = ((scan + 1) != RXNODE_RING_SIZE) ? scan + 1 : 0;
+		if (tries > wifi_retry_limit) {
+			wifi_cnt_inc(cb, 184);
+			goto process;
 		}
 	}
 
-done:
+process:
+	/* hand the frame to the host, or drop its segments */
+	while (count != 0) {
+		node = base + (u32)ridx * 12;
+		if (submit) {
+			if (rxnode_submit(node, band) != 0) {
+				wifi_cnt_inc(cb, 136);
+				for (retry = wifi_retry_limit; retry; retry--) {
+					if (rxnode_submit(node, band) == 0) {
+						wifi_cnt_inc(cb, 188);
+						break;
+					}
+				}
+			} else {
+				wifi_cnt_inc(cb, 0xBC);
+			}
+		}
+
+		ridx = ((ridx + 1) != RXNODE_RING_SIZE) ? ridx + 1 : 0;
+		buf_id_free(0, band, *(u32 *)node);
+		count--;
+		*(u32 *)node = (u32)-1;
+		*(u32 *)(node + 4) = 0;
+		*(u8 *)(node + 8) = 0;
+		wifi_cnt_inc(cb, 192);
+	}
+
 	if (band != 0)
 		rxnode_ridx_5g = ridx;
 	else

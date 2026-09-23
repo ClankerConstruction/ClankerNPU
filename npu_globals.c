@@ -499,15 +499,6 @@ u32 wifi_pkt_buf_addr;
 u32 wifi_dram_ba_node_addr;
 u32 wifi_pcie_desc_base;
 
-/* WiFi per-band pkt queue state */
-u16 pkt_queue_widx_2g;
-u16 pkt_queue_widx_5g;
-u32 pkt_queue_base_2g;
-u32 pkt_queue_base_5g;
-u16 pkt_queue_rx_widx_2g;
-u16 pkt_queue_rx_ridx_2g;
-u32 pkt_queue_rx_base_2g;
-u32 pkt_queue_rx_base_5g;
 
 /* WiFi per-band queue mutexes */
 u32 queue_mutex_2g[2];

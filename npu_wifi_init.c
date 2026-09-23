@@ -186,58 +186,6 @@ void wifi_queue_mutex_init(void)
 	ba_mutex_2g[1] = 0;
 }
 
-/* WiFi pkt queue init: allocate and zero per-band packet queues */
-void wifi_pkt_queue_init(u32 band)
-{
-	u32 i, count, base, rx_base;
-
-	if (band != 0) {
-		npu_printf("[NPU]%s  %s...\n", "5G", "pkt_queue_init");
-		if (band == 1) {
-			pkt_queue_widx_5g = 0;
-			pinode_widx_5g = 0;
-			pkt_queue_base_5g = sram_buf_alloc(2);
-			pkt_queue_rx_widx_2g = 0;
-			pkt_queue_rx_ridx_2g = 0;
-			pkt_queue_rx_base_5g = sram_buf_alloc(14);
-			count = 512;
-		} else {
-			count = 256;
-		}
-	} else {
-		npu_printf("[NPU]%s  %s...\n", "2.4", "pkt_queue_init");
-		pinode_widx_2g = 0;
-		pkt_queue_widx_2g = 0;
-		pkt_queue_base_2g = sram_buf_alloc(3);
-		rxnode_widx_2g = 0;
-		rxnode_widx_5g = 0;
-		pkt_queue_rx_base_2g = sram_buf_alloc(15);
-		count = 256;
-	}
-
-	for (i = 0; i < count; i++) {
-		if (band != 0)
-			base = pkt_queue_base_5g + i * 16;
-		else
-			base = pkt_queue_base_2g + i * 16;
-		*(u32 *)base = 0xFFFFFFFF;
-		*(u32 *)(base + 4) = 0;
-		*(u16 *)(base + 8) = 0;
-		*(u8 *)(base + 11) = 0;
-		*(u8 *)(base + 10) = 0;
-	}
-
-	for (i = 0; i < 128; i++) {
-		if (band != 0)
-			rx_base = pkt_queue_rx_base_5g + i * 12;
-		else
-			rx_base = pkt_queue_rx_base_2g + i * 12;
-		*(u32 *)rx_base = 0xFFFFFFFF;
-		*(u32 *)(rx_base + 4) = 0;
-		*(u8 *)(rx_base + 8) = 0;
-	}
-}
-
 /* WiFi BA node init: allocate reorder node pools */
 void wifi_ba_node_init(void)
 {
@@ -336,18 +284,14 @@ static u8 wifi_get_band_cap(u8 model)
 /* npu_init for one band, from SET_WAIT_DESC */
 void __attribute__((noinline)) wifi_npu_init(u32 band)
 {
-#ifdef HAS_WIFI
+#ifdef WIFI_KITE
 	u32 desc_type1, desc_type2;
 	u32 bar_5g, bar_2g;
 
 	npu_printf("[NPU] %s...\n", "npu_init");
 	npu_printf("=======================\n");
-#ifdef WIFI_KITE
 	npu_printf("NPU Version: %s_NPU_%s\n",
 		   wifi_chip_names[wifi_driver_model], NPU_INIT_VERSION);
-#else
-	npu_printf("NPU init Version: %s\n", NPU_INIT_VERSION);
-#endif
 	npu_printf("=======================\n");
 
 	wifi_band_cap = wifi_get_band_cap(wifi_driver_model);
