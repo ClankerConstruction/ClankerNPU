@@ -126,6 +126,10 @@ void core0_wifi_init_wrapper(void)
 	eagle_msdu_pg_pool_init();
 #ifdef HAS_BME
 	tdma_tx_init();
+#endif
+#if defined(HAS_BME) && defined(HAS_NPU_WIFI_TX)
+	/* AN7552 has no TDMA rx ring: host never
+	 * sends tx_pkt_buf, so this would wait forever */
 	tdma_rx_init();
 #endif
 	eagle_init_done = 1;
