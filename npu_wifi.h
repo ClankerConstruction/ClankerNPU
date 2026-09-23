@@ -61,6 +61,8 @@
 extern u32 counter_base_2g;
 extern u32 counter_base_5g;
 extern u32 counter_base_tri;
+extern u32 wcid_counter_base_2g;
+extern u32 wcid_counter_base_5g;
 
 s32 buf_id_alloc_hw(u32 type, u32 band);
 void buf_id_free(u32 type, u32 band, u32 buf_id);
@@ -176,11 +178,6 @@ void ba_flush_all(u32 band);
  * ================================================================ */
 
 void wifi_bridge_init(void);
-
-/* The bridge state itself stays file-local. wifi_state_init() and
- * wifi_bridge_init() are its only writers and live beside it. */
-extern u32 wifi_rx_ring_base_2g;
-extern u32 wifi_tx_ring_base_5g;
 extern u32 wifi_pipeline_base;
 
 /* ================================================================

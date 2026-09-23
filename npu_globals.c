@@ -450,35 +450,6 @@ u16 rxd_5g_bufid_table[1536];
 
 /* WiFi misc (declared early for reorder/BA functions) */
 u8 wifi_debug_flags;
-u32 wifi_buf_id_base;
-
-/* WiFi per-port state (16 ports) */
-u8 wifi_port_state_2g[16];
-u8 wifi_port_state_5g[16];
-
-/* WiFi global counters (u64 as lo/hi pairs) */
-u32 wifi_global_bytes_lo;
-u32 wifi_global_bytes_hi;
-u32 wifi_global_pkts_lo;
-u32 wifi_global_pkts_hi;
-u32 wifi_global_bytes_5g_lo;
-u32 wifi_global_bytes_5g_hi;
-u32 wifi_global_pkts_5g_lo;
-u32 wifi_global_pkts_5g_hi;
-
-/* WiFi per-TID counters (256 entries × u64 as lo/hi pairs) */
-u32 wifi_tid_pkt_cnt[512];
-u32 wifi_tid_byte_cnt[512];
-
-/* WiFi classifier state */
-u8 wifi_classifier_bypass;
-
-/* WiFi multi-desc state */
-u32 wifi_rxd_ring_2g;
-u32 wifi_rxd_ring_5g;
-u32 wifi_rxd_idx_2g;
-u32 wifi_rxd_idx_5g;
-u16 *wifi_rxd_bufid_tbl;
 u16 wifi_retry_limit;
 
 /* WiFi init state */

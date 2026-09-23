@@ -95,7 +95,10 @@ void core3_wifi_init_wrapper(void);
 void buf_mgr_init(void);
 int wifi_mail_dispatch(u32 base, u32 cnt);
 void wifi_bridge_loop(void);
-void wifi_pipeline_worker(void);
+#ifdef WIFI_KITE
+void kite_core1_loop(void);
+void kite_core2_loop(void);
+#endif
 #endif
 #ifdef WIFI_KITE
 int wifi_mail_get_npu_info(u32 *msg);
@@ -416,30 +419,6 @@ extern u32 rxd_2g_flush_tick;
 extern u16 rxd_5g_bufid_table[1536];
 
 extern u8 wifi_debug_flags;
-extern u32 wifi_buf_id_base;
-
-extern u8 wifi_port_state_2g[16];
-extern u8 wifi_port_state_5g[16];
-
-extern u32 wifi_global_bytes_lo;
-extern u32 wifi_global_bytes_hi;
-extern u32 wifi_global_pkts_lo;
-extern u32 wifi_global_pkts_hi;
-extern u32 wifi_global_bytes_5g_lo;
-extern u32 wifi_global_bytes_5g_hi;
-extern u32 wifi_global_pkts_5g_lo;
-extern u32 wifi_global_pkts_5g_hi;
-
-extern u32 wifi_tid_pkt_cnt[512];
-extern u32 wifi_tid_byte_cnt[512];
-
-extern u8 wifi_classifier_bypass;
-
-extern u32 wifi_rxd_ring_2g;
-extern u32 wifi_rxd_ring_5g;
-extern u32 wifi_rxd_idx_2g;
-extern u32 wifi_rxd_idx_5g;
-extern u16 *wifi_rxd_bufid_tbl;
 extern u16 wifi_retry_limit;
 
 extern u8 wifi_driver_model;

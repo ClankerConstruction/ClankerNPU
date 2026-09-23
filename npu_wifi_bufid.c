@@ -75,8 +75,8 @@ void buf_id_free(u32 type, u32 band, u32 buf_id)
 u32 counter_base_2g;
 u32 counter_base_5g;
 u32 counter_base_tri;
-static u32 wcid_counter_base_2g;
-static u32 wcid_counter_base_5g;
+u32 wcid_counter_base_2g;
+u32 wcid_counter_base_5g;
 
 /* tx buffer id rings.
  *

@@ -166,10 +166,7 @@ static void __attribute__((noinline)) core1_main(void)
 	eagle_rxdmad_loop();
 	npu_printf("%s finish\n", "core1_wifi_init_wrapper");
 #elif defined(HAS_WIFI)
-	if (wifi_debug_flags & 1)
-		wifi_pipeline_worker();
-	else
-		wifi_bridge_loop();
+	kite_core1_loop();
 #endif
 }
 
@@ -179,6 +176,8 @@ static void __attribute__((noinline)) core2_main(void)
 	plic_register_isr(18, timer_isr);
 #ifdef WIFI_EAGLE
 	eagle_tx_fast_path();
+#elif defined(HAS_WIFI)
+	kite_core2_loop();
 #endif
 }
 
