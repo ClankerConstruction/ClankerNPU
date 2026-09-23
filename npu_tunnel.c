@@ -81,10 +81,6 @@ void tunnel_pkt_drop(u32 port, u32 pkt_len, u32 desc)
 		   0, 0, 0, 0);
 }
 
-static void tunnel_pkt_continue(u32 port, u32 pkt_len, u32 desc)
-{
-	tunnel_send_split(port, desc, 0, pkt_len, 0);
-}
 
 static void tunnel_desc_flush(u32 port, u32 desc, u32 pkt_len,
 			      u32 w0, u32 w1, u32 w2, u32 w3, u32 w4)
@@ -215,6 +211,86 @@ static s32 tunnel_vxlan(u32 port, u32 len, u32 *desc, u32 udf)
 		return vxlan_encap(port, len, desc, udf);
 	return vxlan_encap_frag(port, len, desc, udf,
 				(desc[0] >> 20) & 0x7F);
+}
+/* insert the stored IPv6 + SRH header after the MACs */
+static s32 srv6_encap(u32 port, u32 len, u32 *desc, u32 udf, u32 hdr_off)
+{
+	u32 hdr = tunnel_sram_base() + (udf - 21) * 128;
+	u32 hlen = tunnel_srv6_hdr_len[udf - 41];
+
+	desc[4] = udf << 14 | 0x3800;
+	desc[5] = 0x7F4007FF;
+	desc[0] = port << 4;
+	desc[6] = 0xFFFF;
+	tunnel_seg(port, (u32)desc, 44, 0, SEG_FIRST | SEG_TYPE(1), 0, 0, 0, 0);
+	tunnel_seg(port, hdr, hlen - 12, 12, SEG_TYPE(5),
+		   PATCH(0x12, len - hdr_off - 86 + hlen), 0, 0, 0);
+	tunnel_seg(port, (u32)desc, len - 46, 46, SEG_LAST, 0, 0, 0, 0);
+	return 0;
+}
+
+/* strip the outer IPv6 (and SRH when srh is set), inner is IPv4 */
+static s32 srv6_decap(u32 port, u32 len, u32 *desc, u32 hdr_off, u32 srh)
+{
+	u32 strip = 40;
+
+	if (srh)
+		strip = ((u8 *)desc)[hdr_off + 73] * 8 + 48;
+	tunnel_seg(port, (u32)desc, 46, 0, SEG_FIRST | SEG_TYPE(1),
+		   PATCH(0x2C, 0x0800), 0, 0, 0);
+	tunnel_seg(port, (u32)desc, len - 46 - strip, 46 + strip, SEG_LAST,
+		   0, 0, 0, 0);
+	return 0;
+}
+
+/* SRv6 endpoint: decap, next segment, or last segment with PSP */
+static s32 srv6_end(u32 port, u32 len, u32 *desc, u32 udf, u32 hdr_off)
+{
+	u8 *pkt = (u8 *)desc + hdr_off;
+	u8 *ip6 = pkt + 32;
+	u8 *srh = pkt + 72;
+	u32 left, ext;
+	u16 plen;
+
+	desc[4] = udf << 14 | 0x3800;
+	desc[5] = 0x7F4007FF;
+	desc[0] = port << 4;
+	desc[6] = 0xFFFF;
+
+	if (ip6[6] == 4)
+		return srv6_decap(port, len, desc, hdr_off, 0);
+	if (srh[3] == 0)
+		return srv6_decap(port, len, desc, hdr_off, 1);
+
+	left = (u8)(srh[3] - 1);
+	ext = srh[1];
+	npu_memcpy(pkt + 56, srh + 8 + 16 * left, 16);
+	if (left != 0 || (s8)srh[5] >= 0) {
+		srh[3] = left;
+		return tunnel_send_split(port, (u32)desc, 0, len, 0);
+	}
+
+	ip6[6] = srh[0];
+	ext = (u8)(ext * 8 + 8);
+	plen = bswap16(*(u16 *)(ip6 + 4)) - ext;
+	*(u16 *)(ip6 + 4) = bswap16(plen);
+	tunnel_seg(port, (u32)desc, hdr_off + 72, 0, SEG_FIRST | SEG_TYPE(1),
+		   0, 0, 0, 0);
+	tunnel_seg(port, (u32)desc, plen, ext + hdr_off + 72, SEG_LAST,
+		   0, 0, 0, 0);
+	return 0;
+}
+
+/* UDF 41-48 encapsulate, 49-56 SRv6 endpoint */
+static s32 tunnel_srv6(u32 port, u32 len, u32 *desc, u32 udf)
+{
+	u32 hdr_off = (desc[0] >> 20) & 0x7F;
+
+	if ((u8)(udf - 41) <= 7)
+		return srv6_encap(port, len, desc, udf, hdr_off);
+	if ((u8)(udf - 49) <= 7)
+		return srv6_end(port, len, desc, udf, hdr_off);
+	return -1;
 }
 s32 tunnel_offload_handler(u32 port, u32 pkt_len, u32 *desc)
 {
@@ -558,92 +634,8 @@ s32 tunnel_offload_handler(u32 port, u32 pkt_len, u32 *desc)
 
 	if ((u8)(udf - 1) <= 39)
 		return tunnel_vxlan(port, pkt_len, desc, udf);
-	if ((u8)(udf - 41) <= 0xF) {
-		/* UDF 41-56: SRv6 processing */
-		if ((u8)(udf - 41) <= 7) {
-			/* UDF 41-48: SRv6 decap */
-			sram = tunnel_sram_base();
-			desc[4] = (udf << 14) | 0x3800;
-			desc[5] = 0x7F3FFFFF;
-			desc[0] = 16 * port;
-			desc[6] = 0xFFFF;
-
-			tunnel_desc_flush(port, (u32)desc, pkt_len,
-					  0, 0, 0, 0, 0);
-
-			{
-				u32 adj = pkt_len - hdr_off - 86 +
-					tunnel_srv6_hdr_len[udf - 41];
-				bswap16((u16)adj);
-			}
-
-			tunnel_desc_flush(port, (u32)desc, pkt_len,
-					  0, 0, 0, 0, 0);
-			tunnel_desc_flush(port, (u32)desc, pkt_len,
-					  0, 0, 0, 0, 0);
-			return 0;
-		}
-
-		if ((u8)(udf - 49) > 7)
-			return -1;
-
-		/* UDF 49-56: SRv6 transit */
-		desc[4] = (udf << 14) | 0x3800;
-		desc[5] = 0x7F3FFFFF;
-		desc[0] = 16 * port;
-		desc[6] = 0xFFFF;
-
-		{
-			u8 *pkt = (u8 *)desc + hdr_off;
-			u8 *ipv6 = pkt + 32;
-			u8 *srh = pkt + 72;
-			u8 segs_left = srh[3];
-
-			if (ipv6[6] == 4 || segs_left == 0) {
-				sram = tunnel_sram_base();
-				bswap16(0x800);
-				tunnel_desc_flush(port, (u32)desc, pkt_len,
-						  0, 0, 0, 0, 0);
-				tunnel_desc_flush(port, (u32)desc, pkt_len,
-						  0, 0, 0, 0, 0);
-				return 0;
-			}
-
-			{
-				u8 seg_idx = segs_left - 1;
-				u8 seg_size = srh[1];
-
-				npu_memcpy(pkt + 56, srh + 8 + 16 * seg_idx,
-					   16);
-
-				if (seg_idx != 0 || (s8)srh[5] >= 0) {
-					srh[3] = seg_idx;
-					tunnel_pkt_continue(port, (u32)desc,
-							    0);
-					return 0;
-				}
-
-				{
-					u16 payload_len =
-						bswap16(((u16 *)ipv6)[2]);
-
-					ipv6[6] = srh[0];
-					((u16 *)ipv6)[2] = bswap16(
-						payload_len -
-						(u8)(8 * seg_size + 8));
-
-					tunnel_desc_flush(port, (u32)desc,
-							  pkt_len, 0, 0, 0,
-							  0, 0);
-					tunnel_desc_flush(port, (u32)desc,
-							  pkt_len, 0, 0, 0,
-							  0, 0);
-					return 0;
-				}
-			}
-		}
-	}
-
+	if ((u8)(udf - 41) <= 15)
+		return tunnel_srv6(port, pkt_len, desc, udf);
 	if ((u8)(udf - 65) > 3) {
 		npu_printf("invalid, hop_flags %d udf %d in %s,%d\n",
 			   opcode, udf,
