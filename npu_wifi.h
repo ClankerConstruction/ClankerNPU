@@ -62,8 +62,8 @@ extern u32 counter_base_2g;
 extern u32 counter_base_5g;
 extern u32 counter_base_tri;
 
-u32 buf_id_alloc_hw(u32 band, u32 dir);
-void buf_id_free(u32 result_type, u32 band, u32 buf_id);
+s32 buf_id_alloc_hw(u32 type, u32 band);
+void buf_id_free(u32 type, u32 band, u32 buf_id);
 void buf_id_return(u16 buf_id);
 s32 buf_id_alloc_ring(void);
 void tx_token_free(u16 token);

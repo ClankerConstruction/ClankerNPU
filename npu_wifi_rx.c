@@ -941,7 +941,7 @@ static void wifi_tx_process(void)
 	}
 
 	/* single descriptor: allocate new buffer */
-	new_buf_id = buf_id_alloc_hw(1, 0);
+	new_buf_id = buf_id_alloc_hw(0, 1);
 
 	if (new_buf_id == (u32)-1) {
 		wifi_flush_stale(1);

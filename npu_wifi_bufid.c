@@ -17,52 +17,55 @@
 /* ================================================================
  * Buffer ID management
  *
- * Two paths: hardware BME uses custom CSRs 0xBC8-0xBEA,
- * software path uses a sequential free-list.
+ * The buffer manager hands out ids through CSR 0xBC8 + 16 * type + band
+ * and takes them back through a per-band MMIO register.
  * band=0 → 2.4G, band=1 → 5G, band=2 → 6G (future)
  * ================================================================ */
 
-#define BUF_ID_INVALID   0xFFFF
-#define BUF_ID_CSR_BASE  0xBC8
+#define bufid_csr(n) ({ \
+	u32 __v; \
+	__asm__ volatile("fence\n\tcsrr %0, " #n : "=r"(__v) :: "memory"); \
+	(s32)(s16)__v; })
 
-/* hardware buffer ID allocator via custom CSR */
-u32 buf_id_alloc_hw(u32 band, u32 dir)
+/* one id from the buffer manager, -1 when it has none */
+s32 buf_id_alloc_hw(u32 type, u32 band)
 {
-	u32 csr_addr;
-	u32 val;
-
-	/* CSR matrix: band 0..2 x dir 0..2, base 0xBC8 */
-	if (band == 0) {
-		csr_addr = BUF_ID_CSR_BASE + dir;
-	} else if (band == 1) {
-		csr_addr = BUF_ID_CSR_BASE + 0x10 + dir;
-	} else if (band == 2) {
-		csr_addr = BUF_ID_CSR_BASE + 0x20 + dir;
-	} else {
-		return (u32)-1;
+	switch (type * 4 + band) {
+	case 0:
+		return bufid_csr(0xBC8);
+	case 1:
+		return bufid_csr(0xBC9);
+	case 2:
+		return bufid_csr(0xBCA);
+	case 4:
+		return bufid_csr(0xBD8);
+	case 5:
+		return bufid_csr(0xBD9);
+	case 6:
+		return bufid_csr(0xBDA);
+	case 8:
+		return bufid_csr(0xBE8);
+	case 9:
+		return bufid_csr(0xBE9);
+	case 10:
+		return bufid_csr(0xBEA);
+	default:
+		return -1;
 	}
-
-	__asm__ volatile("fence" ::: "memory");
-	val = csr_read(mhartid); /* placeholder - actual CSR read uses csr_addr */
-	(void)csr_addr;
-	return (val << 16) >> 16;
 }
 
-/* buffer ID return via MMIO */
-void buf_id_free(u32 result_type, u32 band, u32 buf_id)
+/* give an id back to the buffer manager */
+void buf_id_free(u32 type, u32 band, u32 buf_id)
 {
 	u32 base;
 
-	if (result_type == 0) {
-		/* write to buffer ID base table */
-		((volatile u32 *)(sram_buf_pad[0]))[512 * band + 67 + band] = buf_id;
-	} else {
-		if (result_type == 1)
-			base = BMGR_BASE;
-		else
-			base = 0x1EC05800;
-		REG32(base + 4 * (band * 512 + 67 + band)) = buf_id;
-	}
+	if (type == 0)
+		base = BMGR_BASE;
+	else if (type == 1)
+		base = 0x1EC0A000;
+	else
+		base = 0x1EC07000;
+	REG32(base + band * 0x800 + (67 + band) * 4) = buf_id;
 }
 
 /* ================================================================
