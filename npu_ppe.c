@@ -624,7 +624,6 @@ void tunnel_init(void)
 {
 	u32 i, chip_rev;
 
-	npu_printf("tunnel_init\n");
 	npu_memset(tunnel_ctx, 0, sizeof(tunnel_ctx));
 
 	for (i = 0; ; i++) {
