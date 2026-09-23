@@ -105,7 +105,8 @@ static void __attribute__((noreturn)) tunnel_offload_loop(u32 core,
 
 	npu_printf("%s for npu tunnel offload\n", who);
 
-	plic_register_isr(8 + core, mbox_isr);
+	/* mailbox 7 (source 15) on every part */
+	plic_register_isr(15, mbox_isr);
 	npu_bridge_buf_init();
 
 #ifdef HAS_TR471
