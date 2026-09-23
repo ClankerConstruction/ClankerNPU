@@ -235,16 +235,16 @@ family's code, behind the matching `#ifdef`.
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `npu_globals.c` | 656 | Every shared global, in the order that fixes `npu_data.bin` |
-| `npu_main.c` | 421 | Chip id, per-core entry points, core dispatch, trap vector, `npu_init` |
+| `npu_globals.c` | 618 | Every shared global, in the order that fixes `npu_data.bin` |
+| `npu_main.c` | 495 | Chip id, per-core entry points, core dispatch, trap vector, `npu_init` |
 | `npu_util.c` | 59 | memset, memcpy, strlen, core id character |
 | `npu_mutex.c` | 62 | Hardware mutex at 0x1EC03000 |
-| `npu_plic.c` | 125 | Interrupt controller, 192 sources |
-| `npu_timer.c` | 233 | Timers, CPU clock, delays |
-| `npu_mbox.c` | 158 | Mailbox dispatch and host notify |
-| `npu_sram.c` | 203 | SRAM bump allocator |
-| `npu_bridge.c` | 111 | NPU bridge DMA channels |
-| `npu_printf.c` | 384 | vsprintf, UART output, debug console |
+| `npu_plic.c` | 138 | Interrupt controller, 192 sources |
+| `npu_timer.c` | 238 | Timers, CPU clock, delays |
+| `npu_mbox.c` | 160 | Mailbox dispatch and host notify |
+| `npu_sram.c` | 240 | SRAM bump allocator |
+| `npu_bridge.c` | 148 | NPU bridge DMA channels |
+| `npu_printf.c` | 387 | vsprintf, UART output, debug console |
 | `npu_dba.c` | 105 | GPON bandwidth allocation, AN7583 |
 | `npu_tr471.c` | 25 | TR-471 measurement, AN7581 |
 
@@ -252,38 +252,38 @@ family's code, behind the matching `#ifdef`.
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `npu_tunnel.c` | 730 | Mail dispatch, offload handler, fragmentation, reassembly, SRv6 |
-| `npu_ppe.c` | 824 | Chip capability table, PPE and GDM programming, HWNAT mail |
-| `npu_l4s.c` | 148 | ECN congestion marking |
+| `npu_tunnel.c` | 701 | Mail dispatch, offload handler, fragmentation, reassembly, SRv6 |
+| `npu_ppe.c` | 966 | Chip capability table, PPE and GDM programming, HWNAT mail |
+| `npu_l4s.c` | 165 | ECN congestion marking |
 
 **WiFi offload**
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `npu_wifi.c` | 198 | Mail dispatch, core 0 and core 3 init wrappers, debug counter ISR |
-| `npu_wifi_bufid.c` | 326 | Rx buffer ids, tx tokens, debug counter blocks |
-| `npu_tdma.c` | 396 | TDMA rings, BME, BMGR, DMA copy engine |
+| `npu_wifi.c` | 164 | Mail dispatch, core 0 and core 3 init wrappers, debug counter ISR |
+| `npu_wifi_bufid.c` | 344 | Rx buffer ids, tx tokens, debug counter blocks |
+| `npu_tdma.c` | 518 | TDMA rings, BME, BMGR, DMA copy engine |
 | `npu_hostadpt.c` | 177 | Host adaptor in and out rings |
-| `npu_wifi_fwd.c` | 538 | piNode and rxNode forwarding, kite drain loops |
-| `npu_wifi_ba.c` | 744 | Reorder nodes and the block ack window, kite |
-| `npu_wifi_rx.c` | 1088 | Classifier, multi-descriptor handler, rx and tx processing |
-| `npu_wifi_init.c` | 762 | Ring and table setup, host parameter setters |
-| `npu_wifi_kite.c` | 565 | MT7916 and MT7996 mailbox handlers |
-| `npu_wifi_eagle.c` | 935 | MT799x mailbox handlers and ring setup |
-| `npu_wifi_eagle_dp.c` | 940 | MT799x datapath, the loops cores 1 to 4 run |
+| `npu_wifi_fwd.c` | 350 | piNode and rxNode forwarding, kite drain loops |
+| `npu_wifi_ba.c` | 381 | Reorder nodes and the block ack window, kite |
+| `npu_wifi_rx.c` | 818 | Classifier, multi-descriptor handler, rx and tx processing |
+| `npu_wifi_init.c` | 665 | Ring and table setup, host parameter setters |
+| `npu_wifi_kite.c` | 567 | MT7916 and MT7996 mailbox handlers |
+| `npu_wifi_eagle.c` | 1022 | MT799x mailbox handlers and ring setup |
+| `npu_wifi_eagle_dp.c` | 1133 | MT799x datapath, the loops cores 1 to 4 run |
 
 **Headers and build**
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `npu_internal.h` | 577 | Cross-subsystem prototypes and extern declarations |
-| `npu_wifi.h` | 242 | Shared between the WiFi files only |
-| `npu_config.h` | 74 | `#ifdef` variant selection |
-| `npu_regs.h` | 273 | MMIO register definitions |
+| `npu_internal.h` | 554 | Cross-subsystem prototypes and extern declarations |
+| `npu_wifi.h` | 281 | Shared between the WiFi files only |
+| `npu_config.h` | 77 | `#ifdef` variant selection |
+| `npu_regs.h` | 276 | MMIO register definitions |
 | `npu_types.h` | 58 | `u8`/`u16`/`u32`/`u64`/`s32` typedefs, CSR access |
 | `crt0.S` | 137 | Reset vector, BSS clear, stack setup, per-hart dispatch |
 | `link.ld` | 71 | Linker script (DRAM + SRAM regions) |
-| `Makefile` | 79 | Build system with all 11 variants |
+| `Makefile` | 99 | Build system with all 11 variants |
 
 All compile-time variants are handled with `#ifdef` across the source
 files. Convention: `AN75XX` = all three SoCs, `AN758X` = AN7581 + AN7583.
