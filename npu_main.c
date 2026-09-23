@@ -150,7 +150,10 @@ static void __attribute__((noinline)) core0_main(void)
 	npu_bridge_buf_init();
 #endif
 	core0_wifi_init_wrapper();
+#ifndef AN7552
+	/* AN7552 has no debug counter ISR */
 	plic_register_isr(59, dbg_cnt_isr);
+#endif
 
 #if defined(AN7583) && defined(HAS_TUNNEL)
 	tunnel_offload_loop(0, "npu_tunnel_offload");
