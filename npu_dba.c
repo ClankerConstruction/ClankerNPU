@@ -1380,6 +1380,90 @@ static int dba_bwmap_switch(struct dba_alloc *ctx)
 
 
 /* ================================================================
+ * Fixed test maps (host SW_BWMAP_TEST)
+ * ================================================================ */
+
+/* common tail of the test maps: switch bank once the last switch landed */
+static int dba_sw_bwmap_flip(void)
+{
+	u32 b0 = 0, b1 = 0;
+
+	dba_bwmap_bank_get(&b0, &b1);
+	if (b0 != b1) {
+		npu_printf("******switch band failed last time*********\n");
+		return -1;
+	}
+	if (b0)
+		dba_bwmap_bank_set(0);
+	else
+		dba_bwmap_bank_set(1);
+	return 0;
+}
+
+/* dba_sw_bwmap_test 1, four allocs back to back */
+static int dba_sw_bwmap_test1(void)
+{
+	dba_bwmap_write(BWMAP_W0(0x0000, 0x12e4),
+			BWMAP_AID(0x100) | BWMAP_DBRU);
+	dba_bwmap_write(BWMAP_W0(0x12e5, 0x25c9),
+			BWMAP_AID(0x200) | BWMAP_DBRU);
+	dba_bwmap_write(BWMAP_W0(0x25f8, 0x38dc),
+			BWMAP_AID(0x101) | BWMAP_DBRU);
+	dba_bwmap_write(BWMAP_W0(0x38dd, 0x4bc1),
+			BWMAP_END_LAST | BWMAP_AID(0x201) | BWMAP_DBRU);
+	return dba_sw_bwmap_flip();
+}
+
+/* dba_sw_bwmap_test 2, two allocs per window */
+static int dba_sw_bwmap_test2(void)
+{
+	dba_bwmap_write(BWMAP_W0(0x0000, 0x1f3f),
+			BWMAP_AID(0x100) | BWMAP_DBRU);
+	dba_bwmap_write(BWMAP_W0(0x1f40, 0x3e7f),
+			BWMAP_END_WRAP | BWMAP_AID(0x200) | BWMAP_DBRU);
+	dba_bwmap_write(BWMAP_W0(0x0000, 0x1f3f),
+			BWMAP_AID(0x101) | BWMAP_DBRU);
+	dba_bwmap_write(BWMAP_W0(0x1f40, 0x3e7f),
+			BWMAP_END_LAST | BWMAP_AID(0x201) | BWMAP_DBRU);
+	return dba_sw_bwmap_flip();
+}
+
+/* dba_sw_bwmap_test 3, 32 ONUs x 4 T-CONTs */
+static int dba_sw_bwmap_test3(void)
+{
+	u32 ctrl = 0;
+	u16 pos = 0, start, stop;
+	s16 onu;
+	int t;
+
+	for (onu = 0; onu < 32; onu++) {
+		for (t = 0; t < 4; t++) {
+			ctrl &= ~BWMAP_AID_MASK;
+			if (t == 0) {
+				ctrl |= BWMAP_AID(onu);
+				start = pos + 47;
+				stop = pos + 174;
+			} else {
+				ctrl |= BWMAP_AID((u16)(onu | (t << 8)));
+				start = pos + 1;
+				stop = pos + 128;
+			}
+			if (onu != 31)
+				ctrl &= ~BWMAP_END_LAST;
+			else if (t == 3)
+				ctrl |= BWMAP_END_LAST;
+			dba_bwmap_write(BWMAP_W0(start, stop), ctrl);
+			/* clears 24:18, which are never set */
+			if (ctrl & BWMAP_END_WRAP)
+				ctrl &= ~0x01FC0000;
+			pos = stop;
+		}
+	}
+	return dba_sw_bwmap_flip();
+}
+
+
+/* ================================================================
  * Frame handler
  * ================================================================ */
 
@@ -1441,10 +1525,24 @@ static void dba_frame_handler(void)
 	if (!dba_log_en && dba_rpt_tick % 16000 == 0)
 		dba_log_en = 1;
 
-	if ((dba_frame_cnt & 1) && dba_do_timer_en) {
-		dba_budget_calc(dba_ctx, &bud);
-		dba_bw_request(dba_ctx, &bud);
-		dba_bwmap_switch(dba_ctx);
+	if (dba_frame_cnt & 1) {
+		switch (dba_sw_bwmap_test) {
+		case 1:
+			dba_sw_bwmap_test1();
+			break;
+		case 2:
+			dba_sw_bwmap_test2();
+			break;
+		case 3:
+			dba_sw_bwmap_test3();
+			break;
+		}
+
+		if (dba_do_timer_en) {
+			dba_budget_calc(dba_ctx, &bud);
+			dba_bw_request(dba_ctx, &bud);
+			dba_bwmap_switch(dba_ctx);
+		}
 	}
 	dba_frame_cnt++;
 }
