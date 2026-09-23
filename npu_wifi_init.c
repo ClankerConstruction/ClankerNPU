@@ -640,12 +640,13 @@ void __attribute__((noinline)) npu_set_wait_state(u32 port, u8 state)
 {
 	u32 i;
 
+	/* the port's flag and its band's */
 	if (port <= 15) {
 		wifi_wait_state_2g[port] = state;
-		wifi_band0_on_cpu = state;
+		wifi_wait_band_2g = state;
 	} else {
 		wifi_wait_state_5g[port - 16] = state;
-		wifi_force_to_cpu = state;
+		wifi_wait_band_5g = state;
 	}
 
 	for (i = 0; i < 16; i++) {
