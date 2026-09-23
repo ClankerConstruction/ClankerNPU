@@ -235,8 +235,8 @@ family's code, behind the matching `#ifdef`.
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `npu_globals.c` | 618 | Every shared global, in the order that fixes `npu_data.bin` |
-| `npu_main.c` | 495 | Chip id, per-core entry points, core dispatch, trap vector, `npu_init` |
+| `npu_globals.c` | 593 | Every shared global, in the order that fixes `npu_data.bin` |
+| `npu_main.c` | 487 | Chip id, per-core entry points, core dispatch, trap vector, `npu_init` |
 | `npu_util.c` | 59 | memset, memcpy, strlen, core id character |
 | `npu_mutex.c` | 62 | Hardware mutex at 0x1EC03000 |
 | `npu_plic.c` | 138 | Interrupt controller, 192 sources |
@@ -245,7 +245,7 @@ family's code, behind the matching `#ifdef`.
 | `npu_sram.c` | 240 | SRAM bump allocator |
 | `npu_bridge.c` | 148 | NPU bridge DMA channels |
 | `npu_printf.c` | 387 | vsprintf, UART output, debug console |
-| `npu_dba.c` | 105 | GPON bandwidth allocation, AN7583 |
+| `npu_dba.c` | 2141 | GPON bandwidth allocation, AN7583 |
 | `npu_tr471.c` | 25 | TR-471 measurement, AN7581 |
 
 **Tunnel offload** (AN758X)
@@ -276,7 +276,7 @@ family's code, behind the matching `#ifdef`.
 
 | File | Lines | Purpose |
 |------|------:|---------|
-| `npu_internal.h` | 554 | Cross-subsystem prototypes and extern declarations |
+| `npu_internal.h` | 537 | Cross-subsystem prototypes and extern declarations |
 | `npu_wifi.h` | 281 | Shared between the WiFi files only |
 | `npu_config.h` | 77 | `#ifdef` variant selection |
 | `npu_regs.h` | 276 | MMIO register definitions |
@@ -347,7 +347,10 @@ down to 69 functions and 16.2 KB for AN7583_NOWIFI.
 - Tunnel offload (store header, SRv6, fragmentation MTU, reset)
 - PPE filter/enable configuration
 - L4S ECN marking
-- DBA subsystem (GPON bandwidth allocation)
+- DBA subsystem (GPON bandwidth allocation): core 5 frame loop, T-CONT
+  grants, upstream bwmap build with FTTR bank switch, test maps, new-DBA
+  map for four ONUs. FTTR (0x1FBE4000) accesses are each followed by a
+  dummy read of 0x1FB00020.
 - HW mutex (SCU spinlock) acquire/release
 - npu_printf with %d/%u/%x/%s/%llu/%lld/%llx and width/pad support
 - CPU clock readout, delay_us/delay_ms, timer tick counters
