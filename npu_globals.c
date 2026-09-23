@@ -244,8 +244,8 @@ u8 dba_cfg4 = 1;
 #endif
 
 #ifdef HAS_TUNNEL
-u32 tunnel_max_count = 7;
-u32 tunnel_timeout_ms = 100;
+u32 l4s_qid = 7;
+u32 l4s_qlen_thresh = 100;
 u8 tunnel_cfg_flag = 1;
 #endif
 
@@ -366,7 +366,6 @@ u32 l4s_pkt_count;
 u32 l4s_log_phase;
 u32 l4s_skip_count;
 u32 l4s_cached_qthresh;
-u32 l4s_qid;
 u32 l4s_qlen;
 u32 ppe_module_idx;
 u8 ppe_module_ver;
