@@ -381,7 +381,7 @@ u32 tunnel_v6_reasm_hdroff;
 u32 tunnel_v6_reasm_len;
 u32 tunnel_v6_reasm_desc;
 u32 tunnel_srv6_seg_table;
-u32 tunnel_encap_mtu;
+u32 tunnel_encap_mtu = 1500;
 #endif
 
 /* DBA state */
