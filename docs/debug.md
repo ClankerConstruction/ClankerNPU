@@ -273,6 +273,26 @@ load. A `copy` line without `NPU Version`: the image did not start.
 The unit booted another image. The string ends in the git hash of the
 build; `-dirty` means it was built from uncommitted sources.
 
+**A core is missing, or its self-test says `FAIL`.**
+The boot log checks the cores on every start:
+
+```text
+[C0]NPU cluster 20220707: cores enabled 3f, running 3f
+[C3]core 3: RV32ACIMX vendor 0 arch 1 impl 20210428, self-test ok (1b972363, 114998 cycles)
+```
+
+`enabled` is the host's boot mask, `running` the cores whose PC ever
+left 0; one bit per core. `Error: 6 cores expected` follows when they
+differ from the part's count (AN7552 2, AN7583 6, AN7581 8). Each core
+then runs a fixed multiply, divide and memory pass; any sum other than
+`1b972363` is a faulty core. A core enabled but not running never
+fetched, the same as an absent one. Check it live without a console:
+
+| `sys memrl` | holds |
+|---|---|
+| `1ec06004` | enable mask |
+| `1ec05N00`, `1ec05N04` | core N PC and SP; a PC that changes between reads is executing |
+
 **A hart's loop tag is 0.**
 That hart is still in its init. On AN7583 hart 0 takes `TUNL` only once
 the WiFi init is done, and that init waits for the host's WiFi setup

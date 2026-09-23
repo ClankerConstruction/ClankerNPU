@@ -121,6 +121,55 @@ static void npu_banner(void)
 		npu_printf("%s\n", bender[i]);
 }
 
+/* A slot runs when its PC is ever nonzero; one that never fetched reads 0. */
+static void npu_core_probe(void)
+{
+	u32 en = REG32(CR_CORE_BOOT_CONFIG) & 0xFF, live = 0, c, i;
+
+	for (c = 0; c < 8; c++)
+		for (i = 0; i < 4 && !(live & (1u << c)); i++)
+			if (REG32(NPU_CSR_PC(c)) != 0)
+				live |= 1u << c;
+	npu_printf("NPU cluster %x: cores enabled %x, running %x\n",
+		   REG32(CR_CLUSTER_VERSION), en, live);
+	if (live != (1u << MAX_CORE_NUM) - 1)
+		npu_printf("Error: %d cores expected, running %x\n",
+			   MAX_CORE_NUM, live);
+}
+
+/* Fixed pass of mul, mulhu, divu, remu and a stack walk; the
+ * seed is volatile so the compiler cannot fold the sum. */
+#define CORE_TEST_SUM	0x1B972363
+
+static void npu_core_selftest(u32 hart)
+{
+	volatile u32 seed = 0x12345678;
+	u32 buf[64], x = seed, acc = 0, misa, d, i, t;
+	char isa[27];
+
+	t = csr_read(mcycle);
+	npu_memset(buf, 0, sizeof(buf));
+	for (i = 0; i < 1024; i++) {
+		x = x * 1664525 + 1013904223;
+		d = (i & 0xFF) + 3;
+		acc = (acc << 5 | acc >> 27) ^ (u32)((u64)x * 0x9E3779B9 >> 32) ^
+		      x / d ^ (x % d) << 16;
+		buf[i & 63] = acc;
+		acc += buf[(i * 7) & 63];
+	}
+	t = csr_read(mcycle) - t;
+
+	misa = csr_read(misa);
+	for (i = 0, d = 0; i < 26; i++)
+		if (misa & (1u << i))
+			isa[d++] = 'A' + i;
+	isa[d] = 0;
+	npu_printf("core %d: RV%d%s vendor %x arch %x impl %x, self-test %s (%x, %d cycles)\n",
+		   hart, 16 << (misa >> 30), isa, csr_read(mvendorid),
+		   csr_read(marchid), csr_read(mimpid),
+		   acc == CORE_TEST_SUM ? "ok" : "FAIL", acc, t);
+}
+
 #ifdef HAS_TUNNEL
 /* The tunnel offload never returns. On the eight-core part core 7 runs
  * it; the six-core part has no core 7 and gives it to core 0 once the
@@ -522,6 +571,7 @@ void npu_init(void)
 		npu_banner();
 		npu_printf("core freq at %d MHz\n", cpu_clock_get());
 		npu_printf("NPU Version: %s\n", NPU_VERSION);
+		npu_core_probe();
 		if ((u32)__bss_end - NPU_SRAM_BASE > GLB_VAR_SRAM_SIZE)
 			npu_printf("Error: OVER GLB_VAR_SRAM_SIZE. "
 				   "_data:0x%x, __bss_end:0x%x\n",
@@ -534,6 +584,8 @@ void npu_init(void)
 	/* hart 0 signals others to proceed */
 	if (hart == 0)
 		core_sync_flag = 1;
+
+	npu_core_selftest(hart);
 
 	/* boot signature */
 	REG32(NPU_MIB31) = INIT_COMPLETE;

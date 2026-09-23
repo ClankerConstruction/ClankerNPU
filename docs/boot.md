@@ -39,8 +39,8 @@ sequenceDiagram
   H0->>H0: one-time reset block
   H0->>Hn: core_sync_flag = 1
   Hn->>Hn: plic_init, trap vector, MIE
-  H0->>H0: MIB31 = 0xCCCCCCCC
-  Hn->>Hn: MIB31 = 0xCCCCCCCC
+  H0->>H0: self-test, MIB31 = 0xCCCCCCCC
+  Hn->>Hn: self-test, MIB31 = 0xCCCCCCCC
 ```
 
 Every hart runs `plic_init`, points `mtvec` at `trap_vector` and sets
@@ -63,6 +63,7 @@ debug block cleared and filled (docs/debug.md)
 MIB21 restored
 print the Bender banner, "core freq at %d MHz",
 then "NPU Version: <release>.<wifi chip>.<git hash>"
+print the cluster version, enable mask and running cores
 check .data + .bss fits 0x7800 bytes
 PLIC 22 = boot UART rx console
 timer 0 on, period 10
@@ -71,6 +72,10 @@ mailbox_init
 
 The reset control is `RSTCTRL1` at SCU + `0x834`. Writing SCU + `0x000`
 instead leaves the hart stuck on its next MMIO access.
+
+Before `MIB31`, every hart prints its ISA and id registers and the result
+of a fixed multiply, divide and memory pass
+([debug.md](debug.md#faq) reads the lines).
 
 `MIB31 = 0xCCCCCCCC` tells the host the hart finished init.
 
