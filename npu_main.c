@@ -157,15 +157,12 @@ static void __attribute__((noinline)) core0_main(void)
 
 #if defined(AN7583) && defined(HAS_TUNNEL)
 	tunnel_offload_loop(0, "npu_tunnel_offload");
-#else
-#if !(defined(AN7552) && defined(WIFI_EAGLE))
-	npu_bridge_buf_init();
-#endif
-	npu_printf("%s\n", "core0_main");
-#if defined(AN7552) && defined(WIFI_EAGLE)
+#elif defined(AN7552) && defined(WIFI_EAGLE)
 	/* TODO run the tunnel dequeue here too */
 	eagle_core0_loop();
-#endif
+#else
+	npu_bridge_buf_init();
+	npu_printf("%s\n", "core0_main");
 #endif
 }
 

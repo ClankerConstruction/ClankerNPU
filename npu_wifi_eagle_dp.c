@@ -1120,6 +1120,13 @@ void __attribute__((noreturn)) eagle_core3_loop(void)
  * that the larger parts give to cores 3 and 4. */
 void __attribute__((noreturn)) eagle_core0_loop(void)
 {
+	/* start once init, rx, tx and both rings are up */
+	while (eagle_init_done == 0 || eagle_rx_en == 0 || eagle_tx_en == 0 ||
+	       eagle_rx_ring_init_done[0] == 0 || eagle_rx_ring_init_done[1] == 0)
+		;
+	eagle_delay(10000);
+	npu_printf("start %s\n", "npu_start_kite_rro_v31_refill_ring_donebitmode");
+
 	while (1) {
 		while (eagle_rx_en == 0)
 			eagle_delay(1000);
@@ -1129,7 +1136,6 @@ void __attribute__((noreturn)) eagle_core0_loop(void)
 			eagle_txq_drain(1);
 			eagle_mseg_drain(1);
 		}
-		eagle_txdone_poll();
 		eagle_rx_ring_sweep(0);
 		eagle_rx_ring_sweep(1);
 		eagle_delay(100);
