@@ -129,6 +129,93 @@ void tunnel_process(void)
 		return;
 }
 
+/* RFC 1624 checksum update for a new total length and fragment word */
+static u16 ipv4_csum_update(u8 *iph, u16 totlen, u16 frag)
+{
+	u32 sum;
+
+	sum = (u16)~bswap16(*(u16 *)(iph + 10)) +
+	      (u16)~bswap16(*(u16 *)(iph + 2)) + totlen;
+	sum = (sum & 0xFFFF) + (sum >> 16) +
+	      (u16)~bswap16(*(u16 *)(iph + 6)) + frag;
+	sum = (sum & 0xFFFF) + (sum >> 16);
+	return (u16)~sum;
+}
+
+/* descriptor, a stored header, then the packet past split */
+static void tunnel_send_insert(u32 port, u32 hdr, u32 hdr_fwd, u32 hdr_len,
+			       u32 desc, u32 fwd, u32 len, u32 split,
+			       u32 p0, u32 p1, u32 p2, u32 p3)
+{
+	split = (u16)split;
+	tunnel_seg(port, desc, 32, 0, SEG_FIRST | SEG_TYPE(1), 0, 0, 0, 0);
+	tunnel_seg(port, hdr, hdr_len, 0, SEG_TYPE((hdr_fwd != 0) + 4),
+		   p0, p1, p2, p3);
+	tunnel_seg(port, desc, len - split - 32, split + 32,
+		   SEG_LAST | SEG_TYPE(fwd != 0), 0, 0, 0, 0);
+}
+
+static s32 vxlan_encap(u32 port, u32 len, u32 *desc, u32 udf)
+{
+	u32 hdr = tunnel_sram_base() + (udf - 1) * 128;
+
+	desc[0] = port << 4;
+	desc[5] = 0x7F4007FF;
+	desc[6] = 0xFFFF;
+	desc[4] = udf << 14 | 0x3800;
+	tunnel_send_insert(port, hdr, 1, 50, (u32)desc, 0, len, 0,
+			   PATCH(0x10, len + 4), PATCH(0x26, len - 16), 0, 0);
+	return 0;
+}
+
+/* two outer packets, the inner IPv4 split at the MTU */
+static s32 vxlan_encap_frag(u32 port, u32 len, u32 *desc, u32 udf,
+			    u32 hdr_off)
+{
+	u32 hdr = tunnel_sram_base() + (udf - 1) * 128;
+	u8 *iph = (u8 *)desc + hdr_off + 32;
+	u32 units = (u16)((tunnel_encap_mtu - 70) >> 3);
+	u32 fp = units << 3;
+	u32 rem = (u16)(len - fp);
+
+	desc[4] = udf << 14 | 0x3800;
+	desc[0] = port << 4;
+	desc[5] = 0x7F4007FF;
+	desc[6] = 0xFFFF;
+
+	tunnel_seg(port, (u32)desc, 32, 0, SEG_FIRST | SEG_TYPE(1), 0, 0, 0, 0);
+	tunnel_seg(port, hdr, 50, 0, SEG_TYPE(5),
+		   PATCH(0x10, fp + 70), PATCH(0x26, fp + 50), 0, 0);
+	tunnel_seg(port, (u32)desc, fp + 34, 32, SEG_LAST | SEG_TYPE(1),
+		   PATCH(0x30, fp + 20), PATCH(0x34, 0x2000),
+		   PATCH(0x38, ipv4_csum_update(iph, fp + 20, 0x2000)), 0);
+
+	tunnel_seg(port, (u32)desc, 32, 0, SEG_FIRST | SEG_TYPE(1), 0, 0, 0, 0);
+	tunnel_seg(port, hdr, 50, 0, SEG_TYPE(5),
+		   PATCH(0x10, rem + 4), PATCH(0x26, rem - 16), 0, 0);
+	tunnel_seg(port, (u32)desc, 34, 32, SEG_TYPE(1),
+		   PATCH(0x30, rem - 46), PATCH(0x34, units),
+		   PATCH(0x38, ipv4_csum_update(iph, rem - 46, units)), 0);
+	tunnel_seg(port, (u32)desc, len - 66 - fp, fp + 66, SEG_LAST,
+		   0, 0, 0, 0);
+	return 0;
+}
+
+/* UDF 1-20 encapsulate, 21-40 strip the outer 50 bytes */
+static s32 tunnel_vxlan(u32 port, u32 len, u32 *desc, u32 udf)
+{
+	if ((u8)(udf - 1) > 19) {
+		desc[4] = udf << 14 | 0x3800;
+		desc[5] = 0x7F4007FF;
+		desc[0] = port << 4;
+		desc[6] = 0xFFFF;
+		return tunnel_send_split(port, (u32)desc, 0, len, 50);
+	}
+	if (tunnel_encap_mtu >= len + 4)
+		return vxlan_encap(port, len, desc, udf);
+	return vxlan_encap_frag(port, len, desc, udf,
+				(desc[0] >> 20) & 0x7F);
+}
 s32 tunnel_offload_handler(u32 port, u32 pkt_len, u32 *desc)
 {
 	u32 w0 = desc[0];
@@ -469,56 +556,8 @@ s32 tunnel_offload_handler(u32 port, u32 pkt_len, u32 *desc)
 	udf = ((u8 *)desc)[20];
 	hdr_off = (w0 >> 20) & 0x7F;
 
-	if ((u8)(udf - 1) <= 0x27) {
-		/* UDF 1-40: tunnel encapsulation */
-		if ((u8)(udf - 1) <= 0x13) {
-			/* UDF 1-20: IPv4 encap */
-			sram = tunnel_sram_base();
-
-			if (tunnel_encap_mtu < pkt_len + 4) {
-				u32 frag_units = (tunnel_encap_mtu - 70) >> 3;
-				u32 frag_payload = 8 * (u16)frag_units;
-
-				desc[4] = (udf << 14) | 0x3800;
-				desc[0] = 16 * port;
-				desc[5] = 0x7F3FFFFF;
-				desc[6] = 0xFFFF;
-
-				bswap16((u16)(frag_payload + 70));
-				bswap16((u16)(frag_payload + 50));
-				bswap16((u16)(frag_payload + 20));
-				bswap16(0x2000);
-
-				{
-					u32 rem = pkt_len - 15 - frag_payload;
-
-					bswap16((u16)(rem + 4));
-					bswap16((u16)(rem - 16));
-					bswap16((u16)(rem - 46));
-					bswap16((u16)frag_units);
-				}
-				return 0;
-			}
-
-			desc[0] = 16 * port;
-			desc[5] = 0x7F3FFFFF;
-			desc[6] = 0xFFFF;
-			desc[4] = (udf << 14) | 0x3800;
-			bswap16((u16)(pkt_len + 4));
-			bswap16((u16)(pkt_len - 16));
-			tunnel_pkt_continue(port, pkt_len, (u32)desc);
-			return 0;
-		}
-
-		/* UDF 21-40: pass-through encap */
-		desc[4] = (udf << 14) | 0x3800;
-		desc[5] = 0x7F3FFFFF;
-		desc[0] = 16 * port;
-		desc[6] = 0xFFFF;
-		tunnel_pkt_continue(port, (u32)desc, 0);
-		return 0;
-	}
-
+	if ((u8)(udf - 1) <= 39)
+		return tunnel_vxlan(port, pkt_len, desc, udf);
 	if ((u8)(udf - 41) <= 0xF) {
 		/* UDF 41-56: SRv6 processing */
 		if ((u8)(udf - 41) <= 7) {
