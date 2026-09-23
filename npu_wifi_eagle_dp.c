@@ -77,6 +77,7 @@ static int eagle_tx_ring_fill(u32 buf, u16 len, u16 token, u32 info,
 		*band_out = (u8)band;
 		if ((s32)REG32(desc + 4) < 0 || retry == 0 || eagle_stopping)
 			break;
+		dbg.lanwait++;
 		if (retry == 1000 || retry == 1)
 			npu_printf(band ? "fband1 cpuindex = %d, dmaindex = %d" :
 					  "fband0 cpuindex = %d, dmaindex = %d",
@@ -115,6 +116,7 @@ static int eagle_tx_ring_fill(u32 buf, u16 len, u16 token, u32 info,
 	}
 
 	eagle_tx_ring_cpu_idx[band] = (cpu + 1) & EAGLE_TX_RING_MASK;
+	dbg.lan[band]++;
 	return 0;
 }
 
@@ -145,6 +147,7 @@ static int eagle_tdma_to_wifi(u32 ring, u32 budget)
 		if (ntok == -1) {
 			/* no spare buffer: drop the frame, rearm the slot */
 			tdma_rx_alloc_fail++;
+			dbg.lanfail++;
 			fail++;
 			REG32(d + 4) = 0x800;
 			stop = 1;
@@ -156,6 +159,7 @@ static int eagle_tdma_to_wifi(u32 ring, u32 budget)
 			if (eagle_tx_ring_fill(buf, w1 & 0xFFFF, (u16)tok,
 					       d + 16, &band) == -1) {
 				tx_token_free((u16)tok);
+				dbg.lanfail++;
 				fail++;
 				stop = 1;
 			}
@@ -220,6 +224,9 @@ static void eagle_dbg_tick(void)
 		   REG32(HOSTADPT_RX_CPU_IDX(0)) & 0xFFFF,
 		   REG32(HOSTADPT_RX_CPU_IDX(1)) & 0xFFFF,
 		   eagle_rx_en, eagle_tx_en, eagle_txq_state);
+	npu_printf("[NPU]lan push=%d/%d fail=%d wait=%d ridx=%d/%d\n",
+		   dbg.lan[0], dbg.lan[1], dbg.lanfail, dbg.lanwait,
+		   tdma_rx_ridx[0], tdma_rx_ridx[1]);
 	npu_printf("[NPU]wire sw=%d hw=%d cfg=%x glb=%x\n",
 		   tdma_tx_sw_idx[0], REG32(TDMA_TX_RING0_DMA_IDX) & 0xFFFF,
 		   REG32(TDMA_TX_RING0_CFG), REG32(TDMA_GLB_CFG));

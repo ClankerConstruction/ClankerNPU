@@ -230,6 +230,9 @@ struct eagle_dbg {
 	u32 rxoutfail;	/* host adaptor ring full */
 	u32 txdone;	/* tx done reports consumed */
 	u32 refill[2];	/* rx ring descriptors refilled */
+	u32 lan[2];	/* TDMA rx frames pushed to the WiFi tx ring */
+	u32 lanfail;	/* TDMA rx frames dropped: no token or ring stuck */
+	u32 lanwait;	/* waits for a free WiFi tx slot */
 };
 extern struct eagle_dbg dbg;
 
