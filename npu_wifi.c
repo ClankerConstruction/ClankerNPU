@@ -152,6 +152,9 @@ void core0_wifi_init_wrapper(void)
 			   "npu_offload_wifi_tx_ring_init", 0);
 #endif
 
+#ifdef WIFI_EAGLE
+	eagle_msdu_pg_pool_init();
+#endif
 #ifdef HAS_BME
 	tdma_tx_init();
 	tdma_rx_init();

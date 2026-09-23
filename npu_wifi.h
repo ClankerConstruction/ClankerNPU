@@ -243,6 +243,7 @@ u32 eagle_ring_desc_base(u32 ring_id);
 void eagle_queue_init(u32 band);
 void eagle_tdma_flow_ctrl(int on);
 void ppe_wifi_bufid_isr(int src);
+void eagle_msdu_pg_pool_init(void);
 
 #endif /* WIFI_EAGLE */
 

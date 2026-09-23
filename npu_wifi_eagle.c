@@ -423,6 +423,70 @@ static void eagle_txdone_ring_fill(u32 ring_size)
 	}
 }
 
+/* MSDU page ids: an 8-slot free ring */
+static u16 *msdu_pg_pool;
+static u16 msdu_pg_ridx, msdu_pg_widx;
+static u16 msdu_pg_ids[8];
+static u32 msdu_pg_ring_ridx;
+static u32 msdu_pg_ring_ready;
+
+void eagle_msdu_pg_pool_init(void)
+{
+	u32 i;
+
+	msdu_pg_pool = (u16 *)sram_buf_alloc(26);
+	for (i = 0; i < 8; i++)
+		msdu_pg_pool[i] = (u16)i;
+	msdu_pg_ridx = 0;
+	msdu_pg_widx = 0;
+}
+
+static s32 msdu_pg_id_alloc(void)
+{
+	u16 next = (msdu_pg_ridx + 1 == 8) ? 0 : msdu_pg_ridx + 1;
+	s32 id;
+
+	if (msdu_pg_widx == next)
+		return -1;
+	id = (s16)msdu_pg_pool[msdu_pg_ridx];
+	msdu_pg_ridx = next;
+	return id;
+}
+
+/* npu_rro_msdu_pg_ring_init_eagle */
+static int eagle_msdu_pg_ring_init(u32 ring_size, u32 again)
+{
+	u32 i, desc;
+	s32 id;
+
+	if (ring_size - 1 > 7)
+		npu_printf("ERROR! rx_ring_size = %d\n", ring_size);
+
+	for (i = 0; i < ring_size; i++) {
+		id = msdu_pg_id_alloc();
+		if (id == -1) {
+			npu_printf("[%s]rx ring init: alloc buffid fail!\n",
+				   "npu_rro_msdu_pg_ring_init_eagle");
+			return 1;
+		}
+		msdu_pg_ids[i] = (u16)id;
+		desc = eagle_msdu_pg_desc_base + 16 * i;
+		REG32(desc + 4) = 0;
+		REG32(desc) = ((((u32)id << 7) + eagle_dram_ba_node_addr) &
+			       0x3FFFFFFF) | 0x80000000;
+		REG32(desc + 8) = (u32)id << 16;
+		REG32(desc + 12) = 0;
+		REG32(desc + 4) = 0x00800100;
+	}
+
+	if (!again) {
+		msdu_pg_ring_ridx = 0;
+		msdu_pg_ring_ready = 1;
+		npu_printf("reset msdu pg ring\n");
+	}
+	return 0;
+}
+
 static void npu_mbox_init_rxd_wrapper(u32 ring_size, u32 ring)
 {
 #ifdef NPU_MAIL_TRACE
@@ -438,11 +502,13 @@ static void npu_mbox_init_rxd_wrapper(u32 ring_size, u32 ring)
 		eagle_rx_ring_init(ring_size, 1);
 		break;
 	case EAGLE_RING_MSDU_PG0:
-		eagle_msdu_pg_desc_base = eagle_ring_desc_base(5);
-		break;
 	case EAGLE_RING_MSDU_PG1:
-		npu_printf("%s() wrong input val:%d\n",
-			   "npu_rro_msdu_pg_ring_desc_addr", 1);
+		if (ring == EAGLE_RING_MSDU_PG1)
+			npu_printf("%s() wrong input val:%d\n",
+				   "npu_rro_msdu_pg_ring_desc_addr", 1);
+		else
+			eagle_msdu_pg_desc_base = eagle_ring_desc_base(5);
+		eagle_msdu_pg_ring_init(ring_size, ring == EAGLE_RING_MSDU_PG1);
 		break;
 	case EAGLE_RING_IND_CMD0:
 		eagle_ind_cmd_desc_base = eagle_ring_desc_base(6);
@@ -519,10 +585,13 @@ int eagle_mail_set_del_sta(u32 *msg)
 	return 1;
 }
 
+/* on eagle this is the MSDU page pool, 128 bytes per page */
 int eagle_mail_set_dram_ba_node(u32 *msg)
 {
-	eagle_addr_in_range(msg[2], "npu_mbox_set_wait_dram_ba_node_addr_wrapper");
+	eagle_addr_in_range(msg[2],
+			    "npu_mbox_set_wait_dram_ba_reordering_node_addr_wrapper");
 	eagle_dram_ba_node_addr = msg[2];
+	npu_printf("got MSDU PG packet pool address:%x\n", msg[2]);
 	return 1;
 }
 
