@@ -36,11 +36,6 @@ static u16 bswap16(u16 v)
 	return (v >> 8) | (v << 8);
 }
 
-static u32 tunnel_sram_base(void)
-{
-	return npu_bridge_addr();
-}
-
 /* egress command word: first and last segment, segment type */
 #define SEG_FIRST		0x80000000
 #define SEG_LAST		0x40000000
@@ -101,14 +96,6 @@ s32 tunnel_dequeue(u32 port, u32 *pkt_len, u32 *desc_ptr)
 	return 0;
 }
 
-void tunnel_process(void)
-{
-	if (tunnel_offload_ready != 0)
-		return;
-	if (tunnel_test_param != 0 && tunnel_test_mode != 0)
-		return;
-}
-
 /* RFC 1624 checksum update for a new total length and fragment word */
 static u16 ipv4_csum_update(u8 *iph, u16 totlen, u16 frag)
 {
@@ -137,7 +124,7 @@ static void tunnel_send_insert(u32 port, u32 hdr, u32 hdr_fwd, u32 hdr_len,
 
 static s32 vxlan_encap(u32 port, u32 len, u32 *desc, u32 udf)
 {
-	u32 hdr = tunnel_sram_base() + (udf - 1) * 128;
+	u32 hdr = npu_bridge_addr() + (udf - 1) * 128;
 
 	desc[0] = port << 4;
 	desc[5] = 0x7F4007FF;
@@ -152,7 +139,7 @@ static s32 vxlan_encap(u32 port, u32 len, u32 *desc, u32 udf)
 static s32 vxlan_encap_frag(u32 port, u32 len, u32 *desc, u32 udf,
 			    u32 hdr_off)
 {
-	u32 hdr = tunnel_sram_base() + (udf - 1) * 128;
+	u32 hdr = npu_bridge_addr() + (udf - 1) * 128;
 	u8 *iph = (u8 *)desc + hdr_off + 32;
 	u32 units = (u16)((tunnel_encap_mtu - 70) >> 3);
 	u32 fp = units << 3;
@@ -200,7 +187,7 @@ static s32 tunnel_vxlan(u32 port, u32 len, u32 *desc, u32 udf)
 /* insert the stored IPv6 + SRH header after the MACs */
 static s32 srv6_encap(u32 port, u32 len, u32 *desc, u32 udf, u32 hdr_off)
 {
-	u32 hdr = tunnel_sram_base() + (udf - 21) * 128;
+	u32 hdr = npu_bridge_addr() + (udf - 21) * 128;
 	u32 hlen = tunnel_srv6_hdr_len[udf - 41];
 
 	desc[4] = udf << 14 | 0x3800;
@@ -314,7 +301,7 @@ static s32 tunnel_map(u32 port, u32 len, u32 *desc, u32 udf, u32 w1,
 	u8 *b = (u8 *)desc;
 	u16 *h = (u16 *)desc;
 	u32 d = (u32)desc & 0x1FFFFFFF;
-	u32 hdr = tunnel_sram_base() + 0xE80;
+	u32 hdr = npu_bridge_addr() + 0xE80;
 
 	desc[0] = port << 4;
 	desc[4] = udf << 14 | 0x3800;
@@ -400,7 +387,7 @@ static s32 frag_v4(u32 port, u32 len, u32 *desc, u32 mtu, u32 hdr_off)
  * segment filled by patches */
 static s32 frag_v6(u32 port, u32 len, u32 *desc, u32 mtu, u32 hdr_off)
 {
-	u32 frag_hdr = tunnel_sram_base() + 0xE00;
+	u32 frag_hdr = npu_bridge_addr() + 0xE00;
 	u8 *nh = (u8 *)desc + hdr_off + 38;
 	u32 units = (u16)((mtu - 48) >> 3);
 	u32 fs = units << 3;
