@@ -372,6 +372,7 @@ u32 ppe_module_idx;
 u8 ppe_module_ver;
 u32 fragment_mtu[4];
 u32 tunnel_pending[8];
+u32 tunnel_credit[8];
 u32 tunnel_test_active;
 u32 tunnel_test_mode;
 u32 tunnel_test_param;
@@ -383,7 +384,6 @@ u32 tunnel_v4_reasm_desc;
 u32 tunnel_v6_reasm_hdroff;
 u32 tunnel_v6_reasm_len;
 u32 tunnel_v6_reasm_desc;
-u32 tunnel_srv6_seg_table;
 u32 tunnel_encap_mtu = 1500;
 u32 tunnel_map_info_base;
 #endif
