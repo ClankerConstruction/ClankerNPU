@@ -95,7 +95,7 @@ static void bme_done_isr(int src)
 		}
 		d[0] = 0;
 		d[1] = 0;
-		bme_ridx = (bme_ridx + 1 == BME_RING_ENTRIES) ? 0 : bme_ridx + 1;
+		bme_ridx = bme_ridx + 1 == BME_RING_ENTRIES ? 0 : bme_ridx + 1;
 		d = (u32 *)(tdma_bme_dscp_base_addr + bme_ridx * 8);
 	}
 	REG32(BME_BASE + 0x008) = bme_ridx;

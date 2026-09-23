@@ -1,10 +1,6 @@
 /*
  * AN75XX NPU firmware - WiFi receive path (kite)
- *
- * Core 1 drains the 2.4G ring on DBDC chips and the 5G ring; core 2
- * drains the 2.4G ring otherwise, and in pipeline mode classifies the
- * 5G frames core 1 queued. Each frame is parsed, run through the BA
- * reorder window, then queued for core 3, which hands it to the host.
+ * Cores 1 and 2 drain the rings, reorder per BA window, queue for core 3.
  */
 
 #include "npu_internal.h"
@@ -84,12 +80,9 @@ static void kite_rx_stats(u32 dir, u32 port, u8 state, u32 type,
 
 /* ================================================================
  * Rx descriptor parser
- *
- * Fills n from the WiFi rx descriptor in front of the frame. Returns
- * -1 for a frame the reorder window does not take: no 802.11 header
- * translation, an error, or a data frame without QoS.
  * ================================================================ */
 
+/* -1: untranslated, errored or non-QoS data frames go to the host */
 static int kite_rx_parse(u32 buf_id, struct kite_node *n, u32 len, u32 band)
 {
 	u32 buf = wifi_pkt_va(buf_id);
@@ -175,11 +168,9 @@ static s32 kite_rx_hdr_len(u32 buf_id, u32 band)
 
 /* ================================================================
  * BA reorder window classifier
- *
- * Returns -1 when the window took the frame (sent it on, queued it
- * or dropped it); otherwise the caller hands the frame to the host.
  * ================================================================ */
 
+/* -1 when the window took the frame, else the caller sends it up */
 static s32 kite_classify(s32 buf_id, u32 len, u32 band)
 {
 	struct kite_node pn;
@@ -408,10 +399,6 @@ in_order:
 
 /* ================================================================
  * Frames spanning several rx descriptors
- *
- * Up to 0xDAC bytes: copied into one fresh buffer. Longer: each
- * segment goes to core 3 on the rxNode ring and its descriptor gets a
- * fresh buffer. 0x4000 and more: dropped. Returns the next index.
  * ================================================================ */
 
 /* give n descriptors back to the chip unchanged */
@@ -430,6 +417,8 @@ static u32 kite_rx_skip(u32 ring, u32 idx, u32 n, u32 band, u32 off)
 	return idx;
 }
 
+/* up to 0xDAC copied into one buffer, up to 0x4000 sent in segments,
+ * longer dropped; returns the next index */
 static u32 kite_rx_multi(u32 band, u32 idx, u32 len, u32 count)
 {
 	u32 ring = band ? rxd_base_5g : rxd_base_2g;

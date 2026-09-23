@@ -1,10 +1,6 @@
 /*
  * AN75XX NPU firmware - packet forwarding rings (kite)
- *
- * piNode and rxNode hand a frame from the core that received it to
- * core 3, which gives it to the host. A frame that fits one buffer takes
- * the 16-byte piNode ring; a segment of a longer frame takes the 12-byte
- * rxNode ring, where core 3 puts the segments back together.
+ * Whole frames take the piNode ring, segments the rxNode ring.
  */
 
 #include "npu_internal.h"
@@ -82,9 +78,7 @@ void wifi_pkt_queue_init(u32 band)
 }
 
 /* ================================================================
- * Packet forwarding engine
- *
- * Queues a frame for core 3. Returns 1 when the ring is full.
+ * Packet forwarding engine: 1 when the ring is full
  * ================================================================ */
 
 int pkt_forward(u32 buf_id, u32 pkt_len, s16 wcid, u8 amsdu,
@@ -143,9 +137,9 @@ int pkt_forward(u32 buf_id, u32 pkt_len, s16 wcid, u8 amsdu,
 
 		widx++;
 		if (band != 0)
-			pinode_widx_5g = (widx != PINODE_RING_SIZE_5G) ? widx : 0;
+			pinode_widx_5g = widx != PINODE_RING_SIZE_5G ? widx : 0;
 		else
-			pinode_widx_2g = (widx != PINODE_RING_SIZE_2G) ? widx : 0;
+			pinode_widx_2g = widx != PINODE_RING_SIZE_2G ? widx : 0;
 		hw_mutex_unlock(queue_mutex_2g);
 	}
 
@@ -180,10 +174,7 @@ int pkt_forward_bme(s32 buf_id, u32 wcid, u32 info)
 }
 
 /* ================================================================
- * Host ring drains, core 3
- *
- * pinode_drain: one whole frame per call
- * rxnode_drain: the segments of one frame
+ * Host ring drains on core 3
  * ================================================================ */
 
 void pinode_drain(u32 band)

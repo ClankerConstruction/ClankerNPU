@@ -1,11 +1,6 @@
 /*
  * AN75XX NPU firmware - block ack reorder engine (kite)
- *
- * The kite chips hand the NPU frames in the order they arrive, so the
- * NPU holds the reorder window. Each WCID has 8 TIDs, each TID a
- * 28-byte entry, and each entry a list of 36-byte MPDU nodes.
- *
- * The eagle chips reorder in the WiFi chip, so none of this runs there.
+ * Kite chips deliver frames unordered; the NPU keeps each BA window.
  */
 
 #include "npu_internal.h"
@@ -14,10 +9,7 @@
 #ifdef WIFI_KITE
 
 /* ================================================================
- * Reorder node management
- *
- * Two pools: pri (2000 nodes in SRAM) and sec (5000 nodes in the DRAM
- * block from funcId 7), 36 bytes each. Free lists are index rings.
+ * Reorder nodes: 2000 in SRAM, 5000 in the funcId 7 DRAM block
  * ================================================================ */
 
 #define REORDER_NODE_SIZE      36
@@ -83,12 +75,10 @@ u32 reorder_node_alloc(u32 band, u32 *pool_type, u16 *idx_out)
 
 /* ================================================================
  * Frame out of the reorder engine
- *
- * To the host when the BSS is rate limited, the band waits for the
- * host or the chip has no offload; otherwise straight to the wire
- * over TDMA. hdr is where the 802.3 frame starts in the buffer.
  * ================================================================ */
 
+/* host for a rate-limited BSS, a waiting band or no offload; else the
+ * wire over TDMA from hdr, where the 802.3 frame starts */
 int pkt_enqueue_bridge(u32 buf_id, u32 pkt_len, u32 hdr,
 		       u32 band, u32 bss)
 {
@@ -138,19 +128,14 @@ int pkt_enqueue_bridge(u32 buf_id, u32 pkt_len, u32 hdr,
 }
 
 /* ================================================================
- * BA (Block Ack) entry management
- *
- * Each WCID has 8 TIDs x 28-byte BA entries. MPDU nodes (36 bytes)
- * form a linked list per entry; each MPDU can have MSDU sub-nodes.
- *
- * Node offsets: 0=next, 4=msdu_head, 8=msdu_tail, 12=msdu_cnt,
- *   16=hdr, 17=tid, 18=wcid, 19=bss, 20=buf_id, 22=node_idx, 24=sn,
- *   26=len, 28=amsdu, 29=node_type, 32=tick
- *
- * Entry offsets: 0=mpdu_head, 4=mpdu_tail, 8=count, 12=msdu chain,
- *   16=win_size, 18=last_sn, 20=ref_sn, 22=amsdu, 23=flag,
- *   24=state, 25=band
+ * BA entries: 28 bytes per TID, 8 TIDs per WCID; nodes are 36 bytes
  * ================================================================ */
+
+/* node: 0 next, 4/8 msdu head/tail, 12 msdus, 16 hdr, 17 tid,
+ * 18 wcid, 19 bss, 20 buf, 22 idx, 24 sn, 26 len,
+ * 28 amsdu, 29 pool, 32 tick */
+/* entry: 0/4 head/tail, 8 count, 12 msdu chain, 16 win, 18 last sn,
+ * 20 ref sn, 22 amsdu, 23 flag, 24 state, 25 band */
 
 static void ba_lock(u32 *entry)
 {
