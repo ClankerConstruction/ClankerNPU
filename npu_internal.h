@@ -62,7 +62,6 @@ void sram_buf_dump(void);
 /* npu_bridge.c */
 void npu_bridge_buf_init(void);
 u32 npu_bridge_addr(void);
-extern u32 npu_bridge_pkt_base;
 
 /* npu_main.c — chip ID */
 int mtk_usb_powerdown(u32 port);

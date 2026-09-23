@@ -17,7 +17,6 @@
 #define BRIDGE_PKT_BUF_BASE_REG 0x1EC12010
 #define BRIDGE_PKT_BUF_CFG    0x1EC12018
 
-u32 npu_bridge_pkt_base;
 static u32 bridge_tx_count[4];
 
 u32 npu_bridge_addr(void)
@@ -27,17 +26,15 @@ u32 npu_bridge_addr(void)
 
 void npu_bridge_buf_init(void)
 {
-	u32 i;
+	u32 i, phys;
 	u32 *ch_status;
 
 	npu_bridge_base = sram_buf_alloc(129);
 	npu_printf("npuBridgeBase=%x\n", npu_bridge_base);
-	npu_bridge_pkt_base = npu_bridge_base;
+	phys = npu_bridge_base & 0x1FFFFFFF;
+	REG32(0x1EC12008) = phys;
 	npu_printf("%s: NPU_BRIDGE_BASE_PACKET_BUFFER(0x%x)=0x%x, NPU_BRIDGE_PACKET_BUF_SIZE:0x%x\n",
-		   "npu_bridge_buf_init",
-		   (u32)&npu_bridge_pkt_base,
-		   npu_bridge_base,
-		   0x10000);
+		   "npu_bridge_buf_init", 0x1EC12008, phys, 0x10000);
 
 	REG32(BRIDGE_PKT_BUF_BASE_REG) = 264192;
 	REG32(BRIDGE_PKT_BUF_CFG) = 1;

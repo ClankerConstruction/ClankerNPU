@@ -38,7 +38,7 @@ static u16 bswap16(u16 v)
 
 static u32 tunnel_sram_base(void)
 {
-	return npu_bridge_pkt_base + 0x10000;
+	return npu_bridge_addr();
 }
 
 static void bridge_cmd_submit(u32 port, u32 desc, u32 cmd, u32 arg0,
