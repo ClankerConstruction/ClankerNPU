@@ -198,13 +198,17 @@ void eagle_core0_loop(void) __attribute__((noreturn));
 /* npu_tunnel.c, npu_ppe.c, npu_l4s.c */
 int tunnel_mail_dispatch(u32 base, u32 cnt);
 #ifdef HAS_TUNNEL
-void tunnel_ppe_reset(void);
 int tunnel_mail_store_hdr(u32 base, u32 cnt);
 int tunnel_mail_store_srv6(u32 base, u32 cnt);
 int tunnel_mail_set_srv6_addr(u32 base, u32 cnt);
 int tunnel_mail_frag_mtu(u32 base, u32 cnt);
-int tunnel_mail_reset(u32 base, u32 cnt);
-int tunnel_mail_l4s_stub(u32 base, u32 cnt);
+int tunnel_mail_nop(u32 base, u32 cnt);
+int tunnel_mail_vxlan_mtu(u32 base, u32 cnt);
+int tunnel_mail_bridge_dbg(u32 base, u32 cnt);
+int tunnel_mail_map_info(u32 base, u32 cnt);
+int tunnel_mail_l4s(u32 base, u32 cnt);
+int l4s_set_config(u32 cmd, u32 arg);
+void npu_bridge_debug(u32 op);
 int hwnat_mail_dispatch(u32 base, u32 cnt);
 void tunnel_init(void);
 void tunnel_process(void);
@@ -348,6 +352,7 @@ extern u32 tunnel_v6_reasm_len;
 extern u32 tunnel_v6_reasm_desc;
 extern u32 tunnel_srv6_seg_table;
 extern u32 tunnel_encap_mtu;
+extern u32 tunnel_map_info_base;
 extern u32 tunnel_config_ptrs[4];
 extern u8 tunnel_config_area[0x500];
 extern u32 tunnel_max_count;

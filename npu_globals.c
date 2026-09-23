@@ -345,11 +345,14 @@ u32 wifi_state[256];
 #ifdef HAS_TUNNEL
 mbox_handler_t tunnel_func_table[10] __attribute__((section(".data"))) = {
 	[0] = tunnel_mail_store_hdr,
+	[1] = tunnel_mail_nop,
+	[2] = tunnel_mail_vxlan_mtu,
 	[3] = tunnel_mail_store_srv6,
 	[4] = tunnel_mail_set_srv6_addr,
 	[5] = tunnel_mail_frag_mtu,
-	[6] = tunnel_mail_reset,
-	[8] = tunnel_mail_l4s_stub,
+	[6] = tunnel_mail_bridge_dbg,
+	[7] = tunnel_mail_map_info,
+	[8] = tunnel_mail_l4s,
 };
 #else
 mbox_handler_t tunnel_func_table[10];
@@ -382,6 +385,7 @@ u32 tunnel_v6_reasm_len;
 u32 tunnel_v6_reasm_desc;
 u32 tunnel_srv6_seg_table;
 u32 tunnel_encap_mtu = 1500;
+u32 tunnel_map_info_base;
 #endif
 
 /* DBA state */

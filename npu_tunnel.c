@@ -713,17 +713,40 @@ int tunnel_mail_set_srv6_addr(u32 base, u32 cnt)
 	return 1;
 }
 
-int tunnel_mail_l4s_stub(u32 base, u32 cnt)
+int tunnel_mail_nop(u32 base, u32 cnt)
 {
 	(void)base; (void)cnt;
-	npu_printf("L4S not support!!!\n");
 	return 1;
 }
 
-int tunnel_mail_reset(u32 base, u32 cnt)
+int tunnel_mail_vxlan_mtu(u32 base, u32 cnt)
 {
-	(void)base; (void)cnt;
-	tunnel_ppe_reset();
+	(void)cnt;
+	tunnel_encap_mtu = *(u32 *)(base + 8);
+	npu_printf("set vxlan mtu %d\n", tunnel_encap_mtu);
+	return 1;
+}
+
+/* bridge counters dump, reset or reassembly flush */
+int tunnel_mail_bridge_dbg(u32 base, u32 cnt)
+{
+	(void)cnt;
+	npu_bridge_debug(*(u32 *)(base + 8));
+	return 1;
+}
+
+int tunnel_mail_map_info(u32 base, u32 cnt)
+{
+	(void)cnt;
+	tunnel_map_info_base = *(u32 *)(base + 8);
+	npu_printf("map_info_base %x\n", tunnel_map_info_base);
+	return 1;
+}
+
+int tunnel_mail_l4s(u32 base, u32 cnt)
+{
+	(void)cnt;
+	l4s_set_config(*(u32 *)(base + 8), *(u32 *)(base + 12));
 	return 1;
 }
 

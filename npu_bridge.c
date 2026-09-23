@@ -109,3 +109,74 @@ static int npu_bridge_send_direct(u32 ch, u32 data, u32 len)
 				 (ch & 7) | 0xC2000000,
 				 0, 0, 0, 0);
 }
+
+#ifdef HAS_TUNNEL
+/* drop whatever reassembly holds */
+static void tunnel_reasm_flush(void)
+{
+	if (tunnel_v4_reasm_desc != 0) {
+		tunnel_pkt_drop(7, tunnel_v4_reasm_len, tunnel_v4_reasm_desc);
+		tunnel_v4_reasm_desc = 0;
+		tunnel_v4_reasm_len = 0;
+		tunnel_v4_reasm_hdroff = 0;
+	}
+	if (tunnel_v6_reasm_desc != 0) {
+		tunnel_pkt_drop(7, tunnel_v6_reasm_len, tunnel_v6_reasm_desc);
+		tunnel_v6_reasm_desc = 0;
+		tunnel_v6_reasm_len = 0;
+		tunnel_v6_reasm_hdroff = 0;
+	}
+}
+
+/* op 0 dumps the bridge counters, 1 resets them, 2 flushes
+ * reassembly */
+void npu_bridge_debug(u32 op)
+{
+	u32 ch, r;
+
+	if (op == 1) {
+		REG32(0x1EC12370) = 1;
+		return;
+	}
+	if (op == 2) {
+		tunnel_reasm_flush();
+		return;
+	}
+	if (op != 0)
+		return;
+
+	r = 0x1EC12290;
+	npu_printf("NPU_BRIDGE_DBG_FSM_ST            (0x%08x) = 0x%08lx\n", r, REG32(r));
+	r += 4;
+	npu_printf("NPU_BRIDGE_DBG_PKTBUF_FREE_SIZE  (0x%08x) = 0x%08lx\n", r, REG32(r));
+	r += 4;
+	npu_printf("NPU_BRIDGE_DBG_TXMBI_INCNT       (0x%08x) = 0x%08lx\n", r, REG32(r));
+	r += 4;
+	npu_printf("NPU_BRIDGE_DBG_TXCMD_INCNT       (0x%08x) = 0x%08lx\n", r, REG32(r));
+	r += 4;
+	npu_printf("NPU_BRIDGE_DBG_TXCMD_OUTCNT      (0x%08x) = 0x%08lx\n", r, REG32(r));
+	r += 4;
+	npu_printf("NPU_BRIDGE_DBG_RXCMD_INCNT       (0x%08x) = 0x%08lx\n", r, REG32(r));
+	r += 4;
+	npu_printf("NPU_BRIDGE_DBG_RXCMD_OUTCNT      (0x%08x) = 0x%08lx\n", r, REG32(r));
+	r += 4;
+	npu_printf("NPU_BRIDGE_DBG_RXMBI_OUTCNT      (0x%08x) = 0x%08lx\n", r, REG32(r));
+
+	for (ch = 0; ch < 4; ch++) {
+		r = 0x1EC122B0 + 4 * ch;
+		npu_printf("NPU_BRIDGE_DBG_TXMBI_INCNT_CH(%d)  (0x%08x) = 0x%08lx\n",
+			   ch, r, REG32(r));
+		npu_printf("NPU_BRIDGE_DBG_TXCMD_INCNT_CH(%d)  (0x%08x) = 0x%08lx\n",
+			   ch, r + 32, REG32(r + 32));
+		npu_printf("NPU_BRIDGE_DBG_TXCMD_OUTCNT_CH(%d) (0x%08x) = 0x%08lx\n",
+			   ch, r + 64, REG32(r + 64));
+		npu_printf("NPU_BRIDGE_DBG_RXCMD_INCNT_CH(%d)  (0x%08x) = 0x%08lx\n",
+			   ch, r + 96, REG32(r + 96));
+		npu_printf("NPU_BRIDGE_DBG_RXCMD_OUTCNT_CH(%d) (0x%08x) = 0x%08lx\n",
+			   ch, r + 128, REG32(r + 128));
+		npu_printf("NPU_BRIDGE_DBG_RXMBI_OUTCNT_CH(%d) (0x%08x) = 0x%08lx\n",
+			   ch, r + 160, REG32(r + 160));
+	}
+}
+#endif
+

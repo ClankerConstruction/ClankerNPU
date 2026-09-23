@@ -11,7 +11,7 @@
 
 #ifdef HAS_TUNNEL
 
-static int l4s_set_config(u32 cmd, u32 arg)
+int l4s_set_config(u32 cmd, u32 arg)
 {
 	switch (cmd) {
 	case 0:
