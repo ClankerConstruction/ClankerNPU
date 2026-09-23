@@ -112,7 +112,7 @@ static void npu_set_rx_ring_for_tx_done_phy_base_eagle(u32 addr, u32 ring)
 }
 
 /* descriptor base of one eagle ring inside the shared PCIe descriptor
- * block, by the ring's own id. Offsets are the blob's own table. */
+ * block, by the ring's own id. */
 u32 eagle_ring_desc_base(u32 ring_id)
 {
 	static const u32 off[6] = {

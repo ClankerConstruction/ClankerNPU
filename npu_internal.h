@@ -552,6 +552,7 @@ extern u32 eagle_txq_mutex[2];
 extern u16 eagle_mseg_retry;
 extern u32 eagle_rxdmad_ridx;
 extern u8 eagle_rxdmad_gen;
+extern s8 eagle_rxdmad_kick;
 extern u8 eagle_rxdmad_abort;
 extern u8 eagle_rxdmad_segs;
 extern u32 eagle_rxdmad_seglen;

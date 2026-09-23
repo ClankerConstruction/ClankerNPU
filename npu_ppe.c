@@ -255,8 +255,8 @@ static void ppe_qdma_config(u32 dir)
 /* Which IP protocols the PPE singles out. In black list mode the six it
  * names - TCP, UDP, IPv6, IPIP, ICMP, ICMPv6 - are the ones it will not
  * bind a flow for, so they go to the CPU instead of being forwarded in
- * hardware. White list mode names GRE and ESP instead. The blob picks
- * black at build time. */
+ * hardware. White list mode names GRE and ESP instead. Black is
+ * picked at build time. */
 static void ppe_ip_check_init(u32 blacklist)
 {
 	u32 chip_rev = CHIP_FAMILY;

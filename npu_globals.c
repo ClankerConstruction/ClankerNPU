@@ -558,8 +558,7 @@ volatile u32 eagle_rro_cfg[26];
 volatile u32 eagle_rro_active;
 mbox_handler_t eagle_event_table[4];
 
-/* Host ring bases, keyed by the ring index the host puts in interfaceID.
- * The blob keeps one global per ring; the values are the same. */
+/* Host ring bases, keyed by the ring index the host puts in interfaceID. */
 u32 eagle_rx_ring_pcie_base[2];
 u32 eagle_msdu_pg_pcie_base;
 u32 eagle_ind_cmd_pcie_base;
@@ -630,6 +629,7 @@ u16 eagle_mseg_retry;
 /* rxdmad ring */
 u32 eagle_rxdmad_ridx;
 u8 eagle_rxdmad_gen;
+s8 eagle_rxdmad_kick;
 u8 eagle_rxdmad_abort;
 u8 eagle_rxdmad_segs;
 u32 eagle_rxdmad_seglen;

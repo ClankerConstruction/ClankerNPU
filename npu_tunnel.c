@@ -13,7 +13,7 @@
  * Tunnel funcId dispatch (callback[1] — MFUNC_TUNNEL)
  *
  * All variants register this at callback[1]. The table is pre-
- * initialized in the blob's .data section; entries point to
+ * initialized in .data; entries point to
  * individual tunnel handler functions. Tunnel messages are in
  * SRAM so base_ptr is accessed without DMA translation.
  * ================================================================ */

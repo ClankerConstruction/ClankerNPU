@@ -42,9 +42,9 @@ void eagle_tdma_flow_ctrl(int on)
 	REG32(AN7552_FC_REG) = on ? 0xEB00EA : 0x610060;
 }
 
-/* TODO sub_84006944: LAN -> WiFi straight off the TDMA rx ring, through
- * the WiFi tx ring writer at sub_840146E2. Until that is reconstructed
- * those frames go the long way round through the host. */
+/* TODO LAN -> WiFi straight off the TDMA rx ring into the WiFi tx
+ * ring. Until then those frames go the long way round through the
+ * host. */
 static void eagle_tdma_to_wifi(u32 band, u32 budget)
 {
 	(void)band;
@@ -472,6 +472,16 @@ static int eagle_rxdmad_handle(u8 *chaining)
 	*chaining = 0;
 done:
 	eagle_rxdmad_ridx = next;
+	/* hand the ring back to the chip every 128 descriptors */
+	if (++eagle_rxdmad_kick < 0) {
+		u32 cidx = next ? next - 1 : EAGLE_RX_RING_MAX_IDX;
+
+		if (eagle_emi_cidx_valid == 1)
+			REG32(eagle_emi_cidx) = cidx;
+		else
+			REG32(eagle_ind_cmd_pcie_base + 8) = cidx;
+		eagle_rxdmad_kick = 0;
+	}
 	return 0;
 }
 

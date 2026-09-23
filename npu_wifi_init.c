@@ -456,7 +456,7 @@ pipeline_init:
 }
 
 /* WiFi mailbox setters: simple parameter setters called from host.
- * noinline: blob has these as separate callees, not inlined into handlers. */
+ * noinline: each stays a separate callee, not inlined into handlers. */
 void __attribute__((noinline)) npu_set_retry_limit(u32 val)
 {
 	wifi_retry_limit = (u16)val;

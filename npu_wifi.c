@@ -38,7 +38,7 @@ void dbg_cnt_isr(int src)
 #ifdef HAS_WIFI
 /* WiFi funcType dispatch (callback[0] — MFUNC_WIFI)
  *
- * Blob dispatches all four funcTypes via function pointer tables in .data:
+ * All four funcTypes dispatch via function pointer tables in .data:
  *   SET_WAIT(1): set_wait_func_table[31] indexed by funcId (up to 30)
  *   SET_NO_WAIT(2): single fn ptr, only funcId=0
  *   GET_WAIT(3): get_wait_func_table[10] indexed by funcId (up to 9)

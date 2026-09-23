@@ -122,9 +122,8 @@ static const struct sram_size_ent sram_size_hi[] = {
 	{ 134, 0x01000 }, { 136, 0x08010 }, { 130, 0x00004 }, { 137, 0x00004 },
 };
 
-/* Types this reconstruction allocates that neither blob table lists, so
- * the numbering at those call sites does not match the blob yet. Sized
- * from the loops that fill them; the rest get a bounded default. */
+/* Types missing from the tables above, sized from the loops that fill
+ * them; any other type gets a bounded default. */
 #define SRAM_DEFAULT_SIZE  0x2000
 
 static const struct sram_size_ent sram_size_ext[] = {

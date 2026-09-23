@@ -557,8 +557,8 @@ give to cores 3 and 4.
   only works with `PPE_TB_CFG.SEARCH_MISS = 3`, otherwise the PPE drops
   every packet whose flow it cannot find instead of sending it to the
   CPU, and a DHCP discover leaves the chip and never comes back.
-- **LAN -> WiFi hardware fast path** `sub_84006944` drains the TDMA
-  rx ring straight into the WiFi tx ring through `sub_840146E2`. Not
+- **LAN -> WiFi hardware fast path** drains the TDMA
+  rx ring straight into the WiFi tx ring. Not
   implemented; those frames take the host path instead.
 - **TR-471** test infrastructure (~22 functions) is latency/loss
   measurement per ITU-T Y.1540

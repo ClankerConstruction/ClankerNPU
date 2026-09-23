@@ -100,7 +100,7 @@ static void __attribute__((noinline)) core0_main(void)
 	npu_bridge_buf_init();
 	npu_printf("%s\n", "core0_main");
 #if defined(AN7552) && defined(WIFI_EAGLE)
-	/* TODO the blob also runs the tunnel dequeue here */
+	/* TODO run the tunnel dequeue here too */
 	eagle_core0_loop();
 #endif
 #endif
