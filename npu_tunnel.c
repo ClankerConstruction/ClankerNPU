@@ -115,7 +115,7 @@ s32 tunnel_dequeue(u32 port, u32 *pkt_len, u32 *desc_ptr)
 
 	ring_desc = (u32 *)(REG32(0x1EC12080 + 16 * port) | 0x20000000);
 	*desc_ptr = (u32)ring_desc;
-	*pkt_len = *ring_desc + 32;
+	*pkt_len = (*ring_desc & 0xFFFF) + 32;
 	tunnel_pending[port] = remain - 1;
 
 	return 0;
