@@ -64,14 +64,44 @@ void tdma_init(void)
 }
 
 #ifdef HAS_BME
-/* BME ISR handler */
+#ifdef WIFI_KITE
+#define BME_RING_ENTRIES	512
+
+static u32 bme_ridx;
+
+/* PLIC 32: frames the PPE did not bind come back on the BME ring and
+ * go to the host */
 static void bme_done_isr(int src)
 {
+	u32 hw = REG32(BME_BASE + 0x004);
+	u32 st = REG32(BME_BASE + 0x02C);
+	u32 n, *d;
+
 	(void)src;
+	n = (hw >= bme_ridx) ? hw - bme_ridx : hw + BME_RING_ENTRIES - bme_ridx;
+	REG32(BME_BASE + 0x02C) = st;
+
+	d = (u32 *)(tdma_bme_dscp_base_addr + bme_ridx * 8);
+	while (n-- != 0 && (d[0] & 0x80000000)) {
+		if (d[0] & 0x40000000) {
+			npu_printf("Error: the HW free bind bufid was enabled.\n");
+			wifi_cnt_inc(2, 4);
+		} else {
+			/* w0 15:0 buffer id, w1 15:0 wcid, 20:16 info */
+			if (pkt_forward_bme((s16)d[0], (u16)d[1],
+					    (d[1] >> 16) & 0x1F) != 0)
+				buf_id_free(0, 0, (u16)d[0]);
+			wifi_cnt_inc(2, 8);
+		}
+		d[0] = 0;
+		d[1] = 0;
+		bme_ridx = (bme_ridx + 1 == BME_RING_ENTRIES) ? 0 : bme_ridx + 1;
+		d = (u32 *)(tdma_bme_dscp_base_addr + bme_ridx * 8);
+	}
+	REG32(BME_BASE + 0x008) = bme_ridx;
 }
 
 /* BME init: buffer move engine descriptor ring */
-#ifdef WIFI_KITE
 static void tdma_bme_init(void)
 {
 	u32 *desc;
@@ -89,6 +119,16 @@ static void tdma_bme_init(void)
 	}
 
 	REG32(BME_BASE + 0x000) = 511;
+
+	/* buffer info: 8 units, 8 bytes */
+	REG32(BME_BASE + 0x010) = (REG32(BME_BASE + 0x010) & ~0xF0u) | 0x80;
+	npu_printf("set_bufid_info_util_size = %x/%x\n", 8,
+		   REG32(BME_BASE + 0x010));
+	REG32(BME_BASE + 0x010) = (REG32(BME_BASE + 0x010) & ~0xFu) | 8;
+	npu_printf("set_bufid_info_byte = %x/%x\n", 8,
+		   REG32(BME_BASE + 0x010));
+
+	bme_ridx = 0;
 	REG32(BME_BASE + 0x008) = 0;
 
 	/* register BME done ISR on PLIC source 32 */
@@ -101,7 +141,8 @@ static void tdma_bme_init(void)
 
 	/* timeout */
 	REG32(BME_CSR_MAX_INDEX) = 1000;
-	npu_printf("BME timeout setting%x = %x\n", BME_CSR_MAX_INDEX, 1000);
+	npu_printf("BME timeout setting%x = %x\n", BME_CSR_MAX_INDEX,
+		   REG32(BME_CSR_MAX_INDEX));
 
 	/* global config: enable with size=8 */
 	{
@@ -381,6 +422,10 @@ static u32 *tdma_stats_base(u32 band)
 /* WiFi -> wired. Eight-byte descriptors, 1024 to a ring: word 0 carries
  * the frame length in bits 12:0 and the buffer token in 28:14, word 1
  * the buffer itself. */
+#ifdef WIFI_KITE
+static u32 tdma_tx_mutex[2];
+#endif
+
 int __attribute__((noinline)) tdma_tx_submit(u32 token, u32 pkt_len,
 						    u32 buf_addr, u32 band)
 {
@@ -395,6 +440,15 @@ int __attribute__((noinline)) tdma_tx_submit(u32 token, u32 pkt_len,
 	if (base == 0)
 		return -1;
 
+#ifdef WIFI_KITE
+	/* pipeline mode: cores 1 and 2 both send */
+	u32 locked = wifi_debug_flags & 1;
+
+	if (locked) {
+		hw_mutex_lock(tdma_tx_mutex);
+		sw_idx = tdma_tx_sw_idx[band];
+	}
+#endif
 	while (1) {
 		hw_idx = *hw_idx_reg;
 		free_slots = (sw_idx < hw_idx) ? (hw_idx - sw_idx - 1)
@@ -407,6 +461,11 @@ int __attribute__((noinline)) tdma_tx_submit(u32 token, u32 pkt_len,
 		if (--retries == 0) {
 			if ((wifi_debug_flags & 4))
 				(*(tdma_stats_base(band) + 64))++;
+#ifdef WIFI_KITE
+			/* release the mutex while the ring stays full */
+			if (locked)
+				hw_mutex_unlock(tdma_tx_mutex);
+#endif
 			return -1;
 		}
 	}
@@ -429,6 +488,10 @@ int __attribute__((noinline)) tdma_tx_submit(u32 token, u32 pkt_len,
 	tdma_tx_sw_idx[band] = next;
 	desc[0] = (w0 & 0xFFFFE000) | pkt_len;
 	REG32(TDMA_TX_RING0_IDX + 16 * band) = next;
+#ifdef WIFI_KITE
+	if (locked)
+		hw_mutex_unlock(tdma_tx_mutex);
+#endif
 	return 0;
 }
 #endif /* HAS_WIFI */
