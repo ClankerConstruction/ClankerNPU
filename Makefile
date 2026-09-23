@@ -14,7 +14,7 @@ MAILTRACE ?= 0
 # 0 stages host tx frames but never writes the WiFi tx ring
 NPUTX ?= 1
 # 1 reports the datapath counters every two seconds
-NPUDBG ?= 1
+NPUDBG ?= 0
 # 1 forwards reordered frames to the wired side instead of the host,
 # which needs a configured PPE
 HWFAST ?= 0
