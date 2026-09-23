@@ -761,6 +761,11 @@ static int eagle_rx_ring_refill(u32 band, u32 desc, u32 *idx)
 	REG32(desc + 4) = EAGLE_RX_DESC_CTRL;
 
 	*idx = (i + 1 < eagle_rx_ring_size[band]) ? i + 1 : 0;
+	/* publish the refilled slots every 128 buffers */
+	if (++eagle_rx_ring_kick[band] < 0) {
+		REG32(eagle_rx_ring_pcie_base[band] + 8) = i;
+		eagle_rx_ring_kick[band] = 0;
+	}
 	return 0;
 }
 

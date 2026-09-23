@@ -559,6 +559,7 @@ extern u32 eagle_rxdmad_seglen;
 extern u32 eagle_seg_bufid[7];
 extern u16 eagle_seg_len[7];
 extern u32 eagle_rx_ring_ridx[2];
+extern s8 eagle_rx_ring_kick[2];
 extern u32 eagle_tx_ring_desc[2];
 extern u16 eagle_tx_ring_cpu_idx[2];
 extern u32 eagle_txdone_ridx;

@@ -638,6 +638,7 @@ u16 eagle_seg_len[7];
 
 /* rx rings */
 u32 eagle_rx_ring_ridx[2];
+s8 eagle_rx_ring_kick[2];
 
 /* wifi tx rings */
 u32 eagle_tx_ring_desc[2];

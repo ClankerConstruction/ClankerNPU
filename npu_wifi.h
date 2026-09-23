@@ -80,7 +80,7 @@ int __attribute__((noinline)) tdma_tx_submit(u32 token, u32 pkt_len,
  * npu_hostadpt.c
  * ================================================================ */
 
-extern u8 hostadpt_tx_ring_ready;
+extern volatile u8 hostadpt_tx_ring_ready;
 #ifdef HAS_NPU_WIFI_TX
 extern u32 hostadpt_in_base[2];
 extern u32 hostadpt_in_size[2];
@@ -193,7 +193,7 @@ void __attribute__((noinline)) npu_set_rxd_init(u32 ring_size, u32 band);
 #define EAGLE_TX_BUF_SLOT       256
 #define EAGLE_TX_BUF_SPACE_SIZE 0x80000
 #define EAGLE_TXDONE_RING_BYTES 0x2000
-#define EAGLE_RX_DESC_CTRL      0x07000000
+#define EAGLE_RX_DESC_CTRL      0x07000100
 #define EAGLE_PKT_HEADROOM      192
 #define EAGLE_PKT_BUF_SHIFT     11
 
