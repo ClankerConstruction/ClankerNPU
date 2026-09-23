@@ -36,98 +36,59 @@ void dbg_cnt_isr(int src)
 }
 
 #ifdef HAS_WIFI
-/* WiFi funcType dispatch (callback[0] — MFUNC_WIFI)
- *
- * All four funcTypes dispatch via function pointer tables in .data:
- *   SET_WAIT(1): set_wait_func_table[31] indexed by funcId (up to 30)
- *   SET_NO_WAIT(2): single fn ptr, only funcId=0
- *   GET_WAIT(3): get_wait_func_table[10] indexed by funcId (up to 9)
- *   GET_NO_WAIT(4): single fn ptr, only funcId=0
- *
- * All handlers receive the DMA-translated msg pointer. */
+static int wifi_mail_exceed(u32 *msg, u32 type)
+{
+	npu_printf("Error: exceed max num!interfaceid=%u wifi_mail_data->funcType=%u wifi_mail_data->funcId=%u\n",
+		   msg[0] & 0xF, type, msg[1]);
+	return 0;
+}
+
+static int wifi_mail_call(wifi_mail_fn_t fn, u32 *msg, const char *op)
+{
+	int ret;
+
+	if (!fn)
+		return 1;
+	ret = fn(msg);
+	if (!(u16)ret)
+		npu_printf("wifi_mail_%s_operation fail !\n", op);
+	return (u16)ret;
+}
+
+/* MFUNC_WIFI: msg[0] bits 7:4 funcType, bits 3:0 interface; msg[1] funcId */
 int wifi_mail_dispatch(u32 base, u32 cnt)
 {
 	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);
 	u32 func_type = (msg[0] >> 4) & 0xF;
-	u32 func_id;
 
+	(void)cnt;
 #ifdef NPU_MAIL_TRACE
 	if (func_type != 3 || msg[1] != 0)
 		npu_printf("[MAIL]t%d f%d i%d %x %x %x\n", func_type, msg[1],
 			   msg[0] & 0xF, msg[2], msg[3], msg[4]);
 #endif
-
 	switch (func_type) {
-	case 1: /* SET_WAIT */
-		return wifi_mail_set_wait(base, cnt);
-	case 2: /* SET_NO_WAIT */
-#ifdef WIFI_KITE
-		return wifi_mail_set_event(base, cnt);
-#elif defined(WIFI_EAGLE)
-		return eagle_mail_set_event(base, cnt);
-#else
-		return 0;
-#endif
-	case 3: /* GET_WAIT */
-		func_id = msg[1];
-		if (func_id > 9) {
-			npu_printf("Error: exceed max num!interfaceid=%u "
-				   "wifi_mail_data->funcType=%u "
-				   "wifi_mail_data->funcId=%u\n",
-				   msg[0] & 0xF, func_type, func_id);
-			return 1;
-		}
-		if (get_wait_func_table[func_id])
-			return get_wait_func_table[func_id](msg);
-		return 1;
-	case 4: /* GET_NO_WAIT */
-		if (msg[1] != 0) {
-			npu_printf("Error: exceed max num!interfaceid=%u "
-				   "wifi_mail_data->funcType=%u "
-				   "wifi_mail_data->funcId=%u\n",
-				   msg[0] & 0xF, func_type, msg[1]);
-		}
-		return 1;
+	case 1:
+		if (msg[1] > 30)
+			return wifi_mail_exceed(msg, 1);
+		return wifi_mail_call(set_wait_func_table[msg[1]], msg, "set_wait");
+	case 2:
+		/* no set_nowait handler is installed */
+		if (msg[1])
+			return wifi_mail_exceed(msg, 2);
+		return wifi_mail_call(NULL, msg, "set_nowait");
+	case 3:
+		if (msg[1] > 9)
+			return wifi_mail_exceed(msg, 3);
+		return wifi_mail_call(get_wait_func_table[msg[1]], msg, "get_wait");
+	case 4:
+		if (msg[1])
+			return wifi_mail_exceed(msg, 4);
+		return wifi_mail_call(NULL, msg, "get_nowait");
 	default:
 		npu_printf("not support unknow funcType\n");
 		return 1;
 	}
-}
-
-/* WiFi mail set_wait handler: dispatches sub-commands from host */
-int __attribute__((noinline)) wifi_mail_set_wait(u32 base, u32 cnt)
-{
-	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);
-	u32 func_id = msg[1];
-
-	(void)cnt;
-	if (func_id > 30) {
-		npu_printf("Error: exceed max num!interfaceid=%u "
-			   "wifi_mail_data->funcType=%u "
-			   "wifi_mail_data->funcId=%u\n",
-			   msg[0] & 0xF, 1, func_id);
-		return 1;
-	}
-	if (set_wait_func_table[func_id])
-		return set_wait_func_table[func_id](msg);
-	return 1;
-}
-
-/* WiFi mail set_event handler */
-int __attribute__((noinline)) wifi_mail_set_event(u32 base, u32 cnt)
-{
-	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);
-	u32 cmd = msg[1];
-
-	switch (cmd) {
-	case 0:
-		wifi_npu_init(msg[0] & 0xF);
-		break;
-	default:
-		npu_printf("set_event: unknown cmd %d\n", cmd);
-		break;
-	}
-	return 1;
 }
 #endif /* HAS_WIFI */
 

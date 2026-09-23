@@ -560,7 +560,6 @@ u32 apcli_byte_count_5g[2];
 #ifdef WIFI_EAGLE
 volatile u32 eagle_rro_cfg[26];
 volatile u32 eagle_rro_active;
-mbox_handler_t eagle_event_table[4];
 
 /* Host ring bases, keyed by the ring index the host puts in interfaceID. */
 u32 eagle_rx_ring_pcie_base[2];

@@ -982,17 +982,6 @@ int eagle_mail_get_dump_mapping(u32 *msg)
 	return 1;
 }
 
-int eagle_mail_set_event(u32 base, u32 cnt)
-{
-	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);
-	u32 evt = msg[0];
-
-	(void)cnt;
-	if (evt < 4 && eagle_event_table[evt])
-		return eagle_event_table[evt](base, cnt);
-	return 0;
-}
-
 int eagle_wifi_config(u32 base, u32 cnt)
 {
 	u32 *msg = (u32 *)((base & 0x3FFFFFFF) | NPU_ADDR_MASK);

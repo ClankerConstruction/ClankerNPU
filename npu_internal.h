@@ -92,7 +92,6 @@ void core3_wifi_init_wrapper(void);
 #ifdef HAS_WIFI
 void buf_mgr_init(void);
 int wifi_mail_dispatch(u32 base, u32 cnt);
-int wifi_mail_set_wait(u32 base, u32 cnt);
 void wifi_bridge_loop(void);
 void wifi_pipeline_worker(void);
 #endif
@@ -140,7 +139,6 @@ int wifi_mail_set_ratelimit(u32 *msg);
 int wifi_mail_set_arht_chip_info(u32 *msg);
 #endif
 #ifdef WIFI_KITE
-int wifi_mail_set_event(u32 base, u32 cnt);
 int kite_wifi_config(u32 base, u32 cnt);
 #endif
 #ifdef WIFI_EAGLE
@@ -185,7 +183,6 @@ int eagle_mail_get_dma_addr(u32 *msg);
 int eagle_mail_get_ring_size(u32 *msg);
 int eagle_mail_get_mdc_lock(u32 *msg);
 int eagle_mail_get_dump_mapping(u32 *msg);
-int eagle_mail_set_event(u32 base, u32 cnt);
 int eagle_wifi_config(u32 base, u32 cnt);
 void eagle_rx_init(void);
 void eagle_rxdmad_loop(void);
@@ -587,7 +584,6 @@ extern u8 eagle_in_first[2];
 extern u8 eagle_txdone_kick;
 extern volatile u32 eagle_rro_cfg[26];
 extern volatile u32 eagle_rro_active;
-extern mbox_handler_t eagle_event_table[4];
 #endif
 
 #if defined(WIFI_KITE) && defined(HAS_TR471)
