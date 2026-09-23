@@ -155,7 +155,7 @@ void core3_wifi_init_wrapper(void)
 			if (hostadpt_tx_ring_ready == 1)
 				pinode_drain(0);
 		}
-	} while (!(wifi_debug_flags & 2));
+	} while (!(*(volatile u8 *)&wifi_debug_flags & 2));
 #else
 	eagle_core3_loop();
 #endif
