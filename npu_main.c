@@ -479,7 +479,7 @@ void npu_init(void)
 			npu_printf("Error: OVER GLB_VAR_SRAM_SIZE. "
 				   "_data:0x%x, __bss_end:0x%x\n",
 				   NPU_SRAM_BASE, (u32)__bss_end);
-		plic_enable_wrapper(22);
+		plic_register_isr(22, uart_rx_isr);
 		timer_init(0, 1, 10);
 		mailbox_init();
 	}

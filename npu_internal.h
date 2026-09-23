@@ -73,6 +73,7 @@ int npu_printf(const char *fmt, ...);
 void npu_hexdump(const char *tag, u32 addr, u32 len);
 void wifi_pcie_desc_alloc(void);
 int boot_printf(const char *fmt, ...);
+void uart_rx_isr(int src);
 void boot_uart_init(void);
 
 /* npu_wifi.c */

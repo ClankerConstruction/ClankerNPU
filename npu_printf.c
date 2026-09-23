@@ -204,76 +204,78 @@ static void printf_enable(int enable)
 	npu_printf_prefix = enable != 0;
 }
 
-static const char *uart_debug_cmd(char c)
+static int hex_digit(u8 c)
 {
-	u32 idx = uart_cmd_idx;
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	if (c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	if (c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	return -1;
+}
+
+/* Fixed columns: "rd AAAAAAAA\r" or "wt AAAAAAAA VVVVVVVV\r". */
+static void uart_debug_cmd(u8 c)
+{
+	u32 idx = uart_cmd_idx, pos, addr = 0, val = 0, wr;
+	int d;
 
 	if (idx > 31) {
+		boot_printf("Error: exceed max_char_num:%d ... reset char_idx\n\n", 32);
 		uart_cmd_idx = 0;
-		return "Error: exceed max_char_num:%d ... reset char_idx\n\n";
+		return;
 	}
-
-	uart_cmd_buf[idx] = (u8)c;
+	uart_cmd_buf[idx] = c;
 	if (c != '\r') {
 		uart_cmd_idx = idx + 1;
-		return NULL;
+		return;
 	}
-
-	if (uart_cmd_buf[0] != 'r' && uart_cmd_buf[0] != 'w') {
-		goto bad_cmd;
-	}
-	if (uart_cmd_buf[0] == 'r' && uart_cmd_buf[1] != 'd')
-		goto bad_cmd;
-	if (uart_cmd_buf[0] == 'w' && uart_cmd_buf[1] != 't')
-		goto bad_cmd;
-
-	{
-		u32 is_write = (uart_cmd_buf[0] == 'w');
-		u32 addr = 0, val = 0;
-		u32 pos = 3, digit;
-		u8 ch;
-
-		for (; pos <= 10; pos++) {
-			ch = uart_cmd_buf[pos];
-			if (ch >= '0' && ch <= '9')
-				digit = ch - '0';
-			else if (ch >= 'A' && ch <= 'F')
-				digit = ch - 'A' + 10;
-			else if (ch >= 'a' && ch <= 'f')
-				digit = ch - 'a' + 10;
-			else
-				break;
-			addr = (addr << 4) | digit;
-		}
-
-		if (is_write) {
-			if (pos == 11)
-				pos = 12;
-			for (; pos <= 19; pos++) {
-				ch = uart_cmd_buf[pos];
-				if (ch >= '0' && ch <= '9')
-					digit = ch - '0';
-				else if (ch >= 'A' && ch <= 'F')
-					digit = ch - 'A' + 10;
-				else if (ch >= 'a' && ch <= 'f')
-					digit = ch - 'a' + 10;
-				else
-					break;
-				val = (val << 4) | digit;
-			}
-			*(volatile u32 *)addr = val;
-			uart_cmd_idx = 0;
-			return "wt(0x%x)==0x%x\n";
-		}
-
+	wr = uart_cmd_buf[0] == 'w';
+	if (uart_cmd_buf[1] != (wr ? 't' : 'd') ||
+	    (!wr && uart_cmd_buf[0] != 'r')) {
+		uart_cmd_buf[idx] = 0;
+		boot_printf("Wrong Cmd: %s\n", uart_cmd_buf);
+		boot_printf("Correct Cmd: 'rd regAddr' or 'wt regAddr val'\n");
 		uart_cmd_idx = 0;
-		return "rd(0x%x)==0x%x\n";
+		return;
 	}
-
-bad_cmd:
-	uart_cmd_buf[idx] = 0;
+	for (pos = 3; pos < (wr ? 20u : 11u); pos++) {
+		if (pos == 11)
+			continue;
+		d = hex_digit(uart_cmd_buf[pos]);
+		if (d < 0) {
+			uart_cmd_buf[idx] = 0;
+			boot_printf("Wrong Cmd: %s at char%d\n", uart_cmd_buf, pos);
+			uart_cmd_idx = 0;
+			return;
+		}
+		if (pos <= 10)
+			addr |= (u32)d << (4 * (10 - pos));
+		else
+			val |= (u32)d << (4 * (19 - pos));
+	}
+	if (wr) {
+		REG32(addr) = val;
+		boot_printf("wt(0x%x)==0x%x\n", addr, REG32(addr));
+	} else {
+		boot_printf("rd(0x%x)==0x%x\n", addr, REG32(addr));
+	}
 	uart_cmd_idx = 0;
-	return "Correct Cmd: 'rd regAddr' or 'wt regAddr val'\n";
+}
+
+/* PLIC 22: boot UART rx; echo the last byte and feed the parser */
+void uart_rx_isr(int src)
+{
+	u8 c = 0;
+
+	(void)src;
+	while (REG32(BOOT_UART_STATUS) & 1)
+		c = (u8)REG32(BOOT_UART_TX);
+	while (!(REG32(BOOT_UART_STATUS) & UART_TX_READY_BIT))
+		;
+	REG32(BOOT_UART_TX) = c;
+	uart_debug_cmd(c);
 }
 
 int npu_printf(const char *fmt, ...)
