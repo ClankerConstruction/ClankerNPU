@@ -201,6 +201,11 @@ static void eagle_inode_txrx_reg(u32 id, u32 arg, u32 addr)
 		eagle_emi_cidx_valid = 1;
 		break;
 	case 6:				/* restart after a stop */
+#ifdef HAS_BME
+		tdma_tx_wait_idle();
+		tdma_bmgr_reinit();
+#endif
+		eagle_msdu_pg_pool_init();
 		counter_init(2);
 		counter_init(0);
 		counter_init(1);
