@@ -62,7 +62,8 @@ static void eagle_tx_ring_publish(u32 band)
 }
 
 /* one frame into the WiFi tx ring, cpu index not published.
- * The TXD words 0-7 of the slot are left as they are. */
+ * Only the TXP words are written; TXD words 0-7 of
+ * the fast path TXD space stay zero. */
 static int eagle_tx_ring_fill(u32 buf, u16 len, u16 token, u32 info,
 			      u8 *band_out)
 {
@@ -93,7 +94,8 @@ static int eagle_tx_ring_fill(u32 buf, u16 len, u16 token, u32 info,
 	if (eagle_rxdmad_on_core2)
 		eagle_delay(440);
 
-	txd = eagle_txd_space[band] + (cpu << 8);
+	/* own zeroed TXD space, not the one host TXDs are copied into */
+	txd = eagle_tx_buf_space_pg[band] + (cpu << 8);
 	REG32(txd + 32) = ((u32)token << 16) | 0x80;
 	REG32(txd + 36) = (((w0 >> 14) & 0x7FF) << 8) | ((w2 >> 24) & 0x7F) |
 			  0x1000000;
