@@ -177,9 +177,15 @@ void eagle_rx_init(void)
 	eagle_rx_ring_init_done[0] = 0;
 	/* indirect command state, 254 = idle */
 	ind = (u32 *)sram_buf_alloc(25);
+#if defined(AN7552)
+	/* 8 entries of 16 bytes */
+	for (u32 i = 0; i < 32; i += 4)
+		ind[i] = 254;
+#else
 	ind[0] = 254;
 	ind[4] = 254;
 	ind[8] = 254;
+#endif
 #if defined(AN7552)
 	/* one sync byte per rx buffer id */
 	npu_printf("===========sync_method_init========\n");
