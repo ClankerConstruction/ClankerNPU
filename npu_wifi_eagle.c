@@ -715,10 +715,6 @@ int eagle_mail_set_port_type(u32 *msg)
 	eagle_pcie_port_type = (u8)msg[2];
 	eagle_pcie_window_publish(0);
 	eagle_pcie_window_publish(1);
-	npu_printf("[NPU]pcie port type=%d win0=%x/%x win1=%x/%x\n",
-		   eagle_pcie_port_type, REG32(PCIE0_WIN_BASE),
-		   REG32(PCIE0_WIN_END), REG32(PCIE1_WIN_BASE),
-		   REG32(PCIE1_WIN_END));
 	return 1;
 }
 

@@ -762,8 +762,8 @@ static int eagle_tx_ring_push(u32 band)
 			if ((s32)REG32(desc + 4) < 0)
 				break;
 			if (wait == 1000 || wait == 1)
-				npu_printf("sband%d cpuindex = %d, dmaindex = %d",
-					   band, cpu,
+				npu_printf(band ? "sband1 cpuindex = %d, dmaindex = %d" :
+						  "sband0 cpuindex = %d, dmaindex = %d", cpu,
 					   REG32(eagle_tx_ring_pcie_base[band] + 0xC));
 		}
 
