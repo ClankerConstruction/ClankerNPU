@@ -211,10 +211,15 @@ void delay_ms(u32 ms);
 
 void delay_ms_mcycle(u32 ms)
 {
-	u32 clk = cpu_clock_get();
-	u32 target = 1000 * ms * clk;
-	u32 prev = csr_read(mcycle);
-	u32 elapsed = 0;
+	u32 clk = 1000 * cpu_clock_get();
+	u32 target, prev, elapsed = 0;
+
+	if (ms >= 0xFFFFFFFFu / clk) {
+		npu_printf("Error(%s) ms:%d is too large\n", "__delay", ms);
+		return;
+	}
+	target = ms * clk;
+	prev = csr_read(mcycle);
 
 	do {
 		u32 cur = csr_read(mcycle);
