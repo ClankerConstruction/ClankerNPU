@@ -353,6 +353,9 @@ and the WiFi chip.
 | host adaptor in 0/1 | `0x1EC0D0A0` / `0x1EC0D0B0` | 208 B | host |
 | host adaptor out 0/1 | `0x1EC0D180` / `0x1EC0D190` | 24 B | core 3 |
 | WiFi tx 0/1 | PCIe descriptor block + `0x6020`/`0x1A0C0` | 16 B | core 2 |
+| TDMA tx 0/1 | `0x1FB50800` / `0x1FB50810` | 8 B | core 1 |
+| TDMA rx 0/1 | `0x1FB50900` / `0x1FB50910` | 32 B | PPE |
+| PPE buffer return | `0x1FB50FDC`..`0x1FB50FE4` FIFO | - | PPE |
 
 Buffer pools: 12288 rx buffer ids over the WiFi packet buffer (2 KB per
 id, 192 B headroom), and 13312 tx tokens over the NPU tx packet buffer.
@@ -363,8 +366,9 @@ Cores:
 
 | core | worker | what it does |
 |-----:|--------|--------------|
-| 1 | `eagle_rxdmad_loop` | one rxdmad descriptor at a time; chains the segments of a frame that spans several rx buffers and queues it |
-| 2 | `eagle_tx_fast_path` | staged frames into the WiFi tx ring, paced by the ring's own dma index |
+| 0 | `ppe_wifi_bufid_isr` | PLIC 95: frames the PPE did not forward go to the host, the rest free their buffer |
+| 1 | `eagle_rxdmad_loop` | one rxdmad descriptor at a time; `dst_sel` frames to TDMA, the rest to the host queue; chains multi-buffer frames |
+| 2 | `eagle_tx_fast_path` | staged host frames and the TDMA rx ring (HWNAT-bound LAN flows) into the WiFi tx ring, paced by its dma index |
 | 3 | `eagle_core3_loop` | host adaptor in ring -> staging, packet queue -> host adaptor out ring, and the tx done ring |
 | 4 | `eagle_rx_refill_loop` | refills both rx rings |
 
@@ -375,9 +379,29 @@ the RRO address element tables (128 of them, 64 KB each, 8 sessions per
 table) and the particular session table.
 
 The descriptor own bit is bit 31 of word 1 and means the NPU owns the
-slot. A refill hands a slot back by writing `0x07000000`; a tx ring push
+slot. A refill hands a slot back by writing `0x07000100`; a tx ring push
 hands one over by writing `0x4C4048`. The WiFi tx rings start with every
 descriptor at `0x80000000`, written when the host asks for their base.
+
+Every ring the chip fills needs its cpu index advanced or the chip
+stalls when it catches up: the rxdmad ring every 128 descriptors
+(`ridx-1` to base + 8, or to the register `INODE_TXRX_REG_ADDR` case 5
+supplies), each rx ring every 128 refills, the tx done ring every 16.
+
+Directions:
+
+- WiFi -> LAN: `dst_sel=1` frames go to TDMA tx, the PPE forwards bound
+  flows and returns the rest on the buffer-id FIFO; core 0 queues those
+  to the host.
+- LAN -> WiFi: the host sends a flow itself until HWNAT binds it, then
+  `ra_sw_nat_hook_tx()` consumes the skb and the PPE delivers the frames
+  on the TDMA rx ring. Core 2 swaps a fresh tx token into the slot and
+  fills the TXP words (`token<<16|0x80`, `wcid<<8|bss|0x1000000`, buf,
+  len) of a slot in the ring 5/6 TXD space, whose TXD words stay zero.
+- host -> WiFi: host TXDs are copied into the ring 0/1 TXD space. TXD
+  dw7 bit 27 selects the token layout.
+- tx done ring: token reports (type 6, 24) free NPU tx tokens; any other
+  event is queued to the host on band 0.
 
 The rxdmad ring has no own bit. Each descriptor carries a 4-bit
 generation in the top nibble of word 3 (word 1 on the 8-byte indirect
@@ -549,17 +573,10 @@ give to cores 3 and 4.
 
 ### What's Missing
 
-- **WiFi -> LAN hardware fast path** a frame the WiFi chip marks
-  `dst_sel=1` carries its own ethernet header offset, so the NPU can put
-  it straight on the wired side and let the PPE forward it. `HWFAST=1`
-  builds that; the default hands those frames to the host, which is what
-  the driver's own rx path does with the same descriptor. The offload
-  only works with `PPE_TB_CFG.SEARCH_MISS = 3`, otherwise the PPE drops
-  every packet whose flow it cannot find instead of sending it to the
-  CPU, and a DHCP discover leaves the chip and never comes back.
-- **LAN -> WiFi hardware fast path** drains the TDMA
-  rx ring straight into the WiFi tx ring. Not
-  implemented; those frames take the host path instead.
+- **Kite PPE buffer return** PLIC 95 is served only on eagle; the kite
+  handler is not implemented.
+- **`INODE_TXRX_REG_ADDR` case 6** (restart) only reinits the counters;
+  TDMA, BMGR and the MSDU page pool are not reset.
 - **TR-471** test infrastructure (~22 functions) is latency/loss
   measurement per ITU-T Y.1540
 - **Thread manager** (~10 functions) advanced multi-hart scheduling
