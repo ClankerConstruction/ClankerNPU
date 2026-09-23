@@ -14,6 +14,8 @@
 #define BUFID_POOL_ENTRIES    12288
 #endif
 
+void xpon_license_check(void);
+
 typedef int (*wifi_mail_fn_t)(u32 *msg);
 
 /* npu_util.c */

@@ -1038,8 +1038,19 @@ void __attribute__((noreturn)) eagle_tx_fast_path(void)
 void __attribute__((noreturn)) eagle_core3_loop(void)
 {
 	u32 started = 0;
+#ifdef AN758X
+	u32 t300 = timer_raw_tick;
+#endif
 
 	while (1) {
+#ifdef AN758X
+		if (timer_raw_tick < t300)
+			t300 = timer_raw_tick;
+		if (timer_raw_tick - t300 > 300) {
+			xpon_license_check();
+			t300 = timer_raw_tick;
+		}
+#endif
 		if (started == 0 && eagle_init_done != 0 &&
 		    eagle_rro_state == 3 && eagle_tx_en != 0) {
 			npu_printf("start %s\n", "npu_core3_main_loop_handle");

@@ -112,6 +112,50 @@ static s32 chip_cap_query(u32 idx, u32 query)
 	}
 }
 
+#if defined(AN758X) && defined(WIFI_EAGLE)
+/* Parts sold without xPON, or with GPON/EPON only, get the PON MAC
+ * disabled. Runs on core 3 every 300 timer ticks. */
+static s32 xpon_chip_idx = -1;
+
+void xpon_license_check(void)
+{
+	u32 mode = REG32(0x1FB00070) & 0xFF;
+	u32 fam = CHIP_FAMILY, rev = CHIP_REV5;
+	s32 i;
+
+	/* AN7551GT/PT: GPON/EPON only */
+	if (fam == 14 && (rev == 10 || rev == 4) && (mode & 0xF7) != 0) {
+		npu_printf("7551GT/PT only support GPON/EPON\n");
+		goto limit_pon;
+	}
+
+	for (i = 0; chip_cap_query(i, 0) != -1; i++) {
+		if (chip_cap_query(i, 0) != 0) {
+			xpon_chip_idx = i;
+			if (chip_cap_query(i, 1))
+				return;
+			goto no_xpon;
+		}
+	}
+	npu_printf("unknow chipid, module load fail!\n");
+	if (chip_cap_query(xpon_chip_idx, 1))
+		return;
+no_xpon:
+	npu_printf("Current IC do not support XPON !!!\n");
+	if (fam != 14 || (rev != 1 && rev != 11))	/* AN7566GT/PT */
+		return;
+	if (mode == 0 || mode == 20) {
+		REG32(0x1FB640BC) = 1;
+		return;
+	}
+limit_pon:
+	if ((u8)(mode - 9) <= 4)
+		REG32(0x1FB65104) = 1;
+	else if ((u8)(mode - 6) <= 2 || mode == 21)
+		REG32(0x1FB66080) = 0;
+}
+#endif
+
 void tunnel_ppe_reset(void)
 {
 	u32 chip_rev = REG32(CHIP_ID_REG) >> 16;
