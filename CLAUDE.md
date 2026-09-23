@@ -62,8 +62,11 @@ one SoC.
 - Log strings are part of the interface. Keep them verbatim, spelling
   included (`sucess`, `unknow`).
 - Comments say what the code cannot: at most 3 lines, 15 words a line.
-- Debug output goes behind a build option (`NPU_MAIL_TRACE`,
-  `NPU_DATAPATH_DBG`), not into the default image.
+- Debug output is off by default. Gate it on a `print_mask` bit of the
+  debug block (`NDBG_PRINTING`) or a build option (`NPU_MAIL_TRACE`).
+  Count and trace into the block (`NDBG_CNT`, `NDBG_TRACE`); a new main
+  loop calls `npu_dbg_loop()` once and `npu_dbg_poll()` every pass.
+  The block's layout is an interface: extend it, do not move fields.
 
 ## Documentation
 

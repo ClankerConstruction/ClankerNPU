@@ -59,6 +59,7 @@ THREAD_ENABLE (0x1EC00F00) = 4, then 1
 delay 1 ms
 MIB0 (0x1EC0C140) = 0xFFFFFFFF        marks the image as running
 boot UART init (0x1EC10000)
+debug block cleared and filled (docs/debug.md)
 MIB21 restored
 print the Bender banner, "core freq at %d MHz",
 then "NPU Version: <release>.<wifi chip>.<git hash>"
@@ -101,8 +102,12 @@ the SoC through `0x1FB00040`.
 
 - `mcause` = machine external interrupt: claim from the PLIC and call the
   registered ISR.
-- anything else: print `mcause`, `ra`, `sp` and `mepc`, then resume after
+- anything else: record `mcause`, `mepc`, `mtval`, `ra` and `sp` in the
+  hart's [debug block](debug.md) record, print them, then resume after
   the faulting instruction (2 or 4 bytes).
+
+Around an ISR call the hart's record is marked as in an interrupt, so
+debug events raised there are traced but not printed.
 
 Exceptions never go through the ISR table. The default ISR prints, and a
 fault inside `npu_printf` would re-acquire the printf mutex it already

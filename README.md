@@ -84,6 +84,9 @@ Kite WiFi:
 | 6 | | idle | |
 | 7 | | tunnel offload, TR-471 | |
 
+Harts shown idle, and any hart whose main function returns, serve the
+[debug block](docs/debug.md) commands.
+
 AN7583 without WiFi runs init and the tunnel offload on core 0, the
 timer tick on core 2 and the package check on core 3. On AN7581 and
 AN7583, core 3 first checks the package and powers down ports it does
@@ -105,7 +108,7 @@ make SOC=AN7583 WIFI=MT7993 disasm # build/<variant>/firmware.dis
 | `WIFI` | `MT7996` | `MT7916`, `MT7991`, `MT7992`, `MT7993`, `MT7996`, `NOWIFI` |
 | `MAILTRACE` | 0 | 1 logs every WiFi mail from the mailbox ISR |
 | `NPUTX` | 1 | 0 stages host tx frames but never writes the WiFi tx ring |
-| `NPUDBG` | 0 | 1 prints the eagle datapath counters every two seconds |
+| `NPUDBG` | 0 | 1 starts with the WiFi and stats print bits of the [debug block](docs/debug.md) set |
 | `GITREV` | `git describe` | hash in the boot `NPU Version` line |
 | `CROSS` | `riscv64-unknown-elf-` | toolchain prefix |
 
@@ -130,6 +133,7 @@ family's code, behind the matching `#ifdef`.
 | `npu_globals.c` | every shared global; its order is the layout of `npu_data.bin` |
 | `npu_mutex.c`, `npu_plic.c`, `npu_timer.c`, `npu_printf.c` | hardware mutex, interrupts, timers, console |
 | `npu_mbox.c` | mailbox dispatch and host notify |
+| `npu_dbg.c` | field debug block: heartbeats, counters, traces, host commands |
 | `npu_sram.c` | SRAM allocator |
 | `npu_util.c` | memset, memcpy, strlen |
 | `npu_bridge.c` | NPU bridge channels |
@@ -175,3 +179,4 @@ Feature flags from `npu_config.h`:
 | [docs/wifi-kite.md](docs/wifi-kite.md) | kite datapath and BA reorder |
 | [docs/tunnel.md](docs/tunnel.md) | tunnel offload, NPU bridge, L4S, PPE setup |
 | [docs/dba.md](docs/dba.md) | GPON dynamic bandwidth allocation |
+| [docs/debug.md](docs/debug.md) | field debug block: `sys memrl`/`memwl` recipes, commands, traces |
