@@ -65,8 +65,8 @@ u32 npu_bridge_addr(void);
 extern u32 npu_bridge_pkt_base;
 
 /* npu_main.c — chip ID */
-void chip_id_query(void);
-void usb_powerdown(void);
+int mtk_usb_powerdown(u32 port);
+s32 chip_cap_query(u32 idx, u32 query);
 
 /* npu_printf.c */
 int npu_printf(const char *fmt, ...);

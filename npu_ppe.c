@@ -57,7 +57,7 @@
 #define CHIP_REV5       (((REG32(CHIP_VARIANT_REG) >> 3) & 0x10) | \
 			 (REG32(CHIP_VARIANT_REG) & 0xF))
 
-static s32 chip_cap_query(u32 idx, u32 query)
+s32 chip_cap_query(u32 idx, u32 query)
 {
 	struct { u32 match; u8 caps; } tbl[32];
 	u32 fam = CHIP_FAMILY;

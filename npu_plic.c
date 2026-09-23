@@ -116,10 +116,22 @@ void plic_init(void)
 		plic_isr_init_done = 1;
 }
 
+/* A source keeps the first real handler it gets; enable either way */
 void plic_register_isr(u32 src, isr_fn_t handler)
 {
-	if (src < 192) {
-		plic_isr_table[src] = handler;
-		plic_enable(src);
+	isr_fn_t cur;
+
+	if (src > 191) {
+		npu_printf("%s just return due to intSrc:%d > %d\n",
+			   "PLIC_register_ISR_bySrc", src, 191);
+	} else {
+		cur = plic_isr_table[src];
+		if (handler != default_isr && handler != NULL &&
+		    cur != default_isr && cur != NULL)
+			npu_printf("Error: src:%d already registered ISR, just exit\n",
+				   src);
+		else
+			plic_isr_table[src] = handler;
 	}
+	plic_enable(src);
 }

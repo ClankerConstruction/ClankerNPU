@@ -12,24 +12,74 @@
  * Chip ID and module detection
  * ================================================================ */
 
-static u32 chip_id;
-static u32 chip_rev;
-
-void chip_id_query(void)
+/* write reg unless it reads back as absent */
+static void usb_phy_update(u32 reg, u32 clr, u32 set)
 {
-	chip_id = REG32(CHIP_ID_REG);
-	chip_rev = REG32(CHIP_VARIANT_REG);
+	u32 v = REG32(reg);
 
-	npu_printf("chip_id=0x%x, chip_rev=0x%x\n", chip_id, chip_rev);
+	if (v != 0xDEADBEEF)
+		REG32(reg) = (v & ~clr) | set;
 }
 
-/* USB power down */
-void usb_powerdown(void)
+/* mtk_usb_PowerDown: port 0 powers down every PHY, 1-4 one each */
+int mtk_usb_powerdown(u32 port)
 {
-	/* USB PHY power control */
-	REG32(0x1FAC0700) |= (1u << 4);
-	REG32(0x1FAE0700) |= (1u << 4);
+	switch (port) {
+	case 0:
+		usb_phy_update(0x1FAC080C, 0xA0000000, 0xA0000000);
+		delay_ms(1);
+		usb_phy_update(0x1FAE080C, 0xA0000000, 0xA0000000);
+		delay_ms(1);
+		usb_phy_update(0x1FAC0318, 0x800000, 0);
+		delay_ms(1);
+		usb_phy_update(0x1FAE0318, 0x800000, 0);
+		delay_ms(1);
+		return 0;
+	case 1:
+		usb_phy_update(0x1FAC080C, 0xA0000000, 0xA0000000);
+		return 0;
+	case 2:
+		usb_phy_update(0x1FAE080C, 0xA0000000, 0xA0000000);
+		return 0;
+	case 3:
+		usb_phy_update(0x1FAC0318, 0x800000, 0x800000);
+		delay_ms(1);
+		return 0;
+	case 4:
+		usb_phy_update(0x1FAE0318, 0x800000, 0x800000);
+		delay_ms(1);
+		return 0;
+	default:
+		npu_printf("mtk_usb_PowerDown(%d). arg error\n", port);
+		return -1;
+	}
 }
+
+/* power-down hooks for ports the package does not have */
+static void usb1_off(void)
+{
+	mtk_usb_powerdown(1);
+	REG32(0x1FB00830) |= 0x8000;
+}
+
+static void usb2_off(void)
+{
+	mtk_usb_powerdown(2);
+}
+
+static void pcie0_off(void)
+{
+	REG32(0x1FA5B460) = 0;
+}
+
+static void pcie1_off(void)
+{
+	REG32(0x1FA5C460) = 0;
+}
+
+static void npu_reboot(void);
+static s32 chip_idx = -1;
+static void (*port_off_hooks[6])(void);
 
 /* Reboot */
 static void npu_reboot(void)
@@ -108,7 +158,6 @@ static void __attribute__((noinline)) core0_main(void)
 
 static void __attribute__((noinline)) core1_main(void)
 {
-	npu_printf("%s\n", "core1_main");
 #if defined(WIFI_EAGLE)
 	eagle_rxdmad_loop();
 	npu_printf("%s finish\n", "core1_wifi_init_wrapper");
@@ -123,7 +172,6 @@ static void __attribute__((noinline)) core1_main(void)
 #if MAX_CORE_NUM > 2
 static void __attribute__((noinline)) core2_main(void)
 {
-	npu_printf("%s\n", "core2_main");
 	plic_register_isr(18, timer_isr);
 #ifdef WIFI_EAGLE
 	eagle_tx_fast_path();
@@ -132,10 +180,30 @@ static void __attribute__((noinline)) core2_main(void)
 
 static void __attribute__((noinline)) core3_main(void)
 {
-	npu_printf("%s\n", "core3_main");
+	s32 i;
 
-	chip_id_query();
-	usb_powerdown();
+	/* find the package, then switch off the ports it does not have */
+	for (i = 0; chip_cap_query(i, 0) != -1; i++) {
+		if (chip_cap_query(i, 0)) {
+			chip_idx = i;
+			goto found;
+		}
+	}
+	npu_printf("unknown chipid, module load fail!\n");
+	npu_reboot();
+found:
+	if (!chip_cap_query(chip_idx, 2))
+		port_off_hooks[1] = usb1_off;
+	if (!chip_cap_query(chip_idx, 3))
+		port_off_hooks[2] = usb2_off;
+	if (!chip_cap_query(chip_idx, 4))
+		port_off_hooks[3] = pcie0_off;
+	if (!chip_cap_query(chip_idx, 5))
+		port_off_hooks[4] = pcie1_off;
+	for (i = 0; i < 6; i++)
+		if (port_off_hooks[i])
+			port_off_hooks[i]();
+
 	core3_wifi_init_wrapper();
 }
 
