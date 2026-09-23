@@ -60,7 +60,8 @@ delay 1 ms
 MIB0 (0x1EC0C140) = 0xFFFFFFFF        marks the image as running
 boot UART init (0x1EC10000)
 MIB21 restored
-print the Bender banner, then "core freq at %d MHz"
+print the Bender banner, "core freq at %d MHz",
+then "NPU Version: <release>.<wifi chip>.<git hash>"
 check .data + .bss fits 0x7800 bytes
 PLIC 22 = boot UART rx console
 timer 0 on, period 10

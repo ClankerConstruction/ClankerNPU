@@ -135,7 +135,6 @@ void core0_wifi_init_wrapper(void)
 	tdma_rx_init();
 #endif
 	eagle_init_done = 1;
-	npu_printf("NPU init Version: %s\n", NPU_INIT_VERSION);
 #endif
 	result = hostadpt_init();
 	if (result != 0)

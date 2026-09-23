@@ -500,6 +500,7 @@ void npu_init(void)
 		REG32(NPU_MIB21) = mib21;
 		npu_banner();
 		npu_printf("core freq at %d MHz\n", cpu_clock_get());
+		npu_printf("NPU Version: %s\n", NPU_VERSION);
 		if ((u32)__bss_end - NPU_SRAM_BASE > GLB_VAR_SRAM_SIZE)
 			npu_printf("Error: OVER GLB_VAR_SRAM_SIZE. "
 				   "_data:0x%x, __bss_end:0x%x\n",

@@ -15,12 +15,15 @@ MAILTRACE ?= 0
 NPUTX ?= 1
 # 1 reports the datapath counters every two seconds
 NPUDBG ?= 0
+# git short hash in the boot version line; pin it to compare images
+GITREV ?= $(shell git describe --always --dirty --abbrev=7 2>/dev/null || echo nogit)
 
 ARCH    := -march=rv32imc_zicsr_zifencei -mabi=ilp32
 CFLAGS  := $(ARCH) -Os -ffunction-sections -fdata-sections \
            -fno-builtin -ffreestanding -nostdlib \
            -Wall -Wno-unused-function \
-           -D$(SOC) -D$(WIFI) $(if $(filter 1,$(MAILTRACE)),-DNPU_MAIL_TRACE) \
+           -D$(SOC) -D$(WIFI) -DNPU_WIFI_NAME='"$(WIFI)"' \
+           -DNPU_GIT_REV='"$(GITREV)"' $(if $(filter 1,$(MAILTRACE)),-DNPU_MAIL_TRACE) \
            $(if $(filter 0,$(NPUTX)),-DEAGLE_NO_TX_PUSH) \
            $(if $(filter 1,$(NPUDBG)),-DNPU_DATAPATH_DBG)
 ASFLAGS := $(ARCH) -D$(SOC) -D$(WIFI)

@@ -1,8 +1,9 @@
 #ifndef NPU_CONFIG_H
 #define NPU_CONFIG_H
 
-/* Firmware version reported by the NPU init path of every variant. */
+/* Boot version line: release.wifi chip.git hash */
 #define NPU_INIT_VERSION    "TLB7.8.0.0_v003"
+#define NPU_VERSION	NPU_INIT_VERSION "." NPU_WIFI_NAME "." NPU_GIT_REV
 
 /*
  * Build-time variant selection.

@@ -106,6 +106,7 @@ make SOC=AN7583 WIFI=MT7993 disasm # build/<variant>/firmware.dis
 | `MAILTRACE` | 0 | 1 logs every WiFi mail from the mailbox ISR |
 | `NPUTX` | 1 | 0 stages host tx frames but never writes the WiFi tx ring |
 | `NPUDBG` | 0 | 1 prints the eagle datapath counters every two seconds |
+| `GITREV` | `git describe` | hash in the boot `NPU Version` line |
 | `CROSS` | `riscv64-unknown-elf-` | toolchain prefix |
 
 Outputs in `build/<SOC>_<WIFI>/`:

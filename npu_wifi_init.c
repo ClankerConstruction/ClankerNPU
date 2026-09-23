@@ -284,10 +284,6 @@ void __attribute__((noinline)) wifi_npu_init(u32 band)
 	u32 bar_5g, bar_2g;
 
 	npu_printf("[NPU] %s...\n", "npu_init");
-	npu_printf("=======================\n");
-	npu_printf("NPU Version: %s_NPU_%s\n",
-		   wifi_chip_names[wifi_driver_model], NPU_INIT_VERSION);
-	npu_printf("=======================\n");
 
 	wifi_band_cap = wifi_get_band_cap(wifi_driver_model);
 	wifi_dbdc_mode = wifi_get_dbdc_mode(wifi_driver_model);

@@ -14,7 +14,8 @@ make SOC=... WIFI=... disasm    # build/<variant>/firmware.dis
 
 - Every variant must build, with no new warnings.
 - A change aimed at one variant must leave the other images unchanged.
-  Save `md5sum build/*/npu_*.bin` before the change and compare after.
+  Save `md5sum build/*/npu_*.bin` before the change and compare after,
+  both built with a fixed `GITREV=x`: the git hash is in every image.
 - `.data` plus `.bss` must stay under `0x7800` bytes (see
   `firmware.map`). The boot log prints `OVER GLB_VAR_SRAM_SIZE`
   otherwise.
