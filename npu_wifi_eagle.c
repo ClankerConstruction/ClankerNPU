@@ -137,6 +137,19 @@ u32 eagle_ring_desc_base(u32 ring_id)
 	return wifi_pcie_desc_base + off[ring_id - 1];
 }
 
+#if defined(AN7552)
+/* chip 15 package variant 0 sends every frame to
+ * the host, whatever the host asks */
+static int eagle_chip_force_cpu(void)
+{
+	u32 v = REG32(0x1FB00284);
+
+	if (REG32(CHIP_ID_REG) >> 16 != 15)
+		return 0;
+	return ((v & 0xF) | ((v >> 3) & 0x10)) == 0;
+}
+#endif
+
 /* Set up before the host starts handing over rings. */
 void eagle_rx_init(void)
 {
@@ -149,6 +162,10 @@ void eagle_rx_init(void)
 	counter_init(1);
 	eagle_txq_mutex[0] = 10;
 	eagle_txq_mutex[1] = 0;
+#if defined(AN7552)
+	if (eagle_chip_force_cpu())
+		wifi_force_to_cpu = 1;
+#endif
 	eagle_rxdmad_on_core2 = 0;
 	/* type 30 is reserved and never read; keeps the SRAM layout */
 	sram_buf_alloc(30);
@@ -662,6 +679,10 @@ int eagle_mail_set_force_cpu(u32 *msg)
 	npu_printf("isForceToCpu=%s\n", wifi_force_to_cpu ? "true" : "false");
 	if (wifi_force_to_cpu > 1)
 		npu_printf("[ERROR] isForceToCpu is wrong value !!!\n");
+#if defined(AN7552)
+	if (eagle_chip_force_cpu())
+		wifi_force_to_cpu = 1;
+#endif
 	return 1;
 }
 
