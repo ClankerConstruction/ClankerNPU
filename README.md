@@ -1,4 +1,4 @@
-# Airoha AN75XX NPU Firmware
+# Clankered Airoha AN75XX NPU Firmware
 
 Bare-metal firmware for the RISC-V network processor (NPU) inside the
 Airoha AN7552, AN7581 and AN7583 SoCs. The NPU is a cluster of RV32IMC

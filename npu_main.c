@@ -94,6 +94,33 @@ static void npu_reboot(void)
  * Per-core main functions
  * ================================================================ */
 
+static const char *const bender[] = {
+	"       _",
+	"      ( )",
+	"       H",
+	"      _H_",
+	"   .-'-.-'-.",
+	"  /         \\",
+	" |  .-------'._",
+	" | / /  '.' '. \\",
+	" | \\ \\ @   @ / /",
+	" |  '---------'",
+	" |    _______|",
+	" |  .'-+-+-+|",
+	" |  '.-+-+-+|",
+	" '-.__   __.-'",
+	"      \"\"\"",
+	"  bite my shiny metal NPU",
+};
+
+static void npu_banner(void)
+{
+	u32 i;
+
+	for (i = 0; i < sizeof(bender) / sizeof(bender[0]); i++)
+		npu_printf("%s\n", bender[i]);
+}
+
 #ifdef HAS_TUNNEL
 /* The tunnel offload never returns. On the eight-core part core 7 runs
  * it; the six-core part has no core 7 and gives it to core 0 once the
@@ -471,6 +498,7 @@ void npu_init(void)
 		REG32(NPU_MIB0) = ALL_FF;
 		boot_uart_init();
 		REG32(NPU_MIB21) = mib21;
+		npu_banner();
 		npu_printf("core freq at %d MHz\n", cpu_clock_get());
 		if ((u32)__bss_end - NPU_SRAM_BASE > GLB_VAR_SRAM_SIZE)
 			npu_printf("Error: OVER GLB_VAR_SRAM_SIZE. "
