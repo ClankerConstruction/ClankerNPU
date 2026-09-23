@@ -216,6 +216,8 @@ void bufid_pool_init(void)
 	rx_bufid_ridx = 0;
 	rx_bufid_widx = 0;
 
+#ifndef AN7552
+	/* tx tokens: AN7552 has none (no NPU tx) */
 	p = (u16 *)sram_buf_alloc(18);
 	bufid_ring_base = (u32)p;
 	for (i = 0; i < TX_FREE_RING_ENTRIES; i++)
@@ -228,6 +230,7 @@ void bufid_pool_init(void)
 
 	bufid_ridx = 0;
 	bufid_widx = 0;
+#endif
 }
 
 #ifdef HAS_BME
@@ -302,6 +305,13 @@ void np_skb_tx_force_reset(void)
 }
 #endif /* HAS_BME */
 
+/* per-band counter words: 170 on AN7552 eagle */
+#if defined(AN7552) && defined(WIFI_EAGLE)
+#define BAND_COUNTER_WORDS	170
+#else
+#define BAND_COUNTER_WORDS	250
+#endif
+
 void counter_init(u32 band)
 {
 	u32 *base;
@@ -310,11 +320,11 @@ void counter_init(u32 band)
 	if (band == 1) {
 		counter_base_5g = sram_buf_alloc(9);
 		base = (u32 *)counter_base_5g;
-		count = 250;
+		count = BAND_COUNTER_WORDS;
 	} else if (band == 0) {
 		counter_base_2g = sram_buf_alloc(10);
 		base = (u32 *)counter_base_2g;
-		count = 250;
+		count = BAND_COUNTER_WORDS;
 	} else {
 		counter_base_tri = sram_buf_alloc(11);
 		base = (u32 *)counter_base_tri;
