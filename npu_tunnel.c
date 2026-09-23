@@ -41,36 +41,49 @@ static u32 tunnel_sram_base(void)
 	return npu_bridge_addr();
 }
 
-static void bridge_cmd_submit(u32 port, u32 desc, u32 cmd, u32 arg0,
-			      u32 arg1, u32 arg2, u32 arg3, u32 arg4)
+/* egress command word: first and last segment, segment type */
+#define SEG_FIRST		0x80000000
+#define SEG_LAST		0x40000000
+#define SEG_TYPE(t)		((t) << 24)
+
+/* rewrite the be16 at byte offset off of the segment on the way out */
+#define PATCH(off, v)	(0xC0000000 | ((off) & 0x3FFF) << 16 | bswap16((u16)(v)))
+
+/* one segment of len bytes at addr + off, with up to four patches */
+static int tunnel_seg(u32 port, u32 addr, u32 len, u32 off, u32 cmd,
+		      u32 p0, u32 p1, u32 p2, u32 p3)
 {
-	volatile u32 *status = (volatile u32 *)(0x1EC12050 + 4 * port);
+	return npu_bridge_egress(port, addr & 0x1FFFFFFF,
+				 len << 16 | (off & 0xFFFF),
+				 cmd | (port & 7), p0, p1, p2, p3);
+}
 
-	if ((REG32(0x1EC12050 + 4 * port) & 0xFF00) == 0)
-		return;
+/* whole packet, or its 32-byte descriptor and the data past split
+ * bytes */
+static int tunnel_send_split(u32 port, u32 addr, u32 fwd, u32 len, u32 split)
+{
+	u32 type = SEG_TYPE(fwd != 0);
 
-	REG32(0x1EC12100 + 32 * port + 0) = cmd;
-	REG32(0x1EC12100 + 32 * port + 4) = desc;
-	REG32(0x1EC12100 + 32 * port + 8) = arg0;
-	REG32(0x1EC12100 + 32 * port + 12) = arg1;
-	REG32(0x1EC12100 + 32 * port + 16) = arg2;
-	REG32(0x1EC12100 + 32 * port + 20) = arg3;
-	REG32(0x1EC12100 + 32 * port + 24) = arg4;
-
-	REG32(0x1EC12104 + 32 * port) = 1;
-	(void)status;
+	len = (u16)len;
+	split = (u16)split;
+	if (split == 0)
+		return tunnel_seg(port, addr, len, 0, SEG_FIRST | SEG_LAST | type,
+				  0, 0, 0, 0);
+	tunnel_seg(port, addr, 32, 0, SEG_FIRST | SEG_TYPE(1), 0, 0, 0, 0);
+	tunnel_seg(port, addr, len - 32 - split, split + 32, SEG_LAST | type,
+		   0, 0, 0, 0);
+	return 0;
 }
 
 void tunnel_pkt_drop(u32 port, u32 pkt_len, u32 desc)
 {
-	bridge_cmd_submit(port, desc, pkt_len << 16,
-			  (port & 7) | 0xC2000000, 0, 0, 0, 0);
+	tunnel_seg(port, desc, pkt_len, 0, SEG_FIRST | SEG_LAST | SEG_TYPE(2),
+		   0, 0, 0, 0);
 }
 
 static void tunnel_pkt_continue(u32 port, u32 pkt_len, u32 desc)
 {
-	bridge_cmd_submit(port, desc, pkt_len << 16,
-			  (port & 7) | 0xC0000000, 0, 0, 0, 0);
+	tunnel_send_split(port, desc, 0, pkt_len, 0);
 }
 
 static void tunnel_desc_flush(u32 port, u32 desc, u32 pkt_len,
