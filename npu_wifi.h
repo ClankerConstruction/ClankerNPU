@@ -33,6 +33,11 @@
 #define PPE_WIFI_BUF_INFO     0x1FB50FDC	/* wcid 14:0, info 20:16 */
 #define PPE_WIFI_BUF_ID       0x1FB50FE0	/* 31 valid, 30 free only, 15:0 id */
 #define PPE_WIFI_BUF_CNT      0x1FB50FE4
+#ifdef AN7552
+#define PPE_WIFI_BUF_WCID     0xFFFF
+#else
+#define PPE_WIFI_BUF_WCID     0x7FFF
+#endif
 
 /* TDMA rx ring geometry */
 #define TDMA_RX_RINGS         2

@@ -354,7 +354,8 @@ void ppe_wifi_bufid_isr(int src)
 			info = REG32(PPE_WIFI_BUF_INFO);
 			hdr = REG32(eagle_buf_uncached(id));
 			if (eagle_pkt_enqueue(id, (hdr >> 3) & 0x3FFF,
-					      info & 0x7FFF, (info >> 16) & 31,
+					      info & PPE_WIFI_BUF_WCID,
+					      (info >> 16) & 31,
 					      0, 2, (hdr >> 3) & 0x3FFF) != 0)
 				buf_id_return(id);
 		}
