@@ -825,6 +825,76 @@ static void hwnat_set_wait_init(u32 addr)
 	tunnel_init();
 }
 
+static void ppe_ctrl_off(u32 ctrl)
+{
+	REG32(ctrl) &= ~1u;
+	REG32(ctrl) &= ~2u;
+	REG32(ctrl) &= ~0x100u;
+	REG32(ctrl) &= ~0x200u;
+	REG32(ctrl) &= ~0x40u;
+	REG32(ctrl) &= ~0x1000u;
+	REG32(ctrl) &= ~0x20u;
+}
+
+static void ppe_ctrl_park(u32 ctrl)
+{
+	REG32(ctrl) &= ~0x10u;
+	REG32(ctrl) |= 8;
+	REG32(ctrl) |= 4;
+}
+
+static void ppe_misc_off(u32 misc)
+{
+	REG32(misc) &= ~0x80u;
+	REG32(misc) &= ~0x100u;
+	REG32(misc) &= ~0x200u;
+	REG32(misc) &= ~0x400u;
+	REG32(misc) &= ~0x800u;
+}
+
+/* HWNAT_DEINIT: undo the PPE setup */
+static void hwnat_deinit(void)
+{
+	u32 fam;
+
+	ppe_qdma_config(0);
+	ppe_foe_pause(0);
+
+	fam = CHIP_FAMILY;
+	ppe_ctrl_off(PPE0_CTRL);
+	if (fam == 14)
+		ppe_ctrl_off(PPE1_CTRL);
+
+	if (fam == 10 || fam == 12 || fam == 14 || fam == 15 || fam == 16) {
+		REG32(PPE0_CTRL) &= ~0x8000u;
+		if (fam == 14)
+			REG32(PPE1_CTRL) &= ~0x8000u;
+	}
+	if (fam == 11)
+		REG32(PPE0_CTRL) |= 0x8000;
+
+	ppe_ctrl_park(PPE0_CTRL);
+	if (fam == 14)
+		ppe_ctrl_park(PPE1_CTRL);
+
+	if (fam == 12 || fam == 14 || fam == 15 || fam == 16) {
+		REG32(PPE0_CTRL) &= ~0x10000u;
+		REG32(PPE0_CTRL) &= ~0x20000u;
+		if (fam == 14) {
+			REG32(PPE1_CTRL) &= ~0x10000u;
+			REG32(PPE1_CTRL) &= ~0x20000u;
+		}
+	}
+
+	REG32(PPE0_CTRL2) &= 0x10000;
+	if (fam == 14)
+		REG32(PPE1_CTRL2) = REG32(PPE0_CTRL2);
+
+	ppe_misc_off(PPE0_MISC);
+	if (fam == 14)
+		ppe_misc_off(PPE1_MISC);
+}
+
 /* copy one 80-byte FOE entry into a PPE entry window */
 static int sram_set_entry(u32 size, u32 src, u32 win)
 {
@@ -947,7 +1017,7 @@ int hwnat_mail_dispatch(u32 base, u32 cnt)
 		result = 1;
 		break;
 	case 2:			/* HWNAT_DEINIT */
-		hwnat_ready = 0;
+		hwnat_deinit();
 		result = 1;
 		break;
 	case 3:			/* API */
