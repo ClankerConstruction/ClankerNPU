@@ -236,7 +236,11 @@ u32 dba_alloc_mask = 0xFFFF;
 #endif
 
 u32 npu_reset_pending = 1;
+#ifdef WIFI_KITE
+u32 tdma_bmgr_mode = 1;
+#else
 u32 tdma_bmgr_mode;
+#endif
 u32 npu_printf_prefix = 1;
 
 #ifdef HAS_DBA
@@ -439,10 +443,10 @@ u32 pcie_base_2g;
 
 /* RXD state */
 u32 rxd_base_5g;
-u32 rxd_5g_init_done;
+volatile u32 rxd_5g_init_done;
 u32 rxd_base_2g;
 u32 rxd_2g_bufid_base;
-u32 rxd_2g_init_done;
+volatile u32 rxd_2g_init_done;
 u32 rxd_5g_cpu_idx;
 u32 rxd_5g_mirror;
 u32 rxd_2g_cpu_idx;
@@ -481,7 +485,7 @@ u32 wifi_rxd_ring_5g;
 u32 wifi_rxd_idx_2g;
 u32 wifi_rxd_idx_5g;
 u16 *wifi_rxd_bufid_tbl;
-u8 wifi_retry_limit;
+u16 wifi_retry_limit;
 
 /* WiFi init state */
 u8 wifi_driver_model;
@@ -518,6 +522,8 @@ u32 ba_node_pool_base;
 /* WiFi per-port wait state (16 ports × 2 bands) */
 u8 wifi_wait_state_2g[16];
 u8 wifi_wait_state_5g[16];
+u8 wifi_wait_band_2g;
+u8 wifi_wait_band_5g;
 
 /* WiFi per-port band assignment */
 u8 wifi_port_band_2g[16];

@@ -134,8 +134,7 @@ static void __attribute__((noinline)) core0_main(void)
 	tdma_init();
 
 #ifdef HAS_BME
-	/* the BMGR path is only taken when the host asks for it; AN7583
-	 * runs the buffer id pool instead and never touches the BMGR */
+	/* kite runs the BMGR; eagle runs the buffer id pool */
 	if (tdma_bmgr_mode != 0) {
 		npu_printf("do tdma_bmgr_init\n");
 		tdma_bmgr_init();

@@ -98,8 +98,17 @@ void core0_wifi_init_wrapper(void)
 #ifdef HAS_WIFI
 	int result;
 
+#ifdef WIFI_KITE
+	/* no TDMA rx ring on kite */
+#ifdef HAS_BME
+	tdma_tx_init();
+#endif
+	wifi_bridge_init();
+	npu_printf("%s finish\n", "core0_wifi_init_wrapper");
+#else
 	/* after tdma_init: it wipes SRAM and restarts the bump allocator */
 	wifi_pcie_desc_alloc();
+#endif
 
 #ifdef WIFI_EAGLE
 	eagle_rx_init();
@@ -115,17 +124,10 @@ void core0_wifi_init_wrapper(void)
 
 #ifdef WIFI_EAGLE
 	eagle_msdu_pg_pool_init();
-#endif
 #ifdef HAS_BME
 	tdma_tx_init();
 	tdma_rx_init();
 #endif
-#ifndef WIFI_EAGLE
-	wifi_bridge_init();
-	npu_printf("%s finish\n", "core0_wifi_init_wrapper");
-#endif
-
-#ifdef WIFI_EAGLE
 	eagle_init_done = 1;
 	npu_printf("NPU init Version: %s\n", NPU_INIT_VERSION);
 #endif

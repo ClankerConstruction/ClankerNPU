@@ -701,61 +701,42 @@ u32 wifi_pipeline_base;
 static u32 wifi_wcid_base_2g;
 static u32 wifi_wcid_base_5g;
 
-/* WiFi state init: clear per-band ring state and byte/pkt stats */
-static void wifi_state_init(void)
+/* core 0 bridge init; the rings come up per band
+ * from SET_WAIT_DESC */
+void wifi_bridge_init(void)
 {
-#ifdef HAS_WIFI
+#ifdef WIFI_KITE
 	u32 i;
 
-	wifi_bridge_report = 0;
-	wifi_bridge_enabled = 1;
+	wifi_no_ba_test = 0;
+	wifi_band_cap = 1;
 	wifi_retry_limit = 3;
 
-	/* clear 5G band stats */
 	for (i = 0; i < 16; i++) {
+		wifi_wait_state_5g[i] = 0;
 		stats_bytes_5g[i * 2] = 0;
 		stats_bytes_5g[i * 2 + 1] = 0;
 		stats_pkts_5g[i * 2] = 0;
 		stats_pkts_5g[i * 2 + 1] = 0;
+		wifi_port_band_5g[i] = 0xFF;
 	}
-
-	/* clear 2.4G band stats */
 	for (i = 0; i < 16; i++) {
+		wifi_wait_state_2g[i] = 0;
 		stats_bytes_2g[i * 2] = 0;
 		stats_bytes_2g[i * 2 + 1] = 0;
 		stats_pkts_2g[i * 2] = 0;
 		stats_pkts_2g[i * 2 + 1] = 0;
+		wifi_port_band_2g[i] = 0xFF;
 	}
 
-	/* allocate tri-band counters */
-	counter_init(2);
-
-	wifi_rx_pending = 0;
-	wifi_tx_pending = 0;
-#endif
-}
-
-/* WiFi bridge init: state init and ring setup */
-void wifi_bridge_init(void)
-{
-#ifdef HAS_WIFI
-	wifi_queue_mutex_init();
-	wifi_pkt_queue_init(0);
-	wifi_pkt_queue_init(1);
+	wifi_pcie_desc_alloc();
+	wifi_wait_band_2g = 0;
+	wifi_wait_band_5g = 0;
 	wifi_ba_node_init();
-
-	wifi_state_init();
-
-	/* allocate per-band counter and WCID buffers */
-	counter_init(0);
-	counter_init(1);
-	wcid_counter_init(0);
-	wcid_counter_init(1);
-
-	wifi_bridge_active = 0;
-	wifi_batch_count = 0;
-	wifi_pipeline_widx = 0;
-
+	counter_init(2);
+	wifi_queue_mutex_init();
+	rxd_2g_init_done = 0;
+	rxd_5g_init_done = 0;
 #endif
 }
 

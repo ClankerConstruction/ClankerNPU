@@ -410,10 +410,10 @@ extern u32 pcie_base_5g;
 extern u32 pcie_base_2g;
 
 extern u32 rxd_base_5g;
-extern u32 rxd_5g_init_done;
+extern volatile u32 rxd_5g_init_done;
 extern u32 rxd_base_2g;
 extern u32 rxd_2g_bufid_base;
-extern u32 rxd_2g_init_done;
+extern volatile u32 rxd_2g_init_done;
 extern u32 rxd_5g_cpu_idx;
 extern u32 rxd_5g_mirror;
 extern u32 rxd_2g_cpu_idx;
@@ -446,7 +446,7 @@ extern u32 wifi_rxd_ring_5g;
 extern u32 wifi_rxd_idx_2g;
 extern u32 wifi_rxd_idx_5g;
 extern u16 *wifi_rxd_bufid_tbl;
-extern u8 wifi_retry_limit;
+extern u16 wifi_retry_limit;
 
 extern u8 wifi_driver_model;
 extern u8 wifi_pcie_port_type;
@@ -478,6 +478,8 @@ extern u32 ba_node_pool_base;
 
 extern u8 wifi_wait_state_2g[16];
 extern u8 wifi_wait_state_5g[16];
+extern u8 wifi_wait_band_2g;
+extern u8 wifi_wait_band_5g;
 extern u8 wifi_port_band_2g[16];
 extern u8 wifi_port_band_5g[16];
 
