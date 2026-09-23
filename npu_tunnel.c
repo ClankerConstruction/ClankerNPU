@@ -23,6 +23,9 @@ int tunnel_mail_dispatch(u32 base, u32 cnt)
 	u32 func_id = *(volatile u32 *)base;
 
 	(void)cnt;
+	/* func_id comes from the host; reject ids past the table */
+	if (func_id >= sizeof(tunnel_func_table) / sizeof(tunnel_func_table[0]))
+		return 0;
 	if (tunnel_func_table[func_id])
 		return tunnel_func_table[func_id](base, cnt);
 	return 0;

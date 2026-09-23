@@ -143,6 +143,7 @@ The buffer is in NPU SRAM. Word 0 is the function id.
 | 8 | L4S: 0 off, 1 on, 2 debug, 3 queue id |
 
 Every handler returns 1. The table has 10 entries; id 9 has no handler.
+Ids 9 and up return 0 without calling anything.
 Details are in [tunnel.md](tunnel.md).
 
 ## HWNAT commands (slot 5)
