@@ -512,6 +512,7 @@ static int eagle_rxdmad_handle(u8 *chaining)
 
 	/* the sampled frames were all 128-byte null data. Take the next few
 	 * that actually carry something instead. */
+#ifdef NPU_DATAPATH_DBG
 	if (((dw1 >> 16) & 0x3FFF) > 200 && dbg.rxbig < 4) {
 		dbg.rxbig++;
 		npu_printf("[NPU]rxdsc n=%d dw1=%x dw2=%x info=%x sdl=%d dst=%d\n",
@@ -519,6 +520,7 @@ static int eagle_rxdmad_handle(u8 *chaining)
 			   (dw1 >> 11) & 3);
 		npu_hexdump("rxpkt", buf + EAGLE_PKT_HEADROOM, 208);
 	}
+#endif
 
 	if ((info & 1) == 0 && *chaining == 0) {
 		/* a whole frame in one buffer */
@@ -690,6 +692,7 @@ static int eagle_hostadpt_drain(u32 band)
 		return 0;
 
 	while (*(volatile u32 *)e & 1) {
+#ifdef NPU_DATAPATH_DBG
 		if (eagle_in_first[band] == 0) {
 			eagle_in_first[band] = 1;
 			npu_printf("[NPU]in%d base=%x size=%d w0=%x pkt=%x skb=%x\n",
@@ -701,6 +704,7 @@ static int eagle_hostadpt_drain(u32 band)
 				    (((u32 *)e)[1] & 0x3FFFFFFF) | NPU_ADDR_MASK,
 				    32);
 		}
+#endif
 		dbg.in[band]++;
 		if (eagle_tx_stage(band, (u32 *)e) < 0) {
 			dbg.nostage[band]++;
@@ -741,6 +745,7 @@ static int eagle_tx_ring_push(u32 band)
 		desc = eagle_tx_ring_desc[band] + 16 * cpu;
 		txd = (cpu << 8) + eagle_txd_space[band];
 
+#ifdef NPU_DATAPATH_DBG
 		if (eagle_tx_first_push[band] == 0) {
 			eagle_tx_first_push[band] = 1;
 			npu_printf("[NPU]tx%d stage=%x/%d tok=%x len=%d ring=%x cpu=%d dw1=%x txd=%x pcie=%x\n",
@@ -751,6 +756,7 @@ static int eagle_tx_ring_push(u32 band)
 				   REG32(desc + 4), txd,
 				   eagle_tx_ring_pcie_base[band]);
 		}
+#endif
 
 		for (wait = 1000; wait != 0 && eagle_stopping == 0; wait--) {
 			if ((s32)REG32(desc + 4) < 0)
@@ -798,6 +804,7 @@ static int eagle_tx_ring_push(u32 band)
 		dbg.push[band]++;
 		pushed = 1;
 
+#ifdef NPU_DATAPATH_DBG
 		if (eagle_tx_first_push[band] == 1) {
 			eagle_tx_first_push[band] = 2;
 			npu_printf("[NPU]tx%d sent d0=%x d1=%x d2=%x cidx=%d dma=%d\n",
@@ -805,6 +812,7 @@ static int eagle_tx_ring_push(u32 band)
 				   REG32(desc + 8), next,
 				   REG32(eagle_tx_ring_pcie_base[band] + 0xC));
 		}
+#endif
 	}
 
 	*(volatile u32 *)(e + 4) = 0;
