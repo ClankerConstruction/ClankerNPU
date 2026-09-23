@@ -112,12 +112,16 @@ static void __attribute__((noreturn)) tunnel_offload_loop(u32 core,
 	tr471_main_init();
 #endif
 	while (1) {
-		if (tunnel_ecn_enabled) {
+		/* ECN marking only while the queue is empty */
+		if (tunnel_dequeue(core, &pkt_len, &desc_ptr) != 0) {
+			if (!tunnel_ecn_enabled)
+				continue;
 			l4s_ecn_process(1);
 			l4s_ecn_process(2);
+			if (tunnel_dequeue(core, &pkt_len, &desc_ptr) != 0)
+				continue;
 		}
-		if (tunnel_dequeue(core, &pkt_len, &desc_ptr) == 0 &&
-		    tunnel_offload_handler(core, pkt_len,
+		if (tunnel_offload_handler(core, pkt_len,
 					   (u32 *)desc_ptr) == -1)
 			tunnel_pkt_drop(core, pkt_len, desc_ptr);
 	}
