@@ -115,6 +115,10 @@ on the eagle path:
 | 10, 11 | tx done rings |
 | 15 | all bases set; publish every ring's cpu index |
 
+SET_WAIT has 31 funcIds and GET_WAIT 10. SET_NO_WAIT and GET_NO_WAIT
+have no handler and return 1. An out-of-range funcId returns 0; a handler
+returning 0 prints `wifi_mail_*_operation fail !`.
+
 Host addresses at or above `0xC0000000` are outside the window the NPU
 can reach. Both paths use the same dispatch tables, one entry per funcId,
 with a different handler set behind each.
@@ -134,6 +138,11 @@ with a different handler set behind each.
 +0x140 + n*4         MIB n
 ```
 
+Mailbox n+1 must interrupt core n (checked against `mhartid`). Arg bit5
+stores the buffer address and length in the core's data slot instead of
+calling a handler. Otherwise the handler result goes into bits[4:2]:
+waiting mails (bit0) get the done bit, others are answered on queue 8.
+
 Queue 8 is the NPU-to-host notify channel. The notify mutex id is 14 on
 AN7552 and AN7583, 30 on AN7581.
 
@@ -148,6 +157,11 @@ AN7552 and AN7583, 30 on AN7581.
 0x0C200000           threshold
 0x0C200004           claim and complete
 ```
+
+Registering a second handler on a source keeps the first, prints
+`already registered ISR`, and enables the source anyway. Source 22 is the
+boot UART rx: a register console taking `rd AAAAAAAA` and
+`wt AAAAAAAA VVVVVVVV` (fixed columns, CR ends the line).
 
 ### TDMA
 
@@ -573,10 +587,6 @@ give to cores 3 and 4.
 
 ### What's Missing
 
-- **Kite PPE buffer return** PLIC 95 is served only on eagle; the kite
-  handler is not implemented.
-- **`INODE_TXRX_REG_ADDR` case 6** (restart) only reinits the counters;
-  TDMA, BMGR and the MSDU page pool are not reset.
 - **TR-471** test infrastructure (~22 functions) is latency/loss
   measurement per ITU-T Y.1540
 - **Thread manager** (~10 functions) advanced multi-hart scheduling
@@ -584,15 +594,11 @@ give to cores 3 and 4.
   callbacks, optimized RX
 - **PPE filter tables** (~5 functions) full filter programming
 - **Timer extensions** (~5 functions) watchdog, periodic callbacks
-- **Trap vector** full 32-GPR context save/restore (current crt0 has
-  a minimal trap handler)
 - **Pre-computed .data tables** BA session SRAM pointer table (~2KB),
   tunnel template headers, TR-471 config structs, MIB address arrays.
   Current .data is 488 bytes (AN7583_MT7993), which is the three
   function-pointer tables and the five timer tables; the rest are not
   yet populated.
-- **Boot UART RX console** `uart_debug_cmd` parses `rd`/`wt`, but no
-  ISR is registered on PLIC source 22, which `npu_init` enables.
 
 ## Verification
 
