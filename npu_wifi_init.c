@@ -389,7 +389,7 @@ void __attribute__((noinline)) npu_set_band_enable(u32 band)
 		npu_printf("[ERROR] band_idx is wrong value %d !!!\n", band);
 		return;
 	}
-	*((u8 *)&pipeline_5g_ready + band) = 1;
+	wifi_pcie_state[band] = 1;
 }
 
 void __attribute__((noinline)) npu_set_force_to_cpu(u8 val)

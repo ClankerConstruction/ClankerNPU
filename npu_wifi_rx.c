@@ -745,7 +745,7 @@ void wifi_bridge_init(void)
 static void wifi_periodic_check(u32 band)
 {
 	if (wifi_classifier_bypass == 0)
-		ba_scan_entries(band);
+		ba_timeout_scan(band);
 }
 
 static void wifi_flush_stale(u32 band)

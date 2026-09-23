@@ -162,13 +162,13 @@ static inline void wifi_u64_add(u32 *c, u32 v)
 
 void reorder_node_free(u16 node_idx, u8 node_type, u32 band);
 u32 reorder_node_alloc(u32 band, u32 *pool_type, u16 *idx_out);
-int pkt_enqueue_bridge(u32 buf_id, u32 pkt_len, u32 amsdu,
-		       u32 band, u32 fwd_type);
+int pkt_enqueue_bridge(u32 buf_id, u32 pkt_len, u32 hdr,
+		       u32 band, u32 bss);
 void ba_flush_entry(u32 *entry);
 void ba_indicate_le_seq(u32 *entry, u32 seq);
 u32 ba_seq_scan(u32 *entry, u32 seq);
 u32 ba_state_update(u32 sn, u32 check_type, u32 entry_addr);
-u32 ba_scan_entries(u32 band);
+void ba_timeout_scan(u32 band);
 void ba_flush_all(u32 band);
 
 /* ================================================================

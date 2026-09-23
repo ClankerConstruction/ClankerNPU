@@ -413,8 +413,6 @@ u32 sim_mode_flag;
 u32 wifi_ext_state[32];
 
 /* Reorder node pools (2000 pri + 5000 sec, 36 bytes each) */
-u32 reorder_pri_node_base;
-u32 reorder_sec_node_base;
 u32 reorder_pri_idx_pool;
 u32 reorder_sec_idx_pool;
 u16 reorder_pri_widx;
@@ -432,10 +430,7 @@ u32 ba_table_a;
 u32 ba_table_b;
 
 /* Bridge/BME state */
-u8 bme_path_enable;
-u8 pipeline_5g_ready;
-u8 pipeline_2g_ready;
-u32 fwd_dispatch_table[32];
+u8 wifi_pcie_state[2];
 
 /* PCIe bases */
 u32 pcie_base_5g;
@@ -493,8 +488,13 @@ u8 wifi_band_cap;
 u8 wifi_force_to_cpu;
 u8 wifi_no_ba_test;
 u8 wifi_band0_on_cpu;
+#ifdef WIFI_KITE
+u16 wifi_flushall_timeout = 25;
+u16 wifi_flushone_timeout = 10;
+#else
 u16 wifi_flushall_timeout;
 u16 wifi_flushone_timeout;
+#endif
 u32 wifi_pkt_buf_addr;
 u32 wifi_dram_ba_node_addr;
 u32 wifi_pcie_desc_base;

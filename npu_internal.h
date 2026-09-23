@@ -384,8 +384,6 @@ extern volatile u32 core_sync_flag;
 
 extern u32 wifi_ext_state[32];
 
-extern u32 reorder_pri_node_base;
-extern u32 reorder_sec_node_base;
 extern u32 reorder_pri_idx_pool;
 extern u32 reorder_sec_idx_pool;
 extern u16 reorder_pri_widx;
@@ -401,10 +399,7 @@ extern u8 wifi_dbdc_mode;
 extern u32 ba_table_a;
 extern u32 ba_table_b;
 
-extern u8 bme_path_enable;
-extern u8 pipeline_5g_ready;
-extern u8 pipeline_2g_ready;
-extern u32 fwd_dispatch_table[32];
+extern u8 wifi_pcie_state[2];
 
 extern u32 pcie_base_5g;
 extern u32 pcie_base_2g;
