@@ -368,6 +368,20 @@ void ppe_wifi_bufid_isr(int src)
 
 /* ---- WiFi -> host ---- */
 
+#if defined(AN7552)
+/* Drains share hart 0 with the PPE ISR, which also frees under mutex
+ * 13; re-acquiring it stalls the bus. Mask PLIC 95 around
+ * the free. */
+static void eagle_drain_free(u16 buf_id)
+{
+	plic_disable(95);
+	buf_id_return(buf_id);
+	plic_enable(95);
+}
+#else
+#define eagle_drain_free(id) buf_id_return(id)
+#endif
+
 /* Hand one queued packet to the host adaptor out ring and give the rx
  * buffer id back either way: the host copy already took the data. */
 static void eagle_txq_drain(u32 band)
@@ -394,7 +408,7 @@ static void eagle_txq_drain(u32 band)
 				 (flags >> 1) & 1,
 				 *(volatile u32 *)eagle_buf_uncached(buf_id)) != 0)
 			dbg.rxoutfail++;
-		buf_id_return((u16)buf_id);
+		eagle_drain_free((u16)buf_id);
 	}
 
 	*(volatile u32 *)e = 0xFFFFFFFF;
@@ -461,7 +475,7 @@ static void eagle_mseg_drain(u32 band)
 					 (*(volatile u8 *)(e + 8) & 2) != 0,
 					 *(volatile u32 *)eagle_buf_uncached(buf_id));
 		}
-		buf_id_return((u16)buf_id);
+		eagle_drain_free((u16)buf_id);
 		*(volatile u32 *)e = 0xFFFFFFFF;
 		*(volatile u32 *)(e + 4) = 0;
 		*(volatile u8 *)(e + 8) = 0;
