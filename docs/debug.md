@@ -217,42 +217,163 @@ next slot. `TRACE` prints every ring in order.
 
 The `NPUDBG=1` build starts with print bits 1 and 15 set.
 
-## Recipes
+## Troubleshooting
 
-**Is the firmware up, and which one?** `sys memory 1e906800 40`: `NDBG`
-and the version string. No magic means the NPU never ran `npu_init`.
+Load this helper into the DUT shell first. It runs one command and
+prints the command words; the result is in the dump.
 
-**Is every hart alive?** `sys memory 1e906880 180` twice, a second
-apart. Each hart record starts with its loop tag; the next word is the
-heartbeat. A frozen heartbeat names the stuck hart; its trap fields
-say whether it took an exception.
+```sh
+ndbg() {	# ndbg HART CMD [ARG0] [ARG1], all hex
+	sys memwl 1e906850 ${3:-0}; sys memwl 1e906854 ${4:-0}
+	sys memwl 1e906848 $1; sys memwl 1e90684c $2
+	sleep 1; dmesg -c >/dev/null
+	sys memory 1e906840 30; dmesg -c | grep 1e9068
+}
+```
 
-**Did the host's command reach the NPU?** Set `trace_mask` to 3, repeat
-the host action, then run `TRACE` on an idle hart. Each mailbox command
-shows the slot, the buffer and the return value; WiFi mails also show
-the function type and id. The hart record's mail count and last mail
-say the same without tracing.
+```
+# ndbg 3 2 84000000
+1e906840  00 00 00 00.00 00 00 00.00 00 00 03.00 00 00 00   masks, cmd_hart, cmd (0: done)
+1e906850  84 00 00 00.00 00 00 00.00 00 00 00.00 01 00 01   arg0, arg1, arg2, ret0
+1e906860  95 08 00 b4.00 00 00 02.00 00 00 00.00 00 00 00   ret1, done, status
+```
 
-**WiFi frames stop.** Set `print_mask` to `8000` for two-second counter
-lines from core 3, or run `STATUS` with mask 2 once. The counters in
-`struct eagle_dbg` say which stage frames stop at: taken off the host
-ring (`in`), staged, pushed to the WiFi ring, rx descriptors parsed,
-queued to the host, sent to the wire. Kite parts keep per-band counter
-blocks that run only while bit 2 of the byte at `KFLG` is set: read the
-word holding that byte, set the bit, write the word back.
+A `cmd` that stays non-zero means the hart named in `cmd_hart` is not
+running its loop.
 
-**Tunnel or L4S traffic misbehaves.** `STATUS` with mask `18`: per
-class tunnel counts, drops, unknown UDFs, egress refusals, and for each
-bridge channel the packets waiting and the egress credits. Waiting
-packets that do not drain with credits available mean the tunnel hart
-is not polling; check its heartbeat. `BRIDGE` with `arg0` 0 prints the
-bridge's own per-channel counters. The host side counts the same path:
-`echo dump > /proc/tc3162/hwnat_npu_debug` prints the frame engine's
-counters towards the NPU followed by the bridge counters.
+### Where to start
 
-**Where did SRAM go?** `SRAM` prints every allocation with its type and
-address. The host-view base of any ring is the address with the top
-three bits cleared.
+```mermaid
+flowchart TD
+  S["NPU path misbehaves"] --> M{"sys memrl 1e906800<br/>= 0x4e444247?"}
+  M -->|no| M1["firmware not running:<br/>boot log, npu.ko load"]
+  M -->|yes| V{"version string<br/>is the expected build?"}
+  V -->|no| V1["wrong image loaded:<br/>check /userfs/npu_rv32.bin"]
+  V -->|yes| H{"hart records, read twice:<br/>tag set, heartbeat moving?"}
+  H -->|tag 0| H0["hart never reached its loop:<br/>init waits on the host, see FAQ"]
+  H -->|heartbeat frozen| T{"exceptions<br/>+0x18 > 0?"}
+  T -->|yes| T1["crash: mcause, mepc, mtval<br/>+ version string to a developer"]
+  T -->|no| T2["hung inside one pass:<br/>STATUS from another hart"]
+  H -->|all alive| P{"which path?"}
+  P -->|host commands| C["mail count and last mail;<br/>trace_mask 3 + TRACE"]
+  P -->|WiFi| W["STATUS mask 2<br/>or print_mask 8000"]
+  P -->|tunnel, L4S, MAP-T| U["STATUS mask 18;<br/>host: hw_nat -g"]
+  P -->|GPON upstream| D["STATUS mask 40"]
+```
 
-**Read NPU-only memory.** `COPY` with the NPU address and a length,
-then `sys memory 1e907400 LEN`. For one word, `READ`.
+### FAQ
+
+**The magic word is not `4e444247`.**
+The NPU never ran `npu_init`, or it ran another image. Look in the boot
+log for `copy NPU binary:/userfs/npu_rv32.bin(<size>)` and, right after
+the Bender banner, `NPU Version:`. No `copy` line: the NPU module did not
+load. A `copy` line without `NPU Version`: the image did not start.
+
+**The version string is not matched with the build.**
+The unit booted another image. The string ends in the git hash of the
+build; `-dirty` means it was built from uncommitted sources.
+
+**A hart's loop tag is 0.**
+That hart is still in its init. On AN7583 hart 0 takes `TUNL` only once
+the WiFi init is done, and that init waits for the host's WiFi setup
+commands; a tag of 0 there with no WiFi traffic means the host WiFi
+driver never finished its NPU setup. Its mail count (hart record
+`+0x10`) shows how far the host got.
+
+**A heartbeat does not move.**
+The hart is stuck inside one pass of its loop.
+
+| also seen | meaning | next |
+|---|---|---|
+| exceptions (`+0x18`) above 0 | the hart crashed | read `mcause`, `mepc`, `mtval` (table below) |
+| `STATUS` `tdma tx_full` rising | the wired-side ring stays full | the frame engine is not taking frames |
+| `STATUS` bridge `credits 0` | the tunnel hart waits for bridge credit | the frame engine is not taking tunnel packets back |
+| nothing else | the hart waits on hardware or on another hart | run `STATUS` on a live hart, compare with a good unit |
+
+| `mcause` | exception |
+|---:|---|
+| 0, 1 | instruction address misaligned, access fault |
+| 2 | illegal instruction |
+| 4, 5 | load address misaligned, access fault |
+| 6, 7 | store address misaligned, access fault |
+
+`mepc` is the faulting instruction, `mtval` the faulting address. The
+hart stepped over the instruction and carried on, so a crash does not
+always stop it; a rising exception count is still a fault. Send the
+version string with the values: they locate the instruction in that
+build.
+
+**A command never completes (`cmd` stays non-zero).**
+`cmd_hart` names a hart that is not in its loop, or one that does not
+exist on this part (`0x1E90680C` holds the hart count). Write 0 to
+`cmd` and send it to a hart with a moving heartbeat.
+
+**A printing command shows nothing.**
+The NPU prints on the serial console, not in `dmesg`. Without a serial
+console, use the words the block holds: counters, hart records, `READ`
+and `COPY`.
+
+**The host says it configured something; did the NPU get it?**
+Read the mail count and last mail of the hart the host talks to (hart
+0 for WiFi, tunnel and HWNAT commands; hart 5 for DBA). A count that
+does not move: the command never arrived. `last mail` ends in the
+handler's return value; 0 means the handler refused it, and the
+console shows `... operation fail !`. For the full sequence set
+`trace_mask` to 3, repeat the host action and run `TRACE`: each WiFi
+mail shows `funcType << 8 | funcId`.
+
+**WiFi traffic stops or is slow (eagle).**
+Run `STATUS` with mask 2, or set `print_mask` to `8000` for a report
+every two seconds. Read the lines in order:
+
+| line, field | stuck at | meaning |
+|---|---|---|
+| `rxo ... state=a/b/c` | `a` or `b` is 0 | the host has not started rx or tx on the NPU |
+| same | `c` is not 3 | the WiFi tx queue is not running |
+| `tx in` | not moving while WiFi clients receive nothing | the host sends nothing to the NPU |
+| `tx full` | rising | WiFi tx ring full or no free token: the WiFi chip is not sending |
+| `rx rxd` | not moving while clients send | the WiFi chip writes nothing to the NPU rx ring |
+| `rx fast` | not moving, `q` moving | frames go to the host, not to the wire: the flows are not offloaded |
+| `rx drop` | rising | the host queue is full |
+| `rxo full` | rising | the host does not drain the host adaptor ring |
+| `lan push` | not moving with wired-to-WiFi traffic | offloaded wired-to-WiFi frames do not reach the NPU |
+| `lan fail` | rising | no free token or WiFi tx ring stuck |
+
+**WiFi traffic stops (kite).**
+The kite counter blocks run only while bit 2 of the byte at `KFLG` is
+set: read the word holding it, set the bit, write it back. Their
+addresses are in the variables at `KC2G` and `KC5G`.
+
+**Tunnel, L4S or MAP-T traffic misbehaves.**
+Run `STATUS` with mask `18`.
+
+| seen | meaning |
+|---|---|
+| `tunnel pkts` 0 | no flow is steered to the NPU: check the host (`hw_nat -g`, the feature's enable, a flow table flush after enabling) |
+| the class counter for the feature stays 0 | the host binds the flows another way (VXLAN always runs in the frame engine) |
+| `drop` rising | the handler refused packets and returned them as drops |
+| `invalid` rising | the host bound flows with a tunnel type this firmware has no handler for; the trace (bit 3) shows the type |
+| `egress_fail` rising | the bridge has no credit: the frame engine does not take packets back |
+| a bridge channel with `waiting` above 0 that does not drain | nothing polls that channel; channel 0 (1, 2 for L4S) needs the `TUNL` hart alive |
+| `l4s pkts` 0 with L4S on | no flow carries ECN bits, or flows were bound before L4S was enabled |
+| `l4s marks` 0, `pkts` rising | queue `qid` never exceeded `thresh`: no congestion, nothing to mark |
+| MAP-T TCP at a few hundred kbit/s, UDP fine | host translator issue, see [errata](errata.md) H1 |
+
+`BRIDGE` with `arg0` 0 prints the bridge hardware's own per-channel
+counters. On the host, `echo dump > /proc/tc3162/hwnat_npu_debug` prints
+the frame engine's counters towards the NPU followed by the same
+bridge counters.
+
+**GPON upstream grants look wrong.**
+`STATUS` with mask `40`: `dba mails` counts host DBA commands, `frames`
+counts bandwidth map interrupts. Frames that do not move mean the PON
+MAC raises no interrupt; mails that do not move mean the host never
+configured the DBA.
+
+**Where is a ring or table in memory?**
+`SRAM` prints every allocation with its type and NPU address. Clear
+the top three bits for `sys memory`.
+
+**How do I read memory the host cannot map?**
+`COPY` with the NPU address and a length, then
+`sys memory 1e907400 <length>`. For one word, `READ`.
