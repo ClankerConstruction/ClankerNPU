@@ -180,3 +180,4 @@ Feature flags from `npu_config.h`:
 | [docs/tunnel.md](docs/tunnel.md) | tunnel offload, NPU bridge, L4S, PPE setup |
 | [docs/dba.md](docs/dba.md) | GPON dynamic bandwidth allocation |
 | [docs/debug.md](docs/debug.md) | field debug block: `sys memrl`/`memwl` recipes, commands, traces |
+| [docs/errata.md](docs/errata.md) | vendor firmware defects and how this firmware handles them |
