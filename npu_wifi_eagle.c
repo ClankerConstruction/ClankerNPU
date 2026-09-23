@@ -861,15 +861,26 @@ int eagle_mail_get_last_rate(u32 *msg)
 	return 1;
 }
 
+/* 16 per-entry counter slots, none kept on eagle: zero the block,
+ * one complaint per slot */
 int eagle_mail_get_counter(u32 *msg)
 {
-	npu_memset(&msg[2], 0, 40);
+	u32 i;
+
+	for (i = 0; i < 16; i++)
+		npu_printf("[ERROR]%s() not support in NPU \n",
+			   "npu_mbox_get_wait_counter_wrapper");
+	npu_memset((u8 *)msg + 16, 0, 576);
 	return 1;
 }
 
+/* where the band's counter block sits in SRAM */
 int eagle_mail_get_dbg_counter(u32 *msg)
 {
-	msg[2] = 0;
+	u32 band = msg[0] & 0xF;
+
+	msg[2] = sram_buf_alloc(band == 0 ? 10 : band == 1 ? 9 : 11) &
+		 0x1FFFFFFF;
 	return 1;
 }
 
@@ -921,15 +932,21 @@ int eagle_mail_get_rxdesc_base(u32 *msg)
 
 int eagle_mail_get_wcid_dbg_counter(u32 *msg)
 {
+	npu_printf("%s() This is not support !!!\n",
+		   "npu_mbox_get_wait_wcid_dbg_counter_wrapper");
 	msg[2] = 0;
 	return 1;
 }
 
 int eagle_mail_get_dma_addr(u32 *msg)
 {
+	u32 dir = msg[2];
+
 	npu_printf("%s L%d not support on bellwether\n",
 		   "npu_mbox_txrx_ring_dma_addr_get_wrapper", 10561);
 	msg[2] = 0;
+	npu_printf("get dma addr. band=%d dir=%d addr=%x\n",
+		   msg[0] & 0xF, dir, 0);
 	return 1;
 }
 
@@ -950,6 +967,7 @@ int eagle_mail_get_mdc_lock(u32 *msg)
 
 int eagle_mail_get_dump_mapping(u32 *msg)
 {
+	sram_buf_dump();
 	msg[2] = 0;
 	return 1;
 }
