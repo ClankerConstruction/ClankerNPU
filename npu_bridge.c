@@ -1,7 +1,8 @@
 /*
  * AN75XX NPU firmware - NPU bridge
  *
- * Four DMA channels between the NPU and the host packet buffers.
+ * DMA channels between the NPU and the host packet buffers: two on
+ * AN7552, four on AN7583, eight on AN7581.
  */
 
 #include "npu_internal.h"
@@ -16,6 +17,14 @@
 #define BRIDGE_CH_STATUS(ch)   (NPU_BRIDGE_REG_BASE + 0x050 + (ch) * 0x20)
 #define BRIDGE_PKT_BUF_BASE_REG 0x1EC12010
 #define BRIDGE_PKT_BUF_CFG    0x1EC12018
+
+#if defined(AN7581)
+#define NPU_BRIDGE_CH_NUM	8
+#elif defined(AN7583)
+#define NPU_BRIDGE_CH_NUM	4
+#else
+#define NPU_BRIDGE_CH_NUM	2
+#endif
 
 static u32 bridge_tx_count[4];
 
@@ -41,7 +50,7 @@ void npu_bridge_buf_init(void)
 
 	delay_1ms(10);
 
-	for (i = 0; i < 4; i++) {
+	for (i = 0; i < NPU_BRIDGE_CH_NUM; i++) {
 		ch_status = (u32 *)(0x1EC12210 + i * 16);
 		if (*ch_status & 1)
 			npu_printf("npu bridge channel-%d buf init sucess\n", i);
@@ -159,7 +168,7 @@ void npu_bridge_debug(u32 op)
 	r += 4;
 	npu_printf("NPU_BRIDGE_DBG_RXMBI_OUTCNT      (0x%08x) = 0x%08lx\n", r, REG32(r));
 
-	for (ch = 0; ch < 4; ch++) {
+	for (ch = 0; ch < NPU_BRIDGE_CH_NUM; ch++) {
 		r = 0x1EC122B0 + 4 * ch;
 		npu_printf("NPU_BRIDGE_DBG_TXMBI_INCNT_CH(%d)  (0x%08x) = 0x%08lx\n",
 			   ch, r, REG32(r));
