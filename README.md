@@ -428,7 +428,8 @@ generation the NPU never expects - `0xF`, or `0xE` on the narrow ring -
 so an untouched ring reads as empty.
 
 `SET_WAIT_PCIE_PORT_TYPE` opens each PCIe port's inbound window onto the
-descriptor block - a base at `0x1FA90038` / `0x1FC28030` and an end four
+descriptor block - a base at `0x1FA90038` / `0x1FC28030` (`0x1FA90030` on
+AN7552) and an end four
 bytes after it, both physical. The rings live in NPU SRAM, so until the
 window is open the WiFi chip cannot fetch a tx descriptor or write an rx
 one: the NPU can queue as many as it likes and the chip's dma index
@@ -519,7 +520,7 @@ flowchart LR
     LAN["bridge / PPE / ethernet"]
   end
   subgraph NPU["NPU"]
-    C0["core 0<br/>init, then<br/>queue drain,<br/>tx done,<br/>rx refill"]
+    C0["core 0<br/>init, then<br/>queue drain,<br/>rx refill"]
     C1["core 1<br/>rxdmad"]
   end
   WIFI["MT7991 / MT7993"]
@@ -528,7 +529,6 @@ flowchart LR
   C1 -->|"queue"| C0
   C0 -->|"out ring"| DRV
   C1 -.->|"dst_sel=1"| LAN
-  WIFI -->|"tx done"| C0
   C0 -->|"rx rings"| WIFI
   DRV -.->|"no in ring:<br/>TCSUPPORT_NPU_WIFI_TX<br/>is not set"| C0
 ```
@@ -568,6 +568,9 @@ Nothing may claim a block before that call. Core 0's order is:
 | `core0_wifi_init_wrapper` | type 1, the PCIe descriptor block - 0x220C0 at 0x3E814000 |
 | `npu_bridge_buf_init` | type 129, the bridge packet buffer |
 
+AN7552 eagle allocates 138 (no 18/28/29), then 129, then a 0x12080
+type 1.
+
 The PCIe descriptor block holds every WiFi ring the host programs, at
 the fixed offsets `eagle_ring_desc_base` carries, so it has to be a
 single 0x220C0 reservation that nothing else overlaps.
@@ -585,7 +588,7 @@ single 0x220C0 reservation that nothing else overlaps.
 
 `HAS_NPU_WIFI_TX` selects the host -> NPU tx ring. AN7552 builds print
 `TCSUPPORT_NPU_WIFI_TX is not set` and have no in ring at all; on
-AN7552 core 0 carries the refill and tx done work that the larger parts
+AN7552 core 0 carries the queue drain and rx refill that the larger parts
 give to cores 3 and 4.
 
 ### What's Missing
