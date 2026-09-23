@@ -61,7 +61,7 @@ has no credit.
 
 ```mermaid
 flowchart TD
-  A["register mailbox source 15,<br/>bridge buffer init"] --> B{"dequeue channel"}
+  A["register mailbox source 8 + hart,<br/>bridge buffer init"] --> B{"dequeue channel"}
   B -->|empty, ECN off| B
   B -->|empty, ECN on| C["L4S on channels 1 and 2"]
   C --> B
