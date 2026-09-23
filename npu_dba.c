@@ -221,8 +221,13 @@ static u32 dba_clean_no_idle;
 static u32 dba_no_idle_dump;
 static u32 dba_rpt_dump;
 
+static u8 dba_last_onu;
 static u8 dba_act_onus;
-static u8 dba_dual_frame;
+static u8 dba_new_act;
+static u8 dba_new_act_cur;
+static u8 dba_single_onu_ok;
+static u32 dba_cross_pos;
+static u32 dba_new_pass_cnt;
 
 
 /* ================================================================
@@ -614,7 +619,7 @@ static int dba_budget_calc(struct dba_alloc *ctx, struct dba_budget *b)
 	u8 mode = dba_tcont.mode;
 	const struct dba_map *m = &dba_map_tbl[mode > 3 ? 3 : mode];
 	u8 olt = dba_tcont.olt_mode;
-	u8 dual = dba_dual_frame;
+	u8 dual = dba_new_act;
 	u8 n_full = 0, n_act = 0;
 	s32 sum = 0;
 	struct dba_alloc *a;
@@ -710,7 +715,7 @@ static inline void dba_set_state(struct dba_alloc *a, u8 st)
 static int dba_alloc_adapt(struct dba_alloc *a)
 {
 	u32 w = a->ring_idx;
-	u8 dual = dba_dual_frame;
+	u8 dual = dba_new_act;
 	u32 wr = (w >> 4) & 15;
 	u32 rd = w & 15;
 	struct dba_rpt *cur = &a->ring[wr];
@@ -1041,7 +1046,7 @@ static int dba_bw_request(struct dba_alloc *ctx, struct dba_budget *b)
 		switch (a->cfg.dba_type) {
 		case 1:
 			bw = a->cfg.fix_bw;
-			if (dba_dual_frame)
+			if (dba_new_act)
 				bw <<= 1;
 			a->cur_bw = bw;
 			break;
@@ -1380,6 +1385,507 @@ static int dba_bwmap_switch(struct dba_alloc *ctx)
 
 
 /* ================================================================
+ * New DBA: four ONUs, two T-CONTs each, map spans two frames
+ * ================================================================ */
+
+#define DBA_NO_ONU		0xFFFF
+
+/* alloc index of T-CONT t of an ONU */
+static u16 dba_tc_idx(u8 mode, u32 onu, u32 t)
+{
+	return (u16)(t << dba_map_tbl[mode > 3 ? 3 : mode].idx_shift | onu);
+}
+
+/* stage alloc id and flags, keep the other ctrl bits, write the entry */
+static void dba_bwmap_emit(u16 alloc_id, u32 flags)
+{
+	u32 v = dba_bwmap.ctrl;
+
+	v = (v & ~BWMAP_AID_MASK) | BWMAP_AID(alloc_id);
+	v = (v & ~(BWMAP_DBRU_MASK | BWMAP_PLOAMU | BWMAP_END_MASK)) | flags;
+	dba_bwmap.ctrl = v;
+	dba_bwmap_write(BWMAP_W0(dba_bwmap.start, dba_bwmap.stop), v);
+}
+
+/* count the active ONUs, new DBA needs four without FEC */
+static int dba_new_mode_update(struct dba_alloc *ctx)
+{
+	u8 mode = dba_tcont.mode;
+	u8 n = dba_map_tbl[mode > 3 ? 3 : mode].n_onu;
+	u8 cnt = 0, fec = 0, last = 0;
+	u16 i;
+
+	dba_act_onus = 0;
+	for (i = 0; i < n; i++, ctx++) {
+		if (!(ctx->cfg.flags & 1))
+			continue;
+		cnt++;
+		if (ctx->cfg.flags & 2)
+			fec++;
+		last = i;
+	}
+	if (cnt) {
+		dba_act_onus = cnt;
+		dba_last_onu = last;
+	}
+	if (cnt == 4 && dba_new_en && !(fec | dba_tcont.olt_mode))
+		dba_new_act = 1;
+	else
+		dba_new_act = 0;
+	return 0;
+}
+
+/* insertion step over per ONU sums, unsigned compare */
+static int dba_sort_u32(u32 *val, u16 *list, u32 n, int start)
+{
+	u16 last;
+	u32 key;
+	int i;
+
+	if (n <= 1)
+		return 0;
+	last = list[start + n - 1];
+	key = (u16)val[last];
+	for (i = start + n - 2; i >= start; i--) {
+		if (key >= val[list[i]])
+			break;
+		list[i + 1] = list[i];
+		list[i] = last;
+	}
+	return 0;
+}
+
+/* 26 unit slot per ONU, T-CONT 1 gets two */
+static int dba_bwmap_short(u16 *order, u16 slot, u8 mode, u32 *pos,
+			   struct dba_alloc *ctx)
+{
+	u8 onu = order[slot];
+	u16 aid = ctx[onu].cfg.alloc_id;
+	struct dba_alloc *b = &ctx[dba_tc_idx(mode, onu, 1)];
+	int last = slot == dba_act_onus - 1;
+
+	dba_bwmap.start = *pos;
+	dba_bwmap.stop = (u16)*pos + 26;
+	if (last && !(b->cfg.flags & 1))
+		dba_bwmap_emit(aid, BWMAP_DBRU | BWMAP_PLOAMU | BWMAP_END_LAST);
+	else
+		dba_bwmap_emit(aid, BWMAP_DBRU | BWMAP_PLOAMU);
+
+	if (b->cfg.flags & 1) {
+		*pos = dba_bwmap.stop + 1;
+		dba_bwmap.start = *pos;
+		dba_bwmap.stop = *pos + 1;
+		dba_bwmap_emit(b->cfg.alloc_id,
+			       BWMAP_DBRU | (last ? BWMAP_END_LAST : 0));
+	}
+	if (!last)
+		*pos = dba_bwmap.stop + 47;
+	dba_cross_pos = 0;
+	return 0;
+}
+
+/*
+ * end flags of a pair entry and the next position; returns 1 when
+ * the map crossed into the other frame. Other *wrap values change nothing.
+ */
+static int dba_pair_end(u32 *pos, u16 *wrap, u32 last, u32 wrap_end,
+			int more, u32 *end)
+{
+	*end = dba_bwmap.ctrl & BWMAP_END_MASK;
+	if (*wrap == 0) {
+		*end = 0;
+		if (last && !more) {
+			*end = BWMAP_END_WRAP;
+			*pos = 0;
+			*wrap = 1;
+			return 1;
+		}
+		*pos = dba_bwmap.stop + (last || more ? 1 : 47);
+	} else if (*wrap == 1) {
+		*end = 0;
+		if (wrap_end && !more) {
+			*end = BWMAP_END_LAST;
+			*pos = 0;
+			*wrap = 0;
+			return 1;
+		}
+		*pos = dba_bwmap.stop + (wrap_end || more ? 1 : 47);
+	}
+	return 0;
+}
+
+/*
+ * both T-CONTs of an ONU sized by their grants.
+ * last: this frame ends here, wrap_end: the next one does.
+ */
+static int dba_bwmap_pair(u16 *order, u16 slot, u8 mode, u32 *pos,
+			  u16 *wrap, u32 last, u32 wrap_end,
+			  struct dba_alloc *ctx)
+{
+	u8 onu = order[slot];
+	struct dba_alloc *a = &ctx[onu];
+	struct dba_alloc *b = &ctx[dba_tc_idx(mode, onu, 1)];
+	u32 saved = *pos;
+	u32 end;
+
+	dba_bwmap.start = *pos;
+	dba_bwmap.stop = dba_bwmap.start - 1 + a->cur_bw;
+	dba_pair_end(pos, wrap, last, wrap_end, b->cfg.flags & 1, &end);
+	dba_bwmap_emit(a->cfg.alloc_id, BWMAP_DBRU | BWMAP_PLOAMU | end);
+	if (!(b->cfg.flags & 1))
+		return 0;
+
+	dba_bwmap.start = *pos;
+	dba_bwmap.stop = dba_bwmap.start - 1 + b->cur_bw;
+	if (dba_pair_end(pos, wrap, last, wrap_end, 0, &end))
+		dba_cross_pos = saved;
+	dba_bwmap_emit(b->cfg.alloc_id, BWMAP_DBRU | end);
+	return 0;
+}
+
+/* after the wrap, T-CONT 1 takes the rest of the frame */
+static int dba_bwmap_fill(u16 *order, u16 slot, u8 mode, u32 *pos,
+			  struct dba_alloc *ctx)
+{
+	u8 onu = order[slot];
+	struct dba_alloc *a = &ctx[onu];
+	struct dba_alloc *b;
+	u32 saved;
+
+	dba_bwmap.start = *pos;
+	dba_bwmap.stop = dba_bwmap.start - 1 + a->cur_bw;
+	saved = *pos;
+	dba_bwmap_emit(a->cfg.alloc_id, BWMAP_DBRU | BWMAP_PLOAMU);
+
+	b = &ctx[dba_tc_idx(mode, onu, 1)];
+	*pos = dba_bwmap.stop + 1;
+	dba_bwmap.start = *pos;
+	dba_bwmap.stop = dba_bwmap.start - 1 + (DBA_FRAME_LEN - *pos);
+	b->cur_bw = DBA_FRAME_LEN - *pos;
+	dba_bwmap_emit(b->cfg.alloc_id, BWMAP_DBRU | BWMAP_END_LAST);
+	dba_cross_pos = saved;
+	return 0;
+}
+
+/*
+ * place ONU list[idx] (T-CONTs 0 and 1) when it crosses
+ * into the next frame. *pos is the next free slot, *crossed is set.
+ */
+static int dba_cross_first_frame(u16 *list, u16 idx, u32 mode, u32 *pos,
+				 u16 *crossed, struct dba_alloc *ctx)
+{
+	s16 onu = (u8)list[idx];	/* ONU id sits in the low byte */
+	struct dba_alloc *a0 = &ctx[onu];
+	struct dba_alloc *a1;
+	u32 cur = *pos;
+	u32 remain = DBA_FRAME_LEN - cur;
+	u32 bw0 = a0->cur_bw;
+	u16 start = cur;
+	u16 last = start - 1;
+	u16 rem16 = remain;
+	u16 stop;
+	u32 saved, over;
+	u8 m, odd;
+
+	m = mode > 3 ? 3 : mode;
+	a1 = &ctx[(u16)(onu | (1 << dba_map_tbl[m].idx_shift))];
+
+	if (idx != dba_act_onus - 1) {
+		if (remain < bw0) {
+			/* T-CONT 0 does not fit: split it over the frame end */
+			dba_bwmap.start = start;
+			dba_bwmap.stop = last + rem16;
+			if (dba_bwmap.stop - dba_bwmap.start <= 13 && dba_log_en) {
+				dba_log_en = 0;
+				npu_printf("1cross first frame failed, bandwidth is less than the valid value\n");
+			}
+			if (dba_bwmap.stop > DBA_STOP_MAX) {
+				dba_bwmap.stop = DBA_STOP_MAX;
+				if (dba_log_en) {
+					dba_log_en = 0;
+					npu_printf("1cross first frame failed, stoptime:%d is err\n",
+						   DBA_STOP_MAX);
+				}
+			}
+			dba_bwmap_emit(a0->cfg.alloc_id,
+				     BWMAP_END_WRAP | BWMAP_PLOAMU | BWMAP_DBRU);
+			*pos &= 1;
+			odd = *pos;
+			*crossed = 1;
+			dba_bwmap.start = odd;
+			if (a0->cur_bw - remain > 14)
+				dba_bwmap.stop = odd + ~rem16 + a0->cur_bw;
+			else
+				dba_bwmap.stop = odd + 14;
+			dba_bwmap_emit(a0->cfg.alloc_id, BWMAP_PLOAMU | BWMAP_DBRU);
+			stop = dba_bwmap.stop;
+			*pos = stop + 1;
+			dba_bwmap.start = stop + 1;
+			dba_bwmap.stop = stop + a1->cur_bw;
+			dba_bwmap_emit(a1->cfg.alloc_id, BWMAP_DBRU);
+		} else if (remain == bw0 || remain - bw0 <= 7) {
+			/* T-CONT 0 ends the frame, T-CONT 1 opens the next */
+			dba_bwmap.start = start;
+			dba_bwmap.stop = last + rem16;
+			if (dba_bwmap.stop - start <= 13 && dba_log_en) {
+				dba_log_en = 0;
+				npu_printf("2cross first frame failed, bandwidth is less than the valid value\n");
+			}
+			if (dba_bwmap.stop > DBA_STOP_MAX) {
+				dba_bwmap.stop = DBA_STOP_MAX;
+				if (dba_log_en) {
+					dba_log_en = 0;
+					npu_printf("2cross first frame failed, stoptime:%d is err\n",
+						   DBA_STOP_MAX);
+				}
+			}
+			dba_bwmap_emit(a0->cfg.alloc_id,
+				     BWMAP_END_WRAP | BWMAP_PLOAMU | BWMAP_DBRU);
+			*pos &= 1;
+			*crossed = 1;
+			odd = *pos;
+			dba_bwmap.start = odd;
+			dba_bwmap.stop = a1->cur_bw + (odd - 1);
+			dba_bwmap_emit(a1->cfg.alloc_id, BWMAP_DBRU);
+		} else {
+			/* T-CONT 0 fits, T-CONT 1 is split over the frame end */
+			dba_bwmap.start = start;
+			saved = *pos;
+			dba_bwmap.stop = last + bw0;
+			if (dba_bwmap.stop - dba_bwmap.start <= 13 && dba_log_en) {
+				dba_log_en = 0;
+				npu_printf("3cross first frame failed, bandwidth is less than the valid value\n");
+			}
+			dba_bwmap_emit(a0->cfg.alloc_id, BWMAP_PLOAMU | BWMAP_DBRU);
+			stop = dba_bwmap.stop;
+			*pos = stop + 1;
+			dba_bwmap.start = stop + 1;
+			stop = stop + rem16 - a0->cur_bw;
+			if (stop > DBA_STOP_MAX) {
+				dba_bwmap.stop = DBA_STOP_MAX;
+				if (dba_log_en) {
+					dba_log_en = 0;
+					npu_printf("3cross first frame failed, stoptime:%d is err\n",
+						   DBA_STOP_MAX);
+				}
+			} else {
+				dba_bwmap.stop = stop;
+			}
+			dba_bwmap_emit(a1->cfg.alloc_id, BWMAP_END_WRAP | BWMAP_DBRU);
+			odd = saved & 1;
+			*pos = odd;
+			*crossed = 1;
+			dba_bwmap.start = odd;
+			if (cur - DBA_FRAME_LEN + a0->cur_bw + a1->cur_bw > 26)
+				dba_bwmap.stop = (u16)odd + ~rem16 + a0->cur_bw + a1->cur_bw;
+			else
+				dba_bwmap.stop = (u16)odd + 26;
+			dba_bwmap_emit(a1->cfg.alloc_id, BWMAP_DBRU);
+		}
+		*pos = dba_bwmap.stop + 47;
+		return 0;
+	}
+
+	/* last ONU of the map */
+	if (remain < bw0) {
+		dba_bwmap.start = start;
+		dba_bwmap.stop = last + rem16;
+		if (dba_bwmap.stop - dba_bwmap.start <= 13 && dba_log_en) {
+			dba_log_en = 0;
+			npu_printf("4cross first frame failed, bandwidth is less than the valid value\n");
+		}
+		if (dba_bwmap.stop > DBA_STOP_MAX) {
+			dba_bwmap.stop = DBA_STOP_MAX;
+			if (dba_log_en) {
+				dba_log_en = 0;
+				npu_printf("4cross first frame failed, stoptime:%d is err\n",
+					   DBA_STOP_MAX);
+			}
+		}
+		dba_bwmap_emit(a0->cfg.alloc_id,
+			     BWMAP_END_WRAP | BWMAP_PLOAMU | BWMAP_DBRU);
+		*pos &= 1;
+		odd = *pos;
+		*crossed = 1;
+		dba_bwmap.start = odd;
+		if (a0->cur_bw - remain > 14)
+			dba_bwmap.stop = odd + ~rem16 + a0->cur_bw;
+		else
+			dba_bwmap.stop = odd + 14;
+		dba_bwmap_emit(a0->cfg.alloc_id, BWMAP_PLOAMU | BWMAP_DBRU);
+		stop = dba_bwmap.stop;
+		*pos = stop + 1;
+		dba_bwmap.start = stop + 1;
+		/* clip T-CONT 1 to the end of this frame */
+		over = DBA_FRAME_LEN - *pos;
+		if (over < (u32)a1->cur_bw) {
+			dba_bwmap.stop = stop + over;
+			a1->cur_bw = over;
+		} else {
+			dba_bwmap.stop = stop + a1->cur_bw;
+		}
+	} else if (bw0 == remain || remain - bw0 <= 7) {
+		dba_bwmap.start = start;
+		dba_bwmap.stop = last + rem16;
+		if (dba_bwmap.stop - start <= 13 && dba_log_en) {
+			dba_log_en = 0;
+			npu_printf("5cross first frame failed, bandwidth is less than the valid value\n");
+		}
+		if (dba_bwmap.stop > DBA_STOP_MAX) {
+			dba_bwmap.stop = DBA_STOP_MAX;
+			if (dba_log_en) {
+				dba_log_en = 0;
+				npu_printf("5cross first frame failed, stoptime:%d is err\n",
+					   DBA_STOP_MAX);
+			}
+		}
+		dba_bwmap_emit(a0->cfg.alloc_id,
+			     BWMAP_END_WRAP | BWMAP_PLOAMU | BWMAP_DBRU);
+		*pos &= 1;
+		*crossed = 1;
+		odd = *pos;
+		dba_bwmap.start = odd;
+		if (*pos + 45 + a1->cur_bw > DBA_FRAME_LEN + 45) {
+			dba_bwmap.stop = (u16)odd + DBA_STOP_MAX;
+			a1->cur_bw = DBA_FRAME_LEN;
+		} else {
+			dba_bwmap.stop = (u16)odd - 1 + a1->cur_bw;
+		}
+	} else {
+		dba_bwmap.start = start;
+		saved = *pos;
+		dba_bwmap.stop = last + bw0;
+		if (dba_bwmap.stop - dba_bwmap.start <= 13 && dba_log_en) {
+			dba_log_en = 0;
+			npu_printf("6cross first frame failed, bandwidth is less than the valid value\n");
+		}
+		dba_bwmap_emit(a0->cfg.alloc_id, BWMAP_PLOAMU | BWMAP_DBRU);
+		stop = dba_bwmap.stop;
+		*pos = stop + 1;
+		dba_bwmap.start = stop + 1;
+		stop = stop + rem16 - a0->cur_bw;
+		if (stop > DBA_STOP_MAX) {
+			dba_bwmap.stop = DBA_STOP_MAX;
+			if (dba_log_en) {
+				dba_log_en = 0;
+				npu_printf("6cross first frame failed, stoptime:%d is err\n",
+					   DBA_STOP_MAX);
+			}
+		} else {
+			dba_bwmap.stop = stop;
+		}
+		dba_bwmap_emit(a1->cfg.alloc_id, BWMAP_END_WRAP | BWMAP_DBRU);
+		odd = saved & 1;
+		*pos = odd;
+		*crossed = 1;
+		dba_bwmap.start = odd;
+		over = cur - DBA_FRAME_LEN + a0->cur_bw + a1->cur_bw;
+		if (over <= 26) {
+			dba_bwmap.stop = (u16)odd + 26;
+		} else if (over + (*pos + 45) > DBA_FRAME_LEN + 45) {
+			/* T-CONT 1 would overrun the next frame too */
+			dba_bwmap.stop = (u16)odd + DBA_STOP_MAX;
+			a1->cur_bw = DBA_FRAME_LEN - (a0->cur_bw - remain);
+		} else {
+			dba_bwmap.stop = (u16)odd + ~rem16 + a0->cur_bw + a1->cur_bw;
+		}
+	}
+	dba_bwmap_emit(a1->cfg.alloc_id, BWMAP_END_LAST | BWMAP_DBRU);
+	dba_cross_pos = *pos;
+	return 0;
+}
+
+/* new DBA map, ONUs by growing grant, then switch bank */
+static int dba_new_bwmap_switch(struct dba_alloc *ctx)
+{
+	u16 order[4];
+	u32 bw[64];
+	u32 hw = 0, sw = 0, pos = 0, v;
+	u16 wrap = 0, onu, cnt, i;
+	u8 old, mode, m, t, found;
+	struct dba_alloc *a;
+	int k;
+
+	for (k = 0; k < 4; k++)
+		order[k] = DBA_NO_ONU;
+	npu_memset(bw, 0, sizeof(bw));
+	if (dba_cross_pos & 1)
+		pos = 1;
+	dba_new_pass_cnt++;
+	old = dba_bwmap_nonempty;
+	dba_bwmap_nonempty = dba_act_onus != 0;
+	mode = dba_tcont.mode;
+	m = mode > 3 ? 3 : mode;
+
+	/* ONUs with a valid T-CONT, sorted by the sum of their grants */
+	cnt = 0;
+	for (onu = 0; onu < dba_map_tbl[m].n_onu; onu++) {
+		found = 0;
+		for (t = 0; t < dba_map_tbl[m].n_tc; t++) {
+			a = &ctx[dba_tc_idx(mode, onu, t)];
+			if (a->cfg.flags & 1) {
+				found = 1;
+				bw[onu] += a->cur_bw;
+			}
+		}
+		if (found) {
+			order[cnt++] = onu;
+			dba_sort_u32(bw, order, cnt, 0);
+		}
+	}
+
+	for (k = 0; k < 4; k++) {
+		if (order[k] == DBA_NO_ONU)
+			continue;
+		v = bw[order[k]];
+		/* an ONU gets at least 27 units */
+		if (v <= 26) {
+			a = &ctx[dba_tc_idx(mode, (u8)order[k], 1)];
+			if (!(a->cfg.flags & 1))
+				a = &ctx[(u8)order[k]];
+			a->cur_bw += 27 - v;
+		}
+		if (wrap == 0) {
+			if (pos + v + 45 > 0x4BEF) {
+				dba_cross_first_frame(order, k, mode, &pos, &wrap,
+						      ctx);
+			} else if (k == dba_act_onus - 1) {
+				dba_bwmap_pair(order, k, mode, &pos, &wrap, 1, 0,
+					       ctx);
+				pos = dba_cross_pos & 1;
+				for (i = 0; i < 4; i++)
+					if (order[i] != DBA_NO_ONU)
+						dba_bwmap_short(order, i, mode,
+								&pos, ctx);
+			} else {
+				dba_bwmap_pair(order, k, mode, &pos, &wrap,
+					       pos + v == DBA_FRAME_LEN ||
+					       pos + v + 45 > 0x4BA6, 0, ctx);
+			}
+		} else if (pos + 45 + v > 0x4BEF) {
+			dba_bwmap_fill(order, k, mode, &pos, ctx);
+		} else {
+			dba_bwmap_pair(order, k, mode, &pos, &wrap, 0,
+				       k == dba_act_onus - 1, ctx);
+		}
+	}
+
+	dba_bwmap_bank_get(&hw, &sw);
+	if (hw != sw) {
+		npu_printf("******switch bwmap failed last time*********\n");
+		return 0;
+	}
+	dba_bwmap_bank_set(!hw);
+	if (dba_bwmap_nonempty != old) {
+		npu_printf("FTTR DBA empty bwmap config siwtched, switch to %d\n",
+			   dba_bwmap_nonempty);
+		dba_bwmap_empty_set(!dba_bwmap_nonempty);
+	}
+	return 0;
+}
+
+
+/* ================================================================
  * Fixed test maps (host SW_BWMAP_TEST)
  * ================================================================ */
 
@@ -1504,21 +2010,59 @@ static void dba_frame_stats(void)
 	}
 }
 
+/* single-ONU mode holds when that ONU has two T-CONTs and no FEC */
+static void dba_single_onu_check(void)
+{
+	u32 n = dba_aid_conv(0, 0, dba_mode, 1);
+	u16 valid = 0;
+	int fec = 0;
+	u8 t, i;
+
+	for (t = 0; t < n; t++) {
+		i = dba_aid_conv(dba_last_onu, t, dba_mode, 3);
+		if (dba_tcont.cfg[i].flags & 1)
+			valid++;
+		if (dba_tcont.cfg[i].flags & 2)
+			fec = 1;
+	}
+	dba_single_onu_ok = (valid == 2 && !fec);
+}
+
 /* run once per FTTR frame interrupt */
 static void dba_frame_handler(void)
 {
-	struct dba_budget bud = { 0 };
+	struct dba_budget bud;
+	u32 i1, i2;
 
 	(void)csr_read(mcycle);
+	npu_memset(&bud, 0, sizeof(bud));
 	if (dba_get_timer_en) {
 		dba_frame_stats();
+
+		if (dba_new_en_cur != dba_new_en) {
+			dba_new_mode_update(dba_ctx);
+			if (dba_new_act_cur != dba_new_act)
+				dba_new_act_cur = dba_new_act;
+			dba_new_en_cur = dba_new_en;
+		}
+
 		if (dba_tcont.changed) {
 			if (dba_tcont.mode != dba_mode) {
 				dba_tcont_init();
 				dba_mode = dba_tcont.mode;
 			}
 			dba_tcont_load(dba_ctx);
+			dba_new_mode_update(dba_ctx);
+			if (dba_new_act_cur != dba_new_act)
+				dba_new_act_cur = dba_new_act;
+			if (dba_single_onu_en) {
+				if (dba_act_onus == 1)
+					dba_single_onu_check();
+				else
+					dba_single_onu_ok = 0;
+			}
 		}
+
 		dba_rpt_drain();
 	}
 
@@ -1540,8 +2084,21 @@ static void dba_frame_handler(void)
 
 		if (dba_do_timer_en) {
 			dba_budget_calc(dba_ctx, &bud);
-			dba_bw_request(dba_ctx, &bud);
-			dba_bwmap_switch(dba_ctx);
+			if (dba_single_onu_ok && dba_single_onu_en) {
+				/* one ONU: T-CONT 0 fixed, T-CONT 1 takes the frame */
+				i1 = dba_aid_conv(dba_last_onu, 0, dba_mode, 3);
+				i2 = dba_aid_conv(dba_last_onu, 1, dba_mode, 3);
+				dba_bwmap_left = 2;
+				dba_ctx[i1].cur_bw = 90;
+				dba_ctx[i2].cur_bw = 19274;
+				dba_ctx[i2].state = (dba_ctx[i2].state & ~7) | 3;
+			} else {
+				dba_bw_request(dba_ctx, &bud);
+			}
+			if (dba_new_act)
+				dba_new_bwmap_switch(dba_ctx);
+			else
+				dba_bwmap_switch(dba_ctx);
 		}
 	}
 	dba_frame_cnt++;
