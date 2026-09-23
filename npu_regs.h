@@ -9,15 +9,12 @@
 #define CHIP_ID_REG             0x1FB00064
 #define CHIP_VARIANT_REG        0x1FB00284
 
-/* NPU cluster (boot control) */
-#ifdef AN7552
-#define NPU_CLUSTER_BASE        0x1EC08000
-#else
+/* NPU cluster (boot control), eight core slots on every part */
 #define NPU_CLUSTER_BASE        0x1EC06000
-#endif
 #define CR_CORE_BOOT_TRIGGER    (NPU_CLUSTER_BASE + 0x000)
 #define CR_CORE_BOOT_CONFIG     (NPU_CLUSTER_BASE + 0x004)
 #define CR_CORE_BOOT_BASE(n)    (NPU_CLUSTER_BASE + 0x020 + ((n) << 2))
+#define CR_CLUSTER_VERSION      (NPU_CLUSTER_BASE + 0x044)
 
 /* NPU MIB registers (host ↔ firmware parameter passing) */
 #define NPU_MIB_BASE            0x1EC0C000
@@ -32,11 +29,11 @@
 #define NPU_MIB21               NPU_MIB(21)
 #define NPU_MIB31               NPU_MIB(31)
 
-/* NPU debug CSR */
+/* NPU debug CSR, live PC/SP/RA per core slot; 0 while it never fetched */
 #define NPU_DEBUG_BASE          0x1EC05000
-#define NPU_CSR_PC(core)        (NPU_DEBUG_BASE + ((core) * 0x10) + 0x00)
-#define NPU_CSR_SP(core)        (NPU_DEBUG_BASE + ((core) * 0x10) + 0x04)
-#define NPU_CSR_RA(core)        (NPU_DEBUG_BASE + ((core) * 0x10) + 0x08)
+#define NPU_CSR_PC(core)        (NPU_DEBUG_BASE + ((core) * 0x100) + 0x00)
+#define NPU_CSR_SP(core)        (NPU_DEBUG_BASE + ((core) * 0x100) + 0x04)
+#define NPU_CSR_RA(core)        (NPU_DEBUG_BASE + ((core) * 0x100) + 0x08)
 
 /* Hardware mutex. off = (mutex id * 4) & HW_MUTEX_OFF_MASK; hart field is 2 bits. */
 #define HW_MUTEX_BASE           0x1EC03000
