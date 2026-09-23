@@ -160,7 +160,7 @@ void wifi_ba_node_init(void);
 void wifi_queue_mutex_init(void);
 void wifi_pkt_queue_init(u32 band);
 void wifi_ba_node_init(void);
-void __attribute__((noinline)) wifi_npu_init(u32 dbdc);
+void __attribute__((noinline)) wifi_npu_init(u32 band);
 void __attribute__((noinline)) npu_set_pcie_base(u32 addr, u32 band);
 void __attribute__((noinline)) wifi_reset_ba_entry(u32 dir, u32 wcid);
 void __attribute__((noinline)) npu_set_retry_limit(u32 val);

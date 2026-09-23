@@ -448,13 +448,12 @@ u32 rxd_base_2g;
 u32 rxd_2g_bufid_base;
 volatile u32 rxd_2g_init_done;
 u32 rxd_5g_cpu_idx;
-u32 rxd_5g_mirror;
+u32 rxd_5g_flush_tick;
 u32 rxd_2g_cpu_idx;
-u32 rxd_2g_mirror;
+u32 rxd_2g_flush_tick;
 u16 rxd_5g_bufid_table[1536];
 
 /* WiFi misc (declared early for reorder/BA functions) */
-u32 wifi_base_cfg_val;
 u8 wifi_debug_flags;
 u32 wifi_buf_id_base;
 
@@ -535,10 +534,6 @@ u32 tdma_rx_dscp_base[2];
 u32 tdma_rx_desc_count;
 u32 tdma_rx_alloc_fail;
 u32 tdma_rx_ridx[2];
-
-/* WiFi pipeline pkt queue */
-u32 wifi_pipeline_queue_2g;
-u32 wifi_pipeline_queue_5g;
 
 #ifdef WIFI_KITE
 u32 ratelimit_table[32];

@@ -67,11 +67,8 @@ static void npu_mbox_set_txrx_reg_addr(u32 band, u32 a, u32 b, u32 c, u32 d)
 static u32 npu_mbox_get_rxdesc_base(u32 band)
 {
 	if (band == 1)
-		return wifi_tx_ring_base_5g & 0x1FFFFFFF;
-	else if (wifi_rx_ring_base_2g != 0)
-		return wifi_rx_ring_base_2g & 0x1FFFFFFF;
-	npu_printf("%s: not support\n", "wifi_mail_get_wait_rxdesc_base");
-	return 1111;
+		return rxd_base_5g & 0x1FFFFFFF;
+	return rxd_base_2g & 0x1FFFFFFF;
 }
 
 static u32 wcid_counter_base_get(u32 band)
@@ -220,9 +217,13 @@ int wifi_mail_set_pcie_addr(u32 *msg)
 	return 1;
 }
 
+/* the band's npu_init, then its rx ring */
 int wifi_mail_set_desc(u32 *msg)
 {
-	npu_set_rxd_init(msg[2], msg[0] & 0xF);
+	u32 band = msg[0] & 0xF;
+
+	wifi_npu_init(band);
+	npu_set_rxd_init(msg[2], band);
 	return 1;
 }
 

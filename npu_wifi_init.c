@@ -31,12 +31,19 @@ void __attribute__((noinline)) npu_set_pcie_base(u32 addr, u32 band)
 	}
 }
 
+/* point one rx descriptor at a fresh buffer id */
+static void wifi_rxd_set_buf(u32 desc, u32 buf_id)
+{
+	*(u32 *)desc = (((buf_id << 12) + wifi_pkt_buf_addr) & 0x3FFFFFFF) |
+		       0x80000000;
+	*(u16 *)(desc + 6) = (*(u16 *)(desc + 6) & 0x4000) | 0xDAC;
+}
+
+/* 5G rx ring */
 static int wifi_init_rxd_5g(u32 ring_size, u32 band)
 {
 	u32 i;
-	u32 desc_addr;
-	u32 new_buf_id;
-	u16 old_val;
+	s32 id;
 
 	npu_printf("[NPU] Enter %s, band_idx=%d, rx_ring_size=%lu\n",
 		   "npu_npu_init_rxd_5G", band, ring_size);
@@ -47,50 +54,33 @@ static int wifi_init_rxd_5g(u32 ring_size, u32 band)
 	if (rxd_5g_init_done != 0) {
 		npu_printf("5G init second: do np_skb free\n");
 		rxd_5g_init_done = 0;
-		if (ring_size != 0) {
-			for (i = 0; i < ring_size; i++)
-				buf_id_free(0, band,
-					    (u32)rxd_5g_bufid_table[i]);
-		}
-	}
-
-	if (ring_size == 0) {
-		rxd_5g_cpu_idx = 0;
-		rxd_5g_mirror = wifi_base_cfg_val;
-		rxd_5g_init_done = 1;
-		return 0;
+		for (i = 0; i < ring_size; i++)
+			buf_id_free(0, band, rxd_5g_bufid_table[i]);
 	}
 
 	for (i = 0; i < ring_size; i++) {
-		desc_addr = rxd_base_5g + i * 16;
-		new_buf_id = buf_id_alloc_hw(0, band);
-
-		if (new_buf_id == (u32)-1) {
+		id = buf_id_alloc_hw(0, band);
+		if (id == -1) {
 			npu_printf("[%s] rxd init: alloc buffid fail!\n",
 				   (band != 0) ? "5G" : "2.4G");
 			return 1;
 		}
-
-		rxd_5g_bufid_table[i] = (u16)new_buf_id;
-		old_val = *(u16 *)(desc_addr + 6);
-		*(u32 *)desc_addr =
-			(((new_buf_id << 12) + wifi_buf_id_base) &
-			 0x3FFFFFFF) | 0x80000000;
-		*(u16 *)(desc_addr + 6) = (old_val & 0x4000) | 0xDAC;
+		rxd_5g_bufid_table[i] = (u16)id;
+		wifi_rxd_set_buf(rxd_base_5g + i * 16, id);
 	}
 
 	rxd_5g_cpu_idx = 0;
-	rxd_5g_mirror = wifi_base_cfg_val;
+	rxd_5g_flush_tick = timer_slow_tick;
 	rxd_5g_init_done = 1;
 	return 0;
 }
 
+/* 2.4G rx ring */
 static int wifi_init_rxd_2g(u32 ring_size, u32 band)
 {
+	u16 *tbl;
 	u32 i;
-	u32 desc_addr;
-	u32 new_buf_id;
-	u16 old_val;
+	s32 id;
 
 	npu_printf("[NPU] Enter(2.4G) %s, band_idx=%d, rx_ring_size=%lu\n",
 		   "npu_npu_init_rxd", band, ring_size);
@@ -98,43 +88,26 @@ static int wifi_init_rxd_2g(u32 ring_size, u32 band)
 	if (ring_size - 1 > 0x5FF)
 		npu_printf("ERROR! rx_ring_size = %lu\n", ring_size);
 
-	if (rxd_2g_init_done != 0 && rxd_2g_bufid_base != 0) {
+	tbl = (u16 *)rxd_2g_bufid_base;
+	if (tbl != NULL && rxd_2g_init_done != 0) {
 		rxd_2g_init_done = 0;
-		if (ring_size != 0) {
-			for (i = 0; i < ring_size; i++)
-				buf_id_free(0, band,
-					    (u32)*(u16 *)(rxd_2g_bufid_base +
-							  2 * i));
-		}
-	}
-
-	if (ring_size == 0) {
-		rxd_2g_cpu_idx = 0;
-		rxd_2g_mirror = wifi_base_cfg_val;
-		rxd_2g_init_done = 1;
-		return 0;
+		for (i = 0; i < ring_size; i++)
+			buf_id_free(0, band, tbl[i]);
 	}
 
 	for (i = 0; i < ring_size; i++) {
-		desc_addr = rxd_base_2g + i * 16;
-		new_buf_id = buf_id_alloc_hw(0, band);
-
-		if (new_buf_id == (u32)-1) {
+		id = buf_id_alloc_hw(0, band);
+		if (id == -1) {
 			npu_printf("!!!!!!!!!!!! [%s] rxd init: alloc buffid fail!\n",
 				   (band != 0) ? "5G" : "2.4G");
 			return 1;
 		}
-
-		*(u16 *)(rxd_2g_bufid_base + 2 * i) = (u16)new_buf_id;
-		old_val = *(u16 *)(desc_addr + 6);
-		*(u32 *)desc_addr =
-			(((new_buf_id << 12) + wifi_buf_id_base) &
-			 0x3FFFFFFF) | 0x80000000;
-		*(u16 *)(desc_addr + 6) = (old_val & 0x4000) | 0xDAC;
+		tbl[i] = (u16)id;
+		wifi_rxd_set_buf(rxd_base_2g + i * 16, id);
 	}
 
 	rxd_2g_cpu_idx = 0;
-	rxd_2g_mirror = wifi_base_cfg_val;
+	rxd_2g_flush_tick = timer_slow_tick;
 	rxd_2g_init_done = 1;
 	return 0;
 }
@@ -360,8 +333,8 @@ static u8 wifi_get_band_cap(u8 model)
 	return 1;
 }
 
-/* WiFi NPU init: main WiFi subsystem init called from mailbox */
-void __attribute__((noinline)) wifi_npu_init(u32 dbdc)
+/* npu_init for one band, from SET_WAIT_DESC */
+void __attribute__((noinline)) wifi_npu_init(u32 band)
 {
 #ifdef HAS_WIFI
 	u32 desc_type1, desc_type2;
@@ -393,11 +366,11 @@ void __attribute__((noinline)) wifi_npu_init(u32 dbdc)
 	case 0:
 		REG32(PCIE0_MAC_BASE + 0x8030) = desc_type1 & 0x1FFFFFFF;
 		REG32(PCIE0_MAC_BASE + 0x8034) = bar_5g & 0x1FFFFFFF;
-		if (dbdc != 0)
+		if (band != 0)
 			goto alloc_5g;
 		goto alloc_2g;
 	case 2:
-		if (dbdc != 0) {
+		if (band != 0) {
 			REG32(0x1FA90038) = desc_type1 & 0x1FFFFFFF;
 			REG32(0x1FA9003C) = bar_2g & 0x1FFFFFFF;
 			goto alloc_5g;
@@ -406,7 +379,7 @@ void __attribute__((noinline)) wifi_npu_init(u32 dbdc)
 		REG32(PCIE0_MAC_BASE + 0x8034) = bar_5g & 0x1FFFFFFF;
 		goto alloc_2g;
 	case 3:
-		if (dbdc == 0) {
+		if (band == 0) {
 			REG32(0x1FA90038) = desc_type2 & 0x1FFFFFFF;
 			REG32(0x1FA9003C) = bar_5g & 0x1FFFFFFF;
 			goto alloc_2g;
@@ -417,24 +390,21 @@ void __attribute__((noinline)) wifi_npu_init(u32 dbdc)
 	default:
 		break;
 	}
-	if (dbdc != 0)
+	if (band != 0)
 		goto alloc_5g;
 
 alloc_2g:
 	ba_table_a = sram_buf_alloc(8);
-	pinode_widx_5g = 0;
-	pkt_queue_rx_base_2g = sram_buf_alloc(6);
-	wifi_pipeline_queue_2g =
-		wifi_pcie_desc_offset(wifi_pcie_desc_base, 2);
+	rxd_2g_bufid_base = sram_buf_alloc(6);
+	rxd_base_2g = wifi_pcie_desc_offset(wifi_pcie_desc_base, 2);
 	goto pipeline_init;
 
 alloc_5g:
 	ba_table_b = sram_buf_alloc(7);
-	pinode_widx_2g = 0;
-	wifi_pipeline_queue_5g =
-		wifi_pcie_desc_offset(wifi_pcie_desc_base, 1);
+	rxd_base_5g = wifi_pcie_desc_offset(wifi_pcie_desc_base, 1);
 
 pipeline_init:
+	wifi_pkt_queue_init(band);
 	npu_printf("[NPU]  %s...\n", "pipeline_pkt_queue_init");
 	{
 		u32 *p;
@@ -450,8 +420,8 @@ pipeline_init:
 		}
 	}
 
-	counter_init(dbdc);
-	wcid_counter_init(dbdc);
+	counter_init(band);
+	wcid_counter_init(band);
 #endif
 }
 
@@ -750,13 +720,6 @@ void __attribute__((noinline)) npu_set_rxd_init(u32 ring_size, u32 band)
 	if (band == 1)
 		wifi_init_rxd_5g(ring_size, 1);
 	else
-		wifi_init_rxd_2g(ring_size, 0);
+		wifi_init_rxd_2g(ring_size, band);
 }
 
-/* WiFi get pipeline queue base for a given band */
-static u32 npu_get_pipeline_queue(u32 band)
-{
-	if (band == 1)
-		return wifi_pipeline_queue_5g & 0x1FFFFFFF;
-	return wifi_pipeline_queue_2g & 0x1FFFFFFF;
-}

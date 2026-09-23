@@ -415,12 +415,11 @@ extern u32 rxd_base_2g;
 extern u32 rxd_2g_bufid_base;
 extern volatile u32 rxd_2g_init_done;
 extern u32 rxd_5g_cpu_idx;
-extern u32 rxd_5g_mirror;
+extern u32 rxd_5g_flush_tick;
 extern u32 rxd_2g_cpu_idx;
-extern u32 rxd_2g_mirror;
+extern u32 rxd_2g_flush_tick;
 extern u16 rxd_5g_bufid_table[1536];
 
-extern u32 wifi_base_cfg_val;
 extern u8 wifi_debug_flags;
 extern u32 wifi_buf_id_base;
 
@@ -490,8 +489,6 @@ extern u32 tdma_rx_alloc_fail;
 extern u32 tdma_rx_ridx[2];
 void tdma_rx_init(void);
 void np_skb_tx_force_reset(void);
-extern u32 wifi_pipeline_queue_2g;
-extern u32 wifi_pipeline_queue_5g;
 
 #ifdef WIFI_KITE
 extern u32 ratelimit_table[32];
