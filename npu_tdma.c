@@ -306,6 +306,12 @@ void tdma_tx_init(void)
 		   TDMA_INT_CFG0, REG32(TDMA_INT_CFG0));
 
 	/* global TDMA config */
+#if defined(AN7552) && defined(WIFI_EAGLE)
+	/* three ORs, no FC_CFG0/1 */
+	REG32(TDMA_GLB_CFG) |= 1;
+	REG32(TDMA_GLB_CFG) |= 0x40;
+	REG32(TDMA_GLB_CFG) |= 0x30;
+#else
 	REG32(TDMA_GLB_CFG) = (REG32(TDMA_GLB_CFG) & 0xFF8FFFFE) | 0x400001;
 	REG32(TDMA_GLB_CFG) |= 0x40;
 	REG32(TDMA_GLB_CFG) |= 0x30;
@@ -316,6 +322,7 @@ void tdma_tx_init(void)
 	REG32(TDMA_FC_CFG1) |= 0x40004000;
 
 	REG32(TDMA_GLB_CFG) = (REG32(TDMA_GLB_CFG) & 0xFFFFC7FF) | 0x3000;
+#endif
 	npu_printf("%s L%d INTR_TDMA_0 = %d INTR_PPE_WIFI_BUF_ID = %d\n",
 		   "tdma_tx_init", 1038, 184, 95);
 #ifdef WIFI_EAGLE
