@@ -23,6 +23,23 @@
 #define FTTR_RPT_CFG		(NPU_FTTR_BASE + 0x4A8)
 #define FTTR_RPT_SIZE		(NPU_FTTR_BASE + 0x4AC)
 
+/* upstream bwmap entry: ctrl word to FTTR_BWMAP_W1, times to W0 */
+#define BWMAP_DBRU_MASK		(3 << 1)
+#define BWMAP_DBRU		(1 << 1)
+#define BWMAP_FEC		(1 << 3)
+#define BWMAP_PLOAMU		(1 << 4)
+#define BWMAP_AID_MASK		0x0003FFC0
+#define BWMAP_AID(x)		(((x) & 0xFFF) << 6)
+#define BWMAP_OLT		(1 << 25)
+#define BWMAP_END_MASK		(3 << 27)
+#define BWMAP_END_WRAP		(1 << 27)	/* map goes on in the next frame */
+#define BWMAP_END_LAST		(3 << 27)	/* last entry of the map */
+#define BWMAP_W0(start, stop)	((u32)(start) << 16 | (stop))
+
+/* upstream frame length in bwmap units */
+#define DBA_FRAME_LEN		0x4BC2
+#define DBA_STOP_MAX		(DBA_FRAME_LEN - 1)
+
 /* SRAM type of the report ring the FTTR block writes */
 #define DBA_RPT_SRAM_TYPE	136
 #define DBA_ALLOC_NUM		128
@@ -178,6 +195,14 @@ static struct {
 
 static u32 dba_onu_tx_burst[64];
 static struct dba_alloc *dba_ctx;
+
+static struct {
+	u32 ctrl;
+	u16 stop;
+	u16 start;
+} dba_bwmap;
+static u16 dba_bwmap_pos;
+static u8 dba_bwmap_nonempty;
 static u32 npu_fttr_base;
 
 static u32 dba_frame_cnt;
@@ -211,6 +236,39 @@ static u32 dba_fttr_base_get(void)
 		return 0;
 	}
 	return npu_fttr_base;
+}
+
+static int dba_bwmap_write(u32 w0, u32 w1)
+{
+	fttr_wr(FTTR_BWMAP_W0, w0);
+	fttr_wr(FTTR_BWMAP_W1, w1);
+	return 0;
+}
+
+/* bit 0: bank the FTTR block uses, bit 1: bank requested */
+static int dba_bwmap_bank_get(u32 *hw, u32 *sw)
+{
+	u32 v = fttr_rd(FTTR_BWMAP_CTRL);
+
+	*hw = v & 1;
+	*sw = (v >> 1) & 1;
+	return 0;
+}
+
+static int dba_bwmap_bank_set(u32 bank)
+{
+	u32 v = fttr_rd(FTTR_BWMAP_CTRL);
+
+	fttr_wr(FTTR_BWMAP_CTRL, (v & ~2) | (bank & 1) << 1);
+	return 0;
+}
+
+static int dba_bwmap_empty_set(u32 empty)
+{
+	u32 v = fttr_rd(FTTR_BWMAP_CTRL);
+
+	fttr_wr(FTTR_BWMAP_CTRL, (v & ~4) | (empty & 1) << 2);
+	return 0;
 }
 
 /* op 0/1: counts, 2: alloc id to index, 3/5: build index/alloc id, 4: onu */
@@ -1092,6 +1150,236 @@ static int dba_bw_request(struct dba_alloc *ctx, struct dba_budget *b)
 
 
 /* ================================================================
+ * Bandwidth map
+ * ================================================================ */
+
+/* stage one bwmap entry for alloc @idx and write it */
+static int dba_config_bwmap_handler(struct dba_alloc *ctx, u16 idx, u32 fec,
+				    u16 slot, u16 onu)
+{
+	struct dba_alloc *a;
+	u16 start = dba_bwmap_pos;
+	u16 end, stop;
+	u32 ctrl;
+
+	/* the first T-CONT of a burst pays the burst overhead */
+	if (!(slot & 3) && start)
+		start += dba_burst_ovh;
+
+	a = &ctx[idx];
+	dba_bwmap.start = start;
+	end = a->cur_bw + start;
+	stop = end - 1;
+	dba_bwmap.stop = stop;
+	dba_bwmap_pos = end;
+
+	if (stop > DBA_STOP_MAX) {
+		if (dba_log_en) {
+			dba_log_en = 0;
+			npu_printf("****config_bwmap_handler failed1, st:%d, ss:%d, alloc_id:0x%x****\n",
+				   stop, start, a->cfg.alloc_id);
+		}
+		return 0;
+	}
+	if (start >= stop) {
+		if (dba_log_en) {
+			dba_log_en = 0;
+			npu_printf("****config_bwmap_handler failed2, st:%d, ss:%d, alloc_id:0x%x****\n",
+				   stop, start, a->cfg.alloc_id);
+		}
+		return 0;
+	}
+
+	ctrl = dba_bwmap.ctrl;
+	ctrl = (ctrl & ~BWMAP_DBRU_MASK) | ((a->cfg.dba_type != 1) << 1);
+	ctrl = (ctrl & ~BWMAP_PLOAMU) | ((idx == onu) << 4);
+	ctrl = (ctrl & ~BWMAP_FEC) | ((fec != 0) << 3);
+	dba_bwmap.ctrl = ctrl;
+	ctrl = (ctrl & ~BWMAP_AID_MASK) | BWMAP_AID(a->cfg.alloc_id);
+	dba_bwmap.ctrl = ctrl;
+	if (dba_tcont.olt_mode == 1)
+		dba_bwmap.ctrl = ctrl | BWMAP_OLT;
+
+	dba_bwmap_left--;
+	ctrl = dba_bwmap.ctrl & ~BWMAP_END_LAST;
+	if (!dba_bwmap_left)
+		ctrl |= BWMAP_END_LAST;
+	dba_bwmap.ctrl = ctrl;
+	dba_bwmap_write(BWMAP_W0(dba_bwmap.start, dba_bwmap.stop), ctrl);
+	return 0;
+}
+
+/* build the bwmap of all ONUs, then switch the FTTR bank */
+static int dba_bwmap_switch(struct dba_alloc *ctx)
+{
+	struct dba_alloc *a;
+	u16 list[32];
+	u32 b0, b1;
+	u8 old, mode, n_onu, n_tcont, j, olt;
+	u16 idx, cnt, k, acc, delta;
+	s16 onu;
+	int last, rem;
+
+	npu_memset(list, 0, sizeof(list));
+	old = dba_bwmap_nonempty;
+	dba_bwmap_nonempty = dba_bwmap_left != 0;
+	b0 = 0;
+	b1 = 0;
+	dba_bwmap_pos = 0;
+
+	mode = dba_tcont.mode;
+	if (mode > 3)
+		mode = 3;
+	n_onu = dba_map_tbl[mode].n_onu;
+	n_tcont = dba_map_tbl[mode].n_tc;
+
+	for (onu = 0; onu < n_onu; onu++) {
+		u8 flags = ctx[onu].cfg.flags;
+
+		if (!(flags & 1))
+			continue;
+		dba_onu_tx_burst[onu]++;
+
+		if (!(flags & 2)) {
+			/* plain order: T-CONT 0..n-1 of this ONU */
+			for (j = 0; j < n_tcont; j++) {
+				idx = onu | (j << dba_map_tbl[mode].idx_shift);
+				a = &ctx[idx];
+				if (!(a->cfg.flags & 1))
+					continue;
+				if (!a->cur_bw) {
+					if (dba_log_en) {
+						dba_log_en = 0;
+						npu_printf("**********max_req_bw == 0**********\n");
+					}
+					continue;
+				}
+				dba_config_bwmap_handler(ctx, idx, 0, j, onu);
+			}
+			continue;
+		}
+
+		/* FEC on: sort by bandwidth, keep grants off RS(255,239) parity */
+		npu_memset(list, 0, sizeof(list));
+		cnt = 0;
+		for (j = 0; j < n_tcont; j++) {
+			idx = onu | (j << dba_map_tbl[mode].idx_shift);
+			a = &ctx[idx];
+			if (!(a->cfg.flags & 1) || !a->cur_bw)
+				continue;
+			list[cnt] = idx;
+			dba_sort_bw(ctx, list, cnt, 1);
+			cnt++;
+		}
+		if (!cnt)
+			continue;
+
+		olt = dba_tcont.olt_mode;
+		acc = 0;
+		for (k = 0; k < cnt; k++) {
+			a = &ctx[list[k]];
+			last = k == cnt - 1;
+			delta = 0;
+			if (a->cur_bw <= 1) {
+				delta = 2 - a->cur_bw;
+				a->cur_bw = 2;
+			}
+			if (last && a->cur_bw < 18)
+				a->cur_bw = 18;
+
+			if (olt) {
+				u32 len = a->cur_bw * 2;
+
+				rem = (acc + len + 2) % 255;
+				if (rem > 238) {
+					if (!last) {
+						len = len - rem + 255;
+						if (len & 1) {
+							delta += (256 - rem) >> 1;
+							len++;
+						} else {
+							delta += (255 - rem) >> 1;
+						}
+						a->cur_bw = len >> 1;
+					}
+				} else if (!last) {
+					if ((acc + len + 3) % 255 > 236) {
+						len += 20;
+						delta += 10;
+						a->cur_bw = len >> 1;
+					}
+				} else if (rem < 18) {
+					len -= rem;
+					len = len + (len & 1) - 2;
+					a->cur_bw = len >> 1;
+				}
+				acc += len;
+			} else {
+				s32 len = a->cur_bw;
+
+				rem = (acc + len + 2) % 255;
+				if (rem > 238) {
+					if (!last) {
+						len += 255 - rem;
+						delta += 255 - rem;
+						a->cur_bw = len;
+					}
+				} else if (!last) {
+					if ((acc + len + 3) % 255 > 236) {
+						len += 19;
+						delta += 19;
+						a->cur_bw = len;
+					}
+				} else if ((u16)rem < 18) {
+					len -= rem + 1;
+					a->cur_bw = len;
+				}
+				acc += len;
+			}
+
+			/* the next alloc pays for what this one grew */
+			if (!last && delta)
+				ctx[list[k + 1]].cur_bw -= delta;
+		}
+
+		for (k = 0; k < cnt; k++) {
+			a = &ctx[list[k]];
+			if (!(a->cfg.flags & 1))
+				continue;
+			if (!a->cur_bw) {
+				if (dba_log_en) {
+					dba_log_en = 0;
+					npu_printf("**********max_req_bw == 0**********\n");
+				}
+				continue;
+			}
+			dba_config_bwmap_handler(ctx, list[k], 1, k, onu);
+		}
+	}
+
+	dba_bwmap_bank_get(&b0, &b1);
+	if (b0 != b1) {
+		npu_printf("******switch bwmap failed last time*********\n");
+		return 0;
+	}
+	if (b0)
+		dba_bwmap_bank_set(0);
+	else
+		dba_bwmap_bank_set(1);
+
+	if (dba_bwmap_nonempty != old) {
+		npu_printf("FTTR DBA empty bwmap config switched,  switched to %d\n",
+			   dba_bwmap_nonempty);
+		if (dba_bwmap_nonempty)
+			dba_bwmap_empty_set(0);
+		else
+			dba_bwmap_empty_set(1);
+	}
+	return 0;
+}
+
+
+/* ================================================================
  * Frame handler
  * ================================================================ */
 
@@ -1156,6 +1444,7 @@ static void dba_frame_handler(void)
 	if ((dba_frame_cnt & 1) && dba_do_timer_en) {
 		dba_budget_calc(dba_ctx, &bud);
 		dba_bw_request(dba_ctx, &bud);
+		dba_bwmap_switch(dba_ctx);
 	}
 	dba_frame_cnt++;
 }
