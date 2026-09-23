@@ -527,6 +527,9 @@ extern u8 eagle_in_first[2];
 extern u8 eagle_txdone_kick;
 extern volatile u32 eagle_rro_cfg[26];
 extern volatile u32 eagle_rro_active;
+#if defined(AN7552)
+extern volatile u8 *eagle_sync;
+#endif
 #endif
 
 #if defined(WIFI_KITE) && defined(HAS_TR471)

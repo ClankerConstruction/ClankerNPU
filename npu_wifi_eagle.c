@@ -176,6 +176,12 @@ void eagle_rx_init(void)
 	ind[0] = 254;
 	ind[4] = 254;
 	ind[8] = 254;
+#if defined(AN7552)
+	/* one sync byte per rx buffer id */
+	npu_printf("===========sync_method_init========\n");
+	eagle_sync = (volatile u8 *)sram_buf_alloc(31);
+	npu_memset((void *)eagle_sync, 0, BUFID_POOL_ENTRIES);
+#endif
 	eagle_icv_err_table = sram_buf_alloc(22);
 }
 
@@ -400,6 +406,9 @@ static int eagle_rx_ring_init(u32 ring_size, u32 band)
 			return 1;
 		}
 		dbg.refill[band]++;
+#if defined(AN7552)
+		eagle_sync[buf_id] = 0;
+#endif
 	eagle_rx_ring_bufid[band][i] = (u16)buf_id;
 		desc = desc_base + 16 * i;
 		REG32(desc) = ((((buf_id << 11) + eagle_pkt_buf_addr) &

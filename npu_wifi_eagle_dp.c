@@ -605,6 +605,11 @@ static int eagle_rxdmad_handle(u8 *chaining)
 		buf_id_return((u16)buf_id);
 		goto done;
 	}
+#if defined(AN7552)
+	/* give core 0 1 ms to refill its descriptor */
+	if (eagle_sync[buf_id] == 0)
+		delay_ms(1);
+#endif
 
 	seg_len = (info >> 3) & 0x3FFF;
 	dbg.rxseg++;
@@ -927,11 +932,19 @@ static int eagle_txdone_poll(void)
 /* Put a fresh buffer under one rx descriptor. */
 static int eagle_rx_ring_refill(u32 band, u32 desc, u32 *idx)
 {
-	s32 buf_id = buf_id_alloc_ring();
+	s32 buf_id;
 	u32 i = *idx;
 
+#if defined(AN7552)
+	/* the id leaving the descriptor is now safe */
+	eagle_sync[(s16)(REG32(desc + 8) >> 16)] = 1;
+#endif
+	buf_id = buf_id_alloc_ring();
 	if (buf_id == -1)
 		return 1;
+#if defined(AN7552)
+	eagle_sync[buf_id] = 0;
+#endif
 
 	dbg.refill[band]++;
 	eagle_rx_ring_bufid[band][i] = (u16)buf_id;
