@@ -692,7 +692,7 @@ static int eagle_hostadpt_drain(u32 band)
 #endif /* HAS_NPU_WIFI_TX */
 
 /* Move one staged frame into the WiFi tx ring. The TXD the host built
- * goes into the ring's own 256-byte slot; bit 31 of DW7 picks which of
+ * goes into the ring's own 256-byte slot; bit 27 of DW7 picks which of
  * the two token layouts that TXD wants. */
 static int eagle_tx_ring_push(u32 band)
 {
@@ -740,7 +740,7 @@ static int eagle_tx_ring_push(u32 band)
 				slot, EAGLE_TXD_BYTES);
 
 		buf = *(volatile u32 *)(e + 4);
-		if ((s32)REG32(txd + 28) < 0) {
+		if (REG32(txd + 28) & (1u << 27)) {
 			REG32(txd + 32) = ((buf - npu_tx_pkt_buf_addr) >>
 					   EAGLE_PKT_BUF_SHIFT) | 0x8000;
 			REG32(txd + 40) = buf;
