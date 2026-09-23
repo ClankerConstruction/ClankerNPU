@@ -5,6 +5,15 @@
 #include "npu_types.h"
 #include "npu_regs.h"
 
+/* rx buffer ids: 2 KB each over the WiFi packet buffer */
+#if defined(WIFI_KITE)
+#define BUFID_POOL_ENTRIES    5600
+#elif defined(AN7552)
+#define BUFID_POOL_ENTRIES    11200
+#else
+#define BUFID_POOL_ENTRIES    12288
+#endif
+
 typedef int (*wifi_mail_fn_t)(u32 *msg);
 
 /* npu_util.c */
@@ -70,6 +79,9 @@ void tdma_init(void);
 void dbg_cnt_isr(int src);
 #ifdef HAS_BME
 void bufid_pool_init(void);
+void rx_bufid_pool_reset(void);
+void tdma_tx_wait_idle(void);
+void tdma_bmgr_reinit(void);
 void tdma_bmgr_init(void);
 void tdma_tx_init(void);
 #endif

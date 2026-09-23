@@ -120,31 +120,87 @@ static void tdma_bme_init(void)
 /* TDMA BME init: hardware buffer-ID allocator path */
 #endif /* WIFI_KITE */
 
-void tdma_bmgr_init(void)
+/* PLIC 33 (25 on AN7552): acknowledge the BMGR status */
+static void bmgr_isr(int src)
 {
-	u32 buf_base;
-
-	npu_printf("do tdma_bmgr_init\n");
-
-	buf_base = sram_buf_alloc(138);
-
-	REG32(BMGR_BUF_ID_BASE) = buf_base;
-	REG32(BMGR_BASE + 0x004) = 0;
-	REG32(BMGR_BASE + 0x008) = 5600;
-	REG32(BMGR_BASE + 0x00C) = 2;
-	REG32(BMGR_BASE + 0x010) = 2;
-	REG32(BMGR_BASE + 0x028) = 15;
-	REG32(BMGR_BASE + 0x030) = 7;
-	REG32(BMGR_INIT) = 1;
+	(void)src;
+	REG32(BMGR_STATUS) = REG32(BMGR_STATUS);
+	if (counter_base_tri)
+		(*(u32 *)(counter_base_tri + 60))++;
+}
 
 #if defined(AN7552)
-	while (!(REG32(BMGR_BASE + 0x02C) & 8))
+#define BMGR_READY	8
 #else
-	while (!(REG32(BMGR_BASE + 0x02C) & 1))
+#define BMGR_READY	1
 #endif
-		;
 
-	plic_enable_wrapper(INTR_BMGR);
+/* hand the rx buffer ids to the hardware allocator */
+void tdma_bmgr_init(void)
+{
+	u32 st;
+
+	REG32(BMGR_BUF_ID_BASE) = sram_buf_alloc(138);
+	REG32(BMGR_BASE + 0x004) = 0;
+	REG32(BMGR_BASE + 0x008) = BUFID_POOL_ENTRIES;
+	REG32(BMGR_BASE + 0x00C) = 2;
+	REG32(BMGR_BASE + 0x010) = 2;
+	REG32(BMGR_CFG) = 15;
+	REG32(BMGR_BASE + 0x030) = 7;
+	REG32(BMGR_INIT) = 1;
+	st = REG32(BMGR_STATUS);
+	while (!(REG32(BMGR_STATUS) & BMGR_READY))
+		;
+	REG32(BMGR_STATUS) = st;
+	plic_register_isr(INTR_BMGR, bmgr_isr);
+}
+
+/* wait until the FE took every TDMA tx descriptor */
+void tdma_tx_wait_idle(void)
+{
+	u32 ring;
+
+	for (ring = 0; ring < 2; ring++)
+		while (tdma_tx_sw_idx[ring] !=
+		       REG32(TDMA_TX_RING0_DMA_IDX + 16 * ring))
+			delay_ms(10);
+}
+
+/* after a WiFi stop: wait for the PPE to return every buffer, then
+ * rebuild the buffer id allocator */
+void tdma_bmgr_reinit(void)
+{
+	u32 pass, v;
+
+	delay_ms(100);
+	for (pass = 0; pass < 2; pass++) {
+		while (REG32(0x1FB50FE4) & 0xFFFF)
+			delay_ms(100);
+		delay_ms(100);
+	}
+
+	if (tdma_bmgr_mode == 0) {
+		rx_bufid_pool_reset();
+		return;
+	}
+
+	npu_printf("bmgr reinit %d\n", 677);
+	plic_disable(INTR_BMGR);
+	do {
+		REG32(BMGR_CFG) = 0;
+		v = REG32(BMGR_RESET);
+		REG32(BMGR_RESET) = ~v;
+		REG32(BMGR_RESET) = v;
+		REG32(BMGR_CFG) = 15;
+		REG32(BMGR_INIT) = 1;
+		while ((v = REG32(BMGR_STATUS)) == 0)
+			;
+		if (!(v & 8))
+			npu_printf("bmgr init fail, vale:%d retry\n", v);
+	} while (!(v & 8));
+	REG32(BMGR_STATUS) = REG32(BMGR_STATUS);
+	npu_printf("bmgr reinit %d\n", 704);
+	plic_enable(INTR_BMGR);
 }
 #endif /* HAS_BME */
 

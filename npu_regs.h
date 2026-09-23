@@ -136,7 +136,10 @@
 /* BMGR (Buffer Manager) - AN7552 only */
 #define BMGR_BASE               0x1EC08800
 #define BMGR_BUF_ID_BASE        (BMGR_BASE + 0x000)
-#define BMGR_INIT               (BMGR_BASE + 0x004)
+#define BMGR_INIT               (BMGR_BASE + 0x020)
+#define BMGR_RESET              (BMGR_BASE + 0x024)
+#define BMGR_CFG                (BMGR_BASE + 0x028)
+#define BMGR_STATUS             (BMGR_BASE + 0x02C)
 
 /* TDMA engine */
 #define TDMA_BASE               0x1FB50000

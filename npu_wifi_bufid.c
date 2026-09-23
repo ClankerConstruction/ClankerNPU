@@ -83,7 +83,6 @@ static u32 wcid_counter_base_5g;
  *              a TDMA rx descriptor and must not be handed out
  * tdma_rx_ids  the ids recovered from the rx rings, up to 2048
  */
-#define BUFID_POOL_ENTRIES    12288
 #define BUFID_POOL_LAST       (BUFID_POOL_ENTRIES - 1)
 #define TX_FREE_RING_ENTRIES  13312
 #define TX_FREE_RING_LAST     (TX_FREE_RING_ENTRIES - 1)
@@ -175,6 +174,22 @@ s32 tx_token_alloc(void)
 	bufid_ridx = next;
 	hw_mutex_unlock(tx_token_alloc_mutex);
 	return id;
+}
+
+/* back to every id free */
+void rx_bufid_pool_reset(void)
+{
+	u16 *p = (u16 *)bufid_pool_base;
+	u32 i;
+
+	hw_mutex_lock(rx_bufid_free_mutex);
+	hw_mutex_lock(rx_bufid_alloc_mutex);
+	for (i = 0; i < BUFID_POOL_ENTRIES; i++)
+		p[i] = (u16)i;
+	rx_bufid_ridx = 0;
+	rx_bufid_widx = 0;
+	hw_mutex_unlock(rx_bufid_free_mutex);
+	hw_mutex_unlock(rx_bufid_alloc_mutex);
 }
 
 void bufid_pool_init(void)
