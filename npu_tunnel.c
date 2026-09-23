@@ -81,22 +81,6 @@ void tunnel_pkt_drop(u32 port, u32 pkt_len, u32 desc)
 		   0, 0, 0, 0);
 }
 
-
-static void tunnel_desc_flush(u32 port, u32 desc, u32 pkt_len,
-			      u32 w0, u32 w1, u32 w2, u32 w3, u32 w4)
-{
-	volatile u32 *out = (volatile u32 *)(0x1EC12100 + 32 * port);
-
-	out[0] = w0;
-	out[1] = desc;
-	out[2] = w1;
-	out[3] = w2;
-	out[4] = w3;
-	out[5] = w4;
-	out[6] = 0xFFFF;
-	REG32(0x1EC12104 + 32 * port) = 1;
-}
-
 s32 tunnel_dequeue(u32 port, u32 *pkt_len, u32 *desc_ptr)
 {
 	u32 remain = tunnel_pending[port];
@@ -466,228 +450,153 @@ static s32 tunnel_fragment(u32 port, u32 len, u32 *desc)
 	return -1;
 }
 
-s32 tunnel_offload_handler(u32 port, u32 pkt_len, u32 *desc)
+/* hold the first IPv4 fragment, send both as one packet on the
+ * second */
+static s32 reasm_v4(u32 port, u32 len, u32 *desc, u32 hdr_off)
 {
-	u32 w0 = desc[0];
-	u32 w1 = desc[1];
-	u32 opcode = (w1 >> 28) & 7;
-	u32 hdr_off, udf;
+	u8 *ip = (u8 *)desc + hdr_off + 32;
+	u16 *iph = (u16 *)ip;
+	u16 *sip;
+	u32 slen, soff;
 
-	if (opcode == 1)
-		return tunnel_fragment(port, pkt_len, desc);
-
-	if (opcode == 2) {
-		/* reassemble: dispatch IPv4 vs IPv6 */
-		hdr_off = (w0 >> 20) & 0x7F;
-
-		if (w1 & (1 << 27)) {
-			/* IPv4 reassembly */
-			u8 *l3 = (u8 *)desc + hdr_off + 32;
-			u16 frag_flags;
-
-			desc[0] = (16 * (port & 0x1F)) | 0x2200;
-			frag_flags = ((u16 *)l3)[3];
-
-			if (frag_flags & bswap16(0x2000)) {
-				if (tunnel_v4_reasm_desc != 0) {
-					npu_printf("pkt loss 1 in %s,%d\n",
-						   "npu_tunnel_offload_reassemble_v4",
-						   272);
-					tunnel_pkt_drop(port,
-							tunnel_v4_reasm_len,
-							tunnel_v4_reasm_desc);
-				}
-				tunnel_v4_reasm_desc = (u32)desc;
-				tunnel_v4_reasm_len = pkt_len;
-				tunnel_v4_reasm_hdroff = hdr_off;
-				((u16 *)l3)[3] = frag_flags &
-					bswap16(0xDFFF);
-				return 0;
-			}
-
-			if (tunnel_v4_reasm_desc == 0) {
-				npu_printf("pkt loss 2 in %s,%d\n",
-					   "npu_tunnel_offload_reassemble_v4",
-					   287);
-				return -1;
-			}
-
-			{
-				u8 *saved = (u8 *)tunnel_v4_reasm_desc +
-					tunnel_v4_reasm_hdroff;
-				u16 saved_ipid = ((u16 *)(saved + 32))[2];
-				u16 cur_ipid = ((u16 *)l3)[2];
-				u16 cur_fragoff;
-				u16 saved_totlen;
-				u32 ihl;
-
-				if (saved_ipid != cur_ipid) {
-					npu_printf("pkt err 1 in %s,%d\n",
-						   "npu_tunnel_offload_reassemble_v4",
-						   295);
-					return -1;
-				}
-
-				cur_fragoff = 8 * bswap16(((u16 *)l3)[3]);
-				ihl = (4 * l3[0]) & 0x3C;
-				saved_totlen = bswap16(((u16 *)(saved + 32))[1]);
-
-				if (cur_fragoff != saved_totlen - ihl) {
-					npu_printf("pkt err 2 in %s,%d\n",
-						   "npu_tunnel_offload_reassemble_v4",
-						   302);
-					return -1;
-				}
-
-				((u16 *)(saved + 32))[1] = bswap16(
-					bswap16(((u16 *)(saved + 32))[1]) +
-					pkt_len - 52 - hdr_off);
-
-				{
-					u32 merged = tunnel_v4_reasm_len - 82 -
-						tunnel_v4_reasm_hdroff +
-						pkt_len - hdr_off;
-
-					if (((u16 *)desc)[22] == bswap16(0x8864) ||
-					    (((u16 *)desc)[22] == bswap16(0x8100) &&
-					     ((u16 *)desc)[24] == bswap16(0x8864)))
-						bswap16((u16)merged);
-
-					tunnel_desc_flush(port, (u32)desc,
-							  pkt_len, 0, 0, 0,
-							  0, 0);
-					tunnel_desc_flush(port, (u32)desc,
-							  pkt_len, 0, 0, 0,
-							  0, 0);
-				}
-
-				tunnel_v4_reasm_desc = 0;
-				tunnel_v4_reasm_len = 0;
-				tunnel_v4_reasm_hdroff = 0;
-				return 0;
-			}
+	desc[0] = (port & 31) << 4 | TUNNEL_V4_FRAG_INFO;
+	if (iph[3] & bswap16(0x2000)) {
+		if (tunnel_v4_reasm_desc != 0) {
+			npu_printf("pkt loss 1 in %s,%d\n",
+				   "npu_tunnel_offload_reassemble_v4", 272);
+			tunnel_pkt_drop(port, tunnel_v4_reasm_len,
+					tunnel_v4_reasm_desc);
 		}
-
-		if (w1 & (1 << 28)) {
-			/* IPv6 reassembly */
-			u8 *pkt = (u8 *)desc + hdr_off;
-
-			desc[0] = (16 * (port & 0x1F)) | 0x200;
-
-			if (pkt[38] != 44) {
-				npu_printf("IPv6 next header error in %s,%d\n",
-					   "npu_tunnel_offload_reassemble_v6",
-					   346);
-				return -1;
-			}
-
-			{
-				u16 *fhdr = (u16 *)(pkt + 72);
-				u16 frag_flags = fhdr[1];
-
-				if (bswap16(1) & frag_flags) {
-					if (tunnel_v6_reasm_desc != 0) {
-						npu_printf("pkt loss 1 in %s,%d\n",
-							   "npu_tunnel_offload_reassemble_v6",
-							   354);
-						tunnel_pkt_drop(port,
-								tunnel_v6_reasm_len,
-								tunnel_v6_reasm_desc);
-					}
-					tunnel_v6_reasm_desc = (u32)desc;
-					tunnel_v6_reasm_len = pkt_len;
-					tunnel_v6_reasm_hdroff = hdr_off;
-					*((u8 *)(pkt + 72) + 6) = pkt[72];
-					return 0;
-				}
-
-				if (tunnel_v6_reasm_desc == 0) {
-					npu_printf("pkt loss 2 in %s,%d\n",
-						   "npu_tunnel_offload_reassemble_v6",
-						   369);
-					return -1;
-				}
-
-				{
-					u8 *saved = (u8 *)tunnel_v6_reasm_desc +
-						tunnel_v6_reasm_hdroff;
-					u16 *saved_fhdr = (u16 *)(saved + 72);
-					u16 *saved_ipv6 = (u16 *)(saved + 32);
-					u16 saved_frag_id = saved_fhdr[2];
-					u16 cur_frag_id = ((u16 *)(pkt + 72))[2];
-					u16 saved_frag_off = saved_fhdr[3];
-					u16 cur_frag_off = ((u16 *)(pkt + 72))[3];
-					u32 cur_off, saved_plen;
-
-					if (saved_frag_id != cur_frag_id ||
-					    saved_frag_off != cur_frag_off) {
-						npu_printf("pkt err 1 in %s,%d\n",
-							   "npu_tunnel_offload_reassemble_v6",
-							   378);
-						return -1;
-					}
-
-					cur_off = (bswap16(frag_flags) &
-						   ~7) << 16 >> 16;
-					saved_plen = bswap16(saved_ipv6[2]);
-
-					if (cur_off != saved_plen - 8) {
-						npu_printf("pkt err 2 in %s,%d\n",
-							   "npu_tunnel_offload_reassemble_v6",
-							   385);
-						return -1;
-					}
-
-					saved_ipv6[2] = bswap16(
-						bswap16(saved_ipv6[2]) +
-						pkt_len - 88 - hdr_off);
-
-					{
-						u32 merged =
-							tunnel_v6_reasm_len -
-							118 -
-							tunnel_v6_reasm_hdroff +
-							pkt_len - hdr_off;
-
-						if (((u16 *)desc)[22] == bswap16(0x8864) ||
-						    (((u16 *)desc)[22] == bswap16(0x8100) &&
-						     ((u16 *)desc)[24] == bswap16(0x8864)))
-							bswap16((u16)merged);
-
-						tunnel_desc_flush(port,
-								  (u32)desc,
-								  pkt_len,
-								  0, 0, 0,
-								  0, 0);
-						tunnel_desc_flush(port,
-								  (u32)desc,
-								  pkt_len,
-								  0, 0, 0,
-								  0, 0);
-						tunnel_desc_flush(port,
-								  (u32)desc,
-								  pkt_len,
-								  0, 0, 0,
-								  0, 0);
-					}
-
-					tunnel_v6_reasm_desc = 0;
-					tunnel_v6_reasm_len = 0;
-					tunnel_v6_reasm_hdroff = 0;
-					return 0;
-				}
-			}
-		}
-
-		npu_printf("error ether type in %s,%d\n",
-			   "npu_tunnel_offload_reassemble_op", 435);
+		tunnel_v4_reasm_desc = (u32)desc;
+		tunnel_v4_reasm_len = len;
+		tunnel_v4_reasm_hdroff = hdr_off;
+		iph[3] &= bswap16(0xDFFF);
+		return 0;
+	}
+	if (tunnel_v4_reasm_desc == 0) {
+		npu_printf("pkt loss 2 in %s,%d\n",
+			   "npu_tunnel_offload_reassemble_v4", 287);
 		return -1;
 	}
 
-	/* encap/decap: dispatch on UDF byte */
-	udf = ((u8 *)desc)[20];
-	hdr_off = (w0 >> 20) & 0x7F;
+	sip = (u16 *)(tunnel_v4_reasm_desc + tunnel_v4_reasm_hdroff + 32);
+	if (sip[2] != iph[2]) {
+		npu_printf("pkt err 1 in %s,%d\n",
+			   "npu_tunnel_offload_reassemble_v4", 295);
+		return -1;
+	}
+	if ((u16)(bswap16(iph[3]) << 3) !=
+	    (u32)(bswap16(sip[1]) - ((*(u8 *)sip << 2) & 0x3C))) {
+		npu_printf("pkt err 2 in %s,%d\n",
+			   "npu_tunnel_offload_reassemble_v4", 302);
+		return -1;
+	}
+	sip[1] = bswap16(bswap16(sip[1]) + len - 52 - hdr_off);
 
+	slen = tunnel_v4_reasm_len;
+	soff = tunnel_v4_reasm_hdroff;
+	tunnel_seg(port, tunnel_v4_reasm_desc, slen, 0, SEG_FIRST,
+		   pppoe_len_patch(desc, slen - 82 - soff + len - hdr_off),
+		   0, 0, 0);
+	tunnel_seg(port, (u32)desc, len - 52 - hdr_off, hdr_off + 52, SEG_LAST,
+		   0, 0, 0, 0);
+	tunnel_v4_reasm_desc = 0;
+	tunnel_v4_reasm_len = 0;
+	tunnel_v4_reasm_hdroff = 0;
+	return 0;
+}
+
+/* same for IPv6, dropping the fragment headers */
+static s32 reasm_v6(u32 port, u32 len, u32 *desc, u32 hdr_off)
+{
+	u8 *pkt = (u8 *)desc + hdr_off;
+	u16 *fh = (u16 *)(pkt + 72);
+	u8 *spkt;
+	u32 sdesc, slen, soff;
+
+	desc[0] = (port & 31) << 4 | 0x200;
+	if (pkt[38] != 44) {
+		npu_printf("IPv6 next header error in %s,%d\n",
+			   "npu_tunnel_offload_reassemble_v6", 346);
+		return -1;
+	}
+	if (fh[1] & bswap16(1)) {
+		if (tunnel_v6_reasm_desc != 0) {
+			npu_printf("pkt loss 1 in %s,%d\n",
+				   "npu_tunnel_offload_reassemble_v6", 354);
+			tunnel_pkt_drop(port, tunnel_v6_reasm_len,
+					tunnel_v6_reasm_desc);
+		}
+		tunnel_v6_reasm_desc = (u32)desc;
+		tunnel_v6_reasm_len = len;
+		tunnel_v6_reasm_hdroff = hdr_off;
+		pkt[38] = pkt[72];
+		return 0;
+	}
+	if (tunnel_v6_reasm_desc == 0) {
+		npu_printf("pkt loss 2 in %s,%d\n",
+			   "npu_tunnel_offload_reassemble_v6", 369);
+		return -1;
+	}
+
+	spkt = (u8 *)(tunnel_v6_reasm_desc + tunnel_v6_reasm_hdroff);
+	if (*(u16 *)(spkt + 76) != fh[2] || *(u16 *)(spkt + 78) != fh[3]) {
+		npu_printf("pkt err 1 in %s,%d\n",
+			   "npu_tunnel_offload_reassemble_v6", 378);
+		return -1;
+	}
+	if ((u16)(bswap16(fh[1]) & ~7) !=
+	    (u32)(bswap16(*(u16 *)(spkt + 36)) - 8)) {
+		npu_printf("pkt err 2 in %s,%d\n",
+			   "npu_tunnel_offload_reassemble_v6", 385);
+		return -1;
+	}
+	*(u16 *)(spkt + 36) = bswap16(bswap16(*(u16 *)(spkt + 36)) +
+				      len - 88 - hdr_off);
+
+	sdesc = tunnel_v6_reasm_desc;
+	slen = tunnel_v6_reasm_len;
+	soff = tunnel_v6_reasm_hdroff;
+	tunnel_seg(port, sdesc, soff + 72, 0, SEG_FIRST | SEG_TYPE(1),
+		   pppoe_len_patch(desc, slen - 118 - soff + len - hdr_off),
+		   0, 0, 0);
+	tunnel_seg(port, sdesc, slen - 80 - soff, soff + 80, 0, 0, 0, 0, 0);
+	tunnel_seg(port, (u32)desc, len - 80 - hdr_off, hdr_off + 80, SEG_LAST,
+		   0, 0, 0, 0);
+	tunnel_v6_reasm_desc = 0;
+	tunnel_v6_reasm_len = 0;
+	tunnel_v6_reasm_hdroff = 0;
+	return 0;
+}
+
+static s32 tunnel_reassemble(u32 port, u32 len, u32 *desc)
+{
+	u32 w0 = desc[0];
+	u32 hdr_off = (w0 >> 20) & 0x7F;
+
+	if (w0 & (1 << 27))
+		return reasm_v4(port, len, desc, hdr_off);
+	if (w0 & (1 << 28))
+		return reasm_v6(port, len, desc, hdr_off);
+	npu_printf("error ether type in %s,%d\n",
+		   "npu_tunnel_offload_reassemble_op", 435);
+	return -1;
+}
+
+/* desc[1] bits 30:28 pick fragment or reassembly, else the UDF byte
+ * picks the tunnel op */
+s32 tunnel_offload_handler(u32 port, u32 pkt_len, u32 *desc)
+{
+	u32 w1 = desc[1];
+	u32 opcode = (w1 >> 28) & 7;
+	u32 udf;
+
+	if (opcode == 1)
+		return tunnel_fragment(port, pkt_len, desc);
+	if (opcode == 2)
+		return tunnel_reassemble(port, pkt_len, desc);
+
+	udf = ((u8 *)desc)[20];
 	if ((u8)(udf - 1) <= 39)
 		return tunnel_vxlan(port, pkt_len, desc, udf);
 	if ((u8)(udf - 41) <= 15)
