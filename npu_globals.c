@@ -531,6 +531,7 @@ volatile u32 npu_tx_pkt_buf_addr;
 u32 tdma_rx_dscp_base[2];
 u32 tdma_rx_desc_count;
 u32 tdma_rx_alloc_fail;
+u32 tdma_rx_ridx[2];
 
 /* WiFi pipeline pkt queue */
 u32 wifi_pipeline_queue_2g;

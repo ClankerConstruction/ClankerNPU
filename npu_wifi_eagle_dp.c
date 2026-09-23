@@ -42,13 +42,143 @@ void eagle_tdma_flow_ctrl(int on)
 	REG32(AN7552_FC_REG) = on ? 0xEB00EA : 0x610060;
 }
 
-/* TODO LAN -> WiFi straight off the TDMA rx ring into the WiFi tx
- * ring. Until then those frames go the long way round through the
- * host. */
-static void eagle_tdma_to_wifi(u32 band, u32 budget)
+static void eagle_delay(u32 loops)
 {
-	(void)band;
-	(void)budget;
+	volatile u32 i;
+
+	for (i = 0; i < loops; i++)
+		;
+}
+
+/* LAN -> WiFi. Once HWNAT binds a flow the PPE sends its frames through
+ * the TDMA rx ring instead of the host. Descriptor words 4-7 carry the
+ * WiFi info: band in bit 25 and wcid in bits 24:14 of word 4, bss in
+ * bits 30:24 of word 6. */
+
+/* publish a band's tx ring cpu index */
+static void eagle_tx_ring_publish(u32 band)
+{
+	REG32(eagle_tx_ring_pcie_base[band] + 8) = eagle_tx_ring_cpu_idx[band];
+}
+
+/* one frame into the WiFi tx ring, cpu index not published.
+ * The TXD words 0-7 of the slot are left as they are. */
+static int eagle_tx_ring_fill(u32 buf, u16 len, u16 token, u32 info,
+			      u8 *band_out)
+{
+	u32 w0 = REG32(info), w2 = REG32(info + 8);
+	u32 band = (w0 >> 25) & 1;
+	u32 retry = 1000, cpu, desc, txd, phys, i;
+
+	while (1) {
+		cpu = eagle_tx_ring_cpu_idx[band];
+		desc = eagle_tx_ring_desc[band] + 16 * cpu;
+		*band_out = (u8)band;
+		if ((s32)REG32(desc + 4) < 0 || retry == 0 || eagle_stopping)
+			break;
+		if (retry == 1000 || retry == 1)
+			npu_printf(band ? "fband1 cpuindex = %d, dmaindex = %d" :
+					  "fband0 cpuindex = %d, dmaindex = %d",
+				   cpu, REG32(eagle_tx_ring_pcie_base[band] + 0xC));
+		eagle_delay(10000);
+		retry--;
+	}
+
+	/* keep five slots between us and the chip */
+	while ((s32)REG32(eagle_tx_ring_desc[band] +
+			  (((cpu + 5) << 4) & 0x7FF0) + 4) >= 0 &&
+	       eagle_stopping == 0)
+		eagle_delay(100000);
+
+	if (eagle_rxdmad_on_core2)
+		eagle_delay(440);
+
+	txd = eagle_txd_space[band] + (cpu << 8);
+	REG32(txd + 32) = ((u32)token << 16) | 0x80;
+	REG32(txd + 36) = (((w0 >> 14) & 0x7FF) << 8) | ((w2 >> 24) & 0x7F) |
+			  0x1000000;
+	REG32(txd + 40) = buf;
+	REG32(txd + 64) = len;
+
+	phys = (txd & 0x3FFFFFFF) | 0x80000000;
+	for (i = 5; ; ) {
+		REG32(desc) = phys;
+		REG32(desc + 8) = buf;
+		REG32(desc + 4) = EAGLE_TX_DESC_CTRL;
+		if ((s32)REG32(desc + 4) >= 0)
+			break;
+		if (--i == 0)
+			return -1;
+		eagle_delay(10000);
+	}
+
+	eagle_tx_ring_cpu_idx[band] = (cpu + 1) & EAGLE_TX_RING_MASK;
+	return 0;
+}
+
+/* drain up to budget frames of TDMA rx ring 'ring' into the WiFi tx
+ * ring. Each consumed slot gets a fresh tx token. */
+static int eagle_tdma_to_wifi(u32 ring, u32 budget)
+{
+	u32 base = tdma_rx_dscp_base[ring];
+	u32 kick = TDMA_RX_BASE_PTR(ring) + 8;
+	u32 ridx = tdma_rx_ridx[ring];
+	u32 batch = 0, fail = 0, stop, d, w1, buf, tok;
+	int pushed = 0;
+	s32 ntok;
+	u8 band = 0;
+
+	if (budget > 127)
+		budget = 128;
+
+	do {
+		d = base + TDMA_RX_DESC_SIZE * ridx;
+		w1 = REG32(d + 4);
+		if ((s32)w1 >= 0)
+			break;
+
+		buf = REG32(d + 8);
+		stop = 0;
+		ntok = tx_token_alloc();
+		if (ntok == -1) {
+			/* no spare buffer: drop the frame, rearm the slot */
+			tdma_rx_alloc_fail++;
+			fail++;
+			REG32(d + 4) = 0x800;
+			stop = 1;
+		} else {
+			tok = (buf - npu_tx_pkt_buf_addr) >> 11;
+			REG32(d + 8) = ((((u32)ntok << 11) + npu_tx_pkt_buf_addr) &
+					0x3FFFFFFF) | 0x80000000;
+			REG32(d + 4) = 0x800;
+			if (eagle_tx_ring_fill(buf, w1 & 0xFFFF, (u16)tok,
+					       d + 16, &band) == -1) {
+				tx_token_free((u16)tok);
+				fail++;
+				stop = 1;
+			}
+		}
+
+		if (++batch == 8) {
+			REG32(kick) = ridx;
+			eagle_tx_ring_publish(band);
+			pushed = 1;
+			batch = 0;
+			fail = 0;
+		}
+		ridx = (ridx > TDMA_RX_RING_DESCS - 2) ? 0 : ridx + 1;
+		if (stop)
+			break;
+	} while (--budget);
+
+	if (batch) {
+		REG32(kick) = ridx ? ridx - 1 : TDMA_RX_RING_DESCS - 1;
+		pushed = 1;
+		if (fail != batch)
+			eagle_tx_ring_publish(band);
+	}
+	tdma_rx_ridx[ring] = ridx;
+	return pushed;
 }
 
 /* Where frames are supposed to appear. One line every two seconds from
@@ -95,14 +225,6 @@ static void eagle_dbg_tick(void)
 #else
 static void eagle_dbg_tick(void) { }
 #endif
-
-static void eagle_delay(u32 loops)
-{
-	volatile u32 i;
-
-	for (i = 0; i < loops; i++)
-		;
-}
 
 static u32 eagle_buf_uncached(u32 buf_id)
 {
@@ -869,6 +991,8 @@ void __attribute__((noreturn)) eagle_tx_fast_path(void)
 			while (free > EAGLE_TX_RING_ROOM) {
 				free--;
 				eagle_tx_ring_push(band);
+				if (free == EAGLE_TX_RING_ROOM)
+					break;
 				eagle_tdma_to_wifi(band, free - 6);
 				if (free <= 129)
 					break;

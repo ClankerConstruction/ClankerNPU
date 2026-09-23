@@ -475,6 +475,7 @@ extern volatile u32 npu_tx_pkt_buf_addr;
 extern u32 tdma_rx_dscp_base[2];
 extern u32 tdma_rx_desc_count;
 extern u32 tdma_rx_alloc_fail;
+extern u32 tdma_rx_ridx[2];
 void tdma_rx_init(void);
 void np_skb_tx_force_reset(void);
 extern u32 wifi_pipeline_queue_2g;
