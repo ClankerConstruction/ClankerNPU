@@ -334,6 +334,37 @@ void eagle_queue_init(u32 band)
 	}
 }
 
+/* PPE_WIFI_BUF_ID (PLIC 95): the PPE returns WiFi rx buffers it did
+ * not forward. Bit 30 set: just free the buffer. Clear: the flow is not
+ * bound, so the frame goes to the host. */
+void ppe_wifi_bufid_isr(int src)
+{
+	u32 n = REG32(PPE_WIFI_BUF_CNT) & 0xFFFF, i = 0, v, info, hdr;
+	u16 id;
+
+	(void)src;
+	if (n == 0)
+		return;
+	v = REG32(PPE_WIFI_BUF_ID);
+	while ((s32)v < 0) {
+		id = v & 0xFFFF;
+		if (v & 0x40000000) {
+			buf_id_return(id);
+		} else {
+			info = REG32(PPE_WIFI_BUF_INFO);
+			hdr = REG32(eagle_buf_uncached(id));
+			if (eagle_pkt_enqueue(id, (hdr >> 3) & 0x3FFF,
+					      info & 0x7FFF, (info >> 16) & 31,
+					      0, 2, (hdr >> 3) & 0x3FFF) != 0)
+				buf_id_return(id);
+		}
+		REG32(PPE_WIFI_BUF_ID) = 0x80000000;
+		if (++i == n)
+			break;
+		v = REG32(PPE_WIFI_BUF_ID);
+	}
+}
+
 /* ---- WiFi -> host ---- */
 
 /* Hand one queued packet to the host adaptor out ring and give the rx

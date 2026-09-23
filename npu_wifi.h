@@ -30,6 +30,9 @@
 #define TDMA_FC_CFG2          0x1FB52230
 #define TDMA_WIFI_BUF_CFG     0x1FB50FE8
 #define AN7552_FC_REG         0x1FB501BC
+#define PPE_WIFI_BUF_INFO     0x1FB50FDC	/* wcid 14:0, info 20:16 */
+#define PPE_WIFI_BUF_ID       0x1FB50FE0	/* 31 valid, 30 free only, 15:0 id */
+#define PPE_WIFI_BUF_CNT      0x1FB50FE4
 
 /* TDMA rx ring geometry */
 #define TDMA_RX_RINGS         2
@@ -239,6 +242,7 @@ extern struct eagle_dbg dbg;
 u32 eagle_ring_desc_base(u32 ring_id);
 void eagle_queue_init(u32 band);
 void eagle_tdma_flow_ctrl(int on);
+void ppe_wifi_bufid_isr(int src);
 
 #endif /* WIFI_EAGLE */
 

@@ -221,6 +221,9 @@ void tdma_tx_init(void)
 	REG32(TDMA_GLB_CFG) = (REG32(TDMA_GLB_CFG) & 0xFFFFC7FF) | 0x3000;
 	npu_printf("%s L%d INTR_TDMA_0 = %d INTR_PPE_WIFI_BUF_ID = %d\n",
 		   "tdma_tx_init", 1038, 184, 95);
+#ifdef WIFI_EAGLE
+	plic_register_isr(95, ppe_wifi_bufid_isr);
+#endif
 
 	/* AN7552-specific flow control */
 	if (REG32(CHIP_ID_REG) >> 16 == 15) {
