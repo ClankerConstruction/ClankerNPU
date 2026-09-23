@@ -269,7 +269,6 @@ extern const char wifi_chip_names[6][8];
 #endif
 
 extern mbox_handler_t mbox_pri_handlers[10];
-extern mbox_handler_t mbox_ext_handlers[32];
 extern u8 hwnat_cds;
 extern u8 hwnat_xpon_hal_api_ng;
 extern u8 hwnat_wan_xsi;

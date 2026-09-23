@@ -183,7 +183,6 @@ const char wifi_chip_names[6][8] = {
 
 /* 0x220: mailbox wrapper function pointer tables */
 mbox_handler_t mbox_pri_handlers[10];
-mbox_handler_t mbox_ext_handlers[32];
 
 /* HWNAT config from the host */
 u8 hwnat_cds;

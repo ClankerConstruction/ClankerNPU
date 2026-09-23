@@ -825,18 +825,95 @@ static void hwnat_set_wait_init(u32 addr)
 	tunnel_init();
 }
 
-/* SET_WAIT_API sub-dispatch, keyed by the _hwnat_set_func_id the host
- * puts at +8 */
-static int hwnat_set_wait_api(u32 addr)
+/* copy one 80-byte FOE entry into a PPE entry window */
+static int sram_set_entry(u32 size, u32 src, u32 win)
 {
-	u32 cmd = REG32(addr + 8);
+	u32 i;
 
-	if (cmd > 3 || mbox_ext_handlers[cmd] == NULL) {
-		npu_printf("%s not support cmd:%d\n",
-			   "hwnat_mail_set_wait_api", cmd);
+	if (size != 80) {
+		npu_printf("%s [ERROR] expected data_size is %d, now data_size is %d\n",
+			   "sram_set_entry", 80, size);
 		return 0;
 	}
-	return mbox_ext_handlers[cmd](addr, 0);
+	src = (src & 0x3FFFFFFF) | NPU_ADDR_MASK;
+	for (i = 0; i < 80; i += 4)
+		REG32(win + i) = REG32(src + i);
+	return 1;
+}
+
+/* issue a table command and wait up to 10 reads for bit 31 */
+static void ppe_tbl_cmd(u32 reg, u32 cmd)
+{
+	u32 n;
+
+	REG32(reg) = cmd;
+	for (n = 10; n != 0; n--)
+		if ((s32)REG32(reg) < 0)
+			break;
+}
+
+static int sram_set_entry_value(u32 size, u32 idx)
+{
+	u32 cmd = ((idx << 8) & 0xFFFF00) | 3;
+
+	if (size != 4) {
+		npu_printf("%s [ERROR] expected data_size is %d, now data_size is %d\n",
+			   "sram_set_entry_value", 4, size);
+		return 0;
+	}
+	if (CHIP_FAMILY == 14 && (REG32(PPE1_CTRL) & 1) && idx >= 0x2000)
+		ppe_tbl_cmd(0x1FB51F1C, cmd);
+	else
+		ppe_tbl_cmd(0x1FB50F1C, cmd);
+	return 1;
+}
+
+static int sram_set_entry_to_zero(u32 size)
+{
+	u32 i;
+
+	if (size != 0x2000) {
+		npu_printf("%s [ERROR] expected data_size is %d, now data_size is %d\n",
+			   "sram_set_entry_to_zero", 0x2000, size);
+		return 0;
+	}
+	for (i = 0; i < 0x2000; i++) {
+		if (CHIP_FAMILY == 14)
+			(void)REG32(PPE1_CTRL);
+		REG32(0x1FB50F20) = 0;
+		ppe_tbl_cmd(0x1FB50F1C, (i << 8) | 3);
+	}
+	return 1;
+}
+
+/* HWNAT_API: _hwnat_set_func_id at +8, data_size +12, data +16 */
+static int hwnat_set_wait_api(u32 addr)
+{
+	u32 size = REG32(addr + 12), data = REG32(addr + 16);
+	int ret;
+
+	switch (REG32(addr + 8)) {
+	case 0:			/* PPE2_SRAM_SET_ONE_ENTRY */
+		ret = sram_set_entry(size, data, 0x1FB51F20);
+		break;
+	case 1:			/* SRAM_SET_ONE_ENTRY */
+		ret = sram_set_entry(size, data, 0x1FB50F20);
+		break;
+	case 2:
+		ret = sram_set_entry_value(size, data);
+		break;
+	case 3:
+		ret = sram_set_entry_to_zero(size);
+		break;
+	default:
+		ret = 0;
+		break;
+	}
+	if (ret != 1) {
+		npu_printf("%s fail\n", "hwnat_mail_set_wait_hwnat_api");
+		return 0;
+	}
+	return 1;
 }
 
 int hwnat_mail_dispatch(u32 base, u32 cnt)
