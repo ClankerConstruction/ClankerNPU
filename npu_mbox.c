@@ -19,7 +19,7 @@
  * ================================================================ */
 
 /* mailbox dispatch table: 6 cores x 80 bytes */
-static u8 mbox_dispatch[MAX_CORE_NUM][80];
+u8 mbox_dispatch[MAX_CORE_NUM][80];
 
 
 void mbox_isr(int src)
@@ -73,6 +73,11 @@ void mbox_isr(int src)
 			ret = (u32)handler(base_ptr, max_cnt);
 			rptr = (rptr & 0xFFFFFFE3u) | ((ret & 7) << 2);
 		}
+
+		ndbg->hart[core].mails++;
+		ndbg->hart[core].last_mail = func_idx << 24 |
+			(base_ptr & 0xFFFF) << 8 | (ret & 0xFF);
+		NDBG_TRACE(NDBG_MBOX, mbox_idx << 8 | func_idx, base_ptr, ret);
 
 		/* blocking: set done; else return result via queue 8 */
 		if (rptr & 1)

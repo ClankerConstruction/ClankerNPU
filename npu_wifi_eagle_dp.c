@@ -187,11 +187,10 @@ static int eagle_tdma_to_wifi(u32 ring, u32 budget)
 	return pushed;
 }
 
-/* Where frames are supposed to appear. One line every two seconds from
- * core 3 says which stage they stop at. The fields are in npu_wifi.h. */
+/* Where frames are supposed to appear. With the stats print bit set,
+ * core 3 prints them every two seconds. Fields are in npu_wifi.h. */
 struct eagle_dbg dbg;
 
-#ifdef NPU_DATAPATH_DBG
 #define EAGLE_DBG_CYCLES  (2u * 720u * 1000u * 1000u)	/* ~2s at 720MHz */
 
 static u32 eagle_dma_idx(u32 band)
@@ -201,15 +200,8 @@ static u32 eagle_dma_idx(u32 band)
 	return REG32(eagle_tx_ring_pcie_base[band] + 0xC) & 0xFFFF;
 }
 
-static void eagle_dbg_tick(void)
+void eagle_dbg_print(void)
 {
-	static u32 last;
-	u32 now = (u32)csr_read(mcycle);
-
-	if ((u32)(now - last) < EAGLE_DBG_CYCLES)
-		return;
-	last = now;
-
 	npu_printf("[NPU]tx in=%d/%d stg=%d/%d full=%d/%d psh=%d/%d\n",
 		   dbg.in[0], dbg.in[1], dbg.stage[0], dbg.stage[1],
 		   dbg.nostage[0], dbg.nostage[1], dbg.push[0], dbg.push[1]);
@@ -231,9 +223,20 @@ static void eagle_dbg_tick(void)
 		   tdma_tx_sw_idx[0], REG32(TDMA_TX_RING0_DMA_IDX) & 0xFFFF,
 		   REG32(TDMA_TX_RING0_CFG), REG32(TDMA_GLB_CFG));
 }
-#else
-static void eagle_dbg_tick(void) { }
-#endif
+
+static void eagle_dbg_tick(void)
+{
+	static u32 last;
+	u32 now;
+
+	if (!(ndbg->print_mask & (1u << NDBG_STATS)))
+		return;
+	now = (u32)csr_read(mcycle);
+	if ((u32)(now - last) < EAGLE_DBG_CYCLES)
+		return;
+	last = now;
+	eagle_dbg_print();
+}
 
 static u32 eagle_buf_uncached(u32 buf_id)
 {
@@ -526,15 +529,13 @@ static int eagle_rxdmad_handle(u8 *chaining)
 
 	/* the sampled frames were all 128-byte null data. Take the next few
 	 * that actually carry something instead. */
-#ifdef NPU_DATAPATH_DBG
-	if (((dw1 >> 16) & 0x3FFF) > 200 && dbg.rxbig < 4) {
+	if (NDBG_PRINTING(NDBG_WIFI) && ((dw1 >> 16) & 0x3FFF) > 200 && dbg.rxbig < 4) {
 		dbg.rxbig++;
 		npu_printf("[NPU]rxdsc n=%d dw1=%x dw2=%x info=%x sdl=%d dst=%d\n",
 			   dbg.rxd, dw1, dw2, info, (dw1 >> 16) & 0x3FFF,
 			   (dw1 >> 11) & 3);
 		npu_hexdump("rxpkt", buf + EAGLE_PKT_HEADROOM, 208);
 	}
-#endif
 
 	if ((info & 1) == 0 && *chaining == 0) {
 		/* a whole frame in one buffer */
@@ -711,8 +712,7 @@ static int eagle_hostadpt_drain(u32 band)
 		return 0;
 
 	while (*(volatile u32 *)e & 1) {
-#ifdef NPU_DATAPATH_DBG
-		if (eagle_in_first[band] == 0) {
+		if (NDBG_PRINTING(NDBG_WIFI) && eagle_in_first[band] == 0) {
 			eagle_in_first[band] = 1;
 			npu_printf("[NPU]in%d base=%x size=%d w0=%x pkt=%x skb=%x\n",
 				   band, hostadpt_in_base[band],
@@ -723,7 +723,6 @@ static int eagle_hostadpt_drain(u32 band)
 				    (((u32 *)e)[1] & 0x3FFFFFFF) | NPU_ADDR_MASK,
 				    32);
 		}
-#endif
 		dbg.in[band]++;
 		if (eagle_tx_stage(band, (u32 *)e) < 0) {
 			dbg.nostage[band]++;
@@ -764,8 +763,7 @@ static int eagle_tx_ring_push(u32 band)
 		desc = eagle_tx_ring_desc[band] + 16 * cpu;
 		txd = (cpu << 8) + eagle_txd_space[band];
 
-#ifdef NPU_DATAPATH_DBG
-		if (eagle_tx_first_push[band] == 0) {
+		if (NDBG_PRINTING(NDBG_WIFI) && eagle_tx_first_push[band] == 0) {
 			eagle_tx_first_push[band] = 1;
 			npu_printf("[NPU]tx%d stage=%x/%d tok=%x len=%d ring=%x cpu=%d dw1=%x txd=%x pcie=%x\n",
 				   band, eagle_stage_base[band], idx,
@@ -775,7 +773,6 @@ static int eagle_tx_ring_push(u32 band)
 				   REG32(desc + 4), txd,
 				   eagle_tx_ring_pcie_base[band]);
 		}
-#endif
 
 		for (wait = 1000; wait != 0 && eagle_stopping == 0; wait--) {
 			if ((s32)REG32(desc + 4) < 0)
@@ -823,15 +820,13 @@ static int eagle_tx_ring_push(u32 band)
 		dbg.push[band]++;
 		pushed = 1;
 
-#ifdef NPU_DATAPATH_DBG
-		if (eagle_tx_first_push[band] == 1) {
+		if (NDBG_PRINTING(NDBG_WIFI) && eagle_tx_first_push[band] == 1) {
 			eagle_tx_first_push[band] = 2;
 			npu_printf("[NPU]tx%d sent d0=%x d1=%x d2=%x cidx=%d dma=%d\n",
 				   band, REG32(desc), REG32(desc + 4),
 				   REG32(desc + 8), next,
 				   REG32(eagle_tx_ring_pcie_base[band] + 0xC));
 		}
-#endif
 	}
 
 	*(volatile u32 *)(e + 4) = 0;
@@ -993,8 +988,11 @@ void eagle_rxdmad_loop(void)
 		return;
 
 	eagle_rx_busy = 1;
+	npu_dbg_loop(NDBG_TAG('E', 'R', 'X', 'D'));
 	while (1) {
+		npu_dbg_poll();
 		while (eagle_tx_en == 0) {
+			npu_dbg_poll();
 			eagle_rx_busy = 0;
 			eagle_delay(10000);
 		}
@@ -1029,8 +1027,11 @@ void __attribute__((noreturn)) eagle_tx_fast_path(void)
 		eagle_rx_busy = 1;
 	}
 
+	npu_dbg_loop(NDBG_TAG('E', 'T', 'X', 'F'));
 	while (1) {
+		npu_dbg_poll();
 		while (eagle_txq_state != 3) {
+			npu_dbg_poll();
 			if (eagle_rxdmad_on_core2 && eagle_tx_en == 0)
 				eagle_rx_busy = 0;
 			eagle_rx_stopped = 1;
@@ -1077,7 +1078,9 @@ void __attribute__((noreturn)) eagle_core3_loop(void)
 	u32 t300 = timer_raw_tick;
 #endif
 
+	npu_dbg_loop(NDBG_TAG('E', 'C', '3', 'L'));
 	while (1) {
+		npu_dbg_poll();
 #ifdef AN758X
 		if (timer_raw_tick < t300)
 			t300 = timer_raw_tick;
@@ -1121,15 +1124,19 @@ void __attribute__((noreturn)) eagle_core3_loop(void)
 void __attribute__((noreturn)) eagle_core0_loop(void)
 {
 	/* start once init, rx, tx and both rings are up */
+	npu_dbg_loop(NDBG_TAG('E', 'C', '0', 'L'));
 	while (eagle_init_done == 0 || eagle_rx_en == 0 || eagle_tx_en == 0 ||
 	       eagle_rx_ring_init_done[0] == 0 || eagle_rx_ring_init_done[1] == 0)
-		;
+		npu_dbg_poll();
 	eagle_delay(10000);
 	npu_printf("start %s\n", "npu_start_kite_rro_v31_refill_ring_donebitmode");
 
 	while (1) {
-		while (eagle_rx_en == 0)
+		npu_dbg_poll();
+		while (eagle_rx_en == 0) {
+			npu_dbg_poll();
 			eagle_delay(1000);
+		}
 
 		if (hostadpt_tx_ring_ready == 1) {
 			eagle_txq_drain(0);
@@ -1146,15 +1153,19 @@ void __attribute__((noreturn)) eagle_core0_loop(void)
 /* core 4: keep both rx rings stocked */
 void __attribute__((noreturn)) eagle_rx_refill_loop(void)
 {
+	npu_dbg_loop(NDBG_TAG('E', 'R', 'F', 'L'));
 	while (eagle_init_done == 0 || eagle_rx_en == 0 || eagle_tx_en == 0 ||
 	       eagle_rx_ring_init_done[0] == 0 || eagle_rx_ring_init_done[1] == 0)
-		;
+		npu_dbg_poll();
 	eagle_delay(10000);
 	npu_printf("start\n");
 
 	while (1) {
-		while (eagle_rx_en == 0)
+		npu_dbg_poll();
+		while (eagle_rx_en == 0) {
+			npu_dbg_poll();
 			eagle_delay(10000);
+		}
 
 		eagle_rx_ring_sweep(0);
 		eagle_delay(100);

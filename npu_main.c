@@ -139,7 +139,9 @@ static void __attribute__((noreturn)) tunnel_offload_loop(u32 core,
 #ifdef HAS_TR471
 	tr471_main_init();
 #endif
+	npu_dbg_loop(NDBG_TAG('T', 'U', 'N', 'L'));
 	while (1) {
+		npu_dbg_poll();
 		/* ECN marking only while the queue is empty */
 		if (tunnel_dequeue(core, &pkt_len, &desc_ptr) != 0) {
 			if (!tunnel_ecn_enabled)
@@ -149,9 +151,13 @@ static void __attribute__((noreturn)) tunnel_offload_loop(u32 core,
 			if (tunnel_dequeue(core, &pkt_len, &desc_ptr) != 0)
 				continue;
 		}
+		NDBG_CNT(NC_TUN_PKTS);
 		if (tunnel_offload_handler(core, pkt_len,
-					   (u32 *)desc_ptr) == -1)
+					   (u32 *)desc_ptr) == -1) {
+			NDBG_CNT(NC_TUN_DROP);
+			NDBG_TRACE(NDBG_TUNNEL, 1, desc_ptr, pkt_len);
 			tunnel_pkt_drop(core, pkt_len, desc_ptr);
+		}
 	}
 }
 #endif
@@ -363,10 +369,24 @@ void core_dispatch(int a0, int a1)
  * the NPU bus. */
 u32 trap_dispatch(u32 mcause, u32 mepc, u32 *sp, u32 ra)
 {
+	volatile struct ndbg_hart *hp = &ndbg->hart[get_hartid()];
+
 	if (mcause == MCAUSE_MACHINE_EXT_IRQ) {
+		hp->in_isr = 1;
 		call_isr_by_src(REG32(PLIC_CLAIM_REG) - 1);
+		hp->in_isr = 0;
 		return mepc;
 	}
+
+	hp->trap_cnt++;
+	hp->mcause = mcause;
+	hp->mepc = mepc;
+	hp->mtval = (u32)csr_read(mtval);
+	hp->ra = ra;
+	hp->sp = (u32)sp;
+	hp->in_isr = 1;
+	NDBG_TRACE(NDBG_TRAP, mcause & 0xFFFFF, mepc, hp->mtval);
+	hp->in_isr = 0;
 
 	npu_printf("UnKnow Interrupts (mcause:0x%x, RA:0x%x, SP:0x%x, EPC:%x)\n",
 		   mcause, ra, (u32)sp, mepc);
@@ -497,6 +517,7 @@ void npu_init(void)
 		delay_ms_mcycle(1);
 		REG32(NPU_MIB0) = ALL_FF;
 		boot_uart_init();
+		npu_dbg_init();
 		REG32(NPU_MIB21) = mib21;
 		npu_banner();
 		npu_printf("core freq at %d MHz\n", cpu_clock_get());

@@ -271,6 +271,7 @@ struct eagle_dbg {
 extern struct eagle_dbg dbg;
 
 u32 eagle_ring_desc_base(u32 ring_id);
+void eagle_dbg_print(void);
 void eagle_queue_init(u32 band);
 void eagle_tdma_flow_ctrl(int on);
 void ppe_wifi_bufid_isr(int src);

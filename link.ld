@@ -49,6 +49,9 @@ SECTIONS
         __bss_end = . - 4;
     } > SRAM
 
+    /* the debug block sits at a fixed address above the globals */
+    ASSERT(__bss_end < 0x3E906800, "globals overlap the debug block at 0x3E906800")
+
     .stack (NOLOAD) : ALIGN(16) {
         __stack_base = .;
     } > DRAM

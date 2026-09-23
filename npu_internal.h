@@ -537,4 +537,96 @@ extern volatile u32 kite_wifi_cfg[26];
 extern volatile u32 kite_test_active;
 #endif
 
+/* ================================================================
+ * Field debug block: fixed SRAM window the host reads and writes
+ * with sys memrl / memwl at NDBG_BASE & 0x1FFFFFFF. See docs/debug.md.
+ * ================================================================ */
+
+#define NDBG_BASE	0x3E906800
+#define NDBG_SIZE	0x1000
+/* tags and text read in order in a word dump, first char in the MSB */
+#define NDBG_TAG(a, b, c, d)	((u32)(a) << 24 | (b) << 16 | (c) << 8 | (d))
+#define NDBG_MAGIC	NDBG_TAG('N', 'D', 'B', 'G')
+#define NDBG_LAYOUT	1
+
+/* subsystem ids: bit n of trace_mask, print_mask and the status mask */
+enum {
+	NDBG_MBOX, NDBG_WIFI, NDBG_TDMA, NDBG_TUNNEL, NDBG_L4S,
+	NDBG_PPE, NDBG_DBA, NDBG_SRAM, NDBG_TRAP, NDBG_STATS = 15,
+};
+
+/* counter slots: plain increments, exact when one hart owns the slot */
+enum {
+	NC_TUN_PKTS, NC_TUN_VXLAN_ENC, NC_TUN_VXLAN_DEC, NC_TUN_SRV6_ENC,
+	NC_TUN_SRV6_END, NC_TUN_MAP, NC_TUN_FRAG, NC_TUN_REASM,
+	NC_TUN_DROP, NC_TUN_INVALID, NC_BRIDGE_EGRESS_FAIL,
+	NC_L4S_PKTS = 12, NC_L4S_MARKS, NC_L4S_QLEN,
+	NC_PPE_MAILS = 16, NC_PPE_LAST,
+	NC_DBA_MAILS = 20, NC_DBA_FRAMES,
+	NC_TDMA_TX_FULL = 24,
+	NC_SRAM_ALLOCS = 32, NC_SRAM_USED,
+	NC_MAX = 96,
+};
+
+struct ndbg_hart {
+	u32 loop;	/* NDBG_TAG of the loop the hart runs */
+	u32 beat;	/* bumped on every pass of that loop */
+	u32 in_isr;
+	u32 trace_wr;
+	u32 mails;	/* mailbox calls handled */
+	u32 last_mail;	/* slot << 24 | first word low 16 bits << 8 | ret */
+	u32 trap_cnt;	/* exceptions taken */
+	u32 mcause, mepc, mtval, ra, sp;
+};
+
+struct ndbg_trace {
+	u32 tick;	/* timer tick */
+	u32 id;		/* hart << 28 | subsystem << 20 | event */
+	u32 a, b;
+};
+
+struct ndbg {
+	u32 magic, layout, size, harts;			/* 0x000 */
+	u32 version[12];				/* 0x010 */
+	u32 trace_mask, print_mask, cmd_hart, cmd;	/* 0x040 */
+	u32 arg[3], ret[2], done, status;		/* 0x050 */
+	u32 rsv[5];					/* 0x06C */
+	struct ndbg_hart hart[8];			/* 0x080 */
+	struct { u32 tag, addr; } sym[16];		/* 0x200 */
+	u32 cnt[NC_MAX];				/* 0x280 */
+	struct ndbg_trace trace[8][16];			/* 0x400 */
+	u32 buf[256];					/* 0xC00 */
+};
+
+#define ndbg	((volatile struct ndbg *)NDBG_BASE)
+
+void npu_dbg_init(void);
+void npu_dbg_service(u32 hart);
+void npu_dbg_trace(u32 sub, u32 ev, u32 a, u32 b);
+void __attribute__((noreturn)) npu_dbg_idle(void);
+
+/* once per pass of a hart's main loop */
+static inline void npu_dbg_poll(void)
+{
+	u32 h = get_hartid();
+
+	ndbg->hart[h].beat++;
+	if (ndbg->cmd != 0 && ndbg->cmd_hart == h)
+		npu_dbg_service(h);
+}
+
+static inline void npu_dbg_loop(u32 tag)
+{
+	ndbg->hart[get_hartid()].loop = tag;
+}
+
+#define NDBG_TRACE(sub, ev, a, b) do {					\
+	if (ndbg->trace_mask & (1u << (sub)))				\
+		npu_dbg_trace((sub), (ev), (u32)(a), (u32)(b));		\
+} while (0)
+
+#define NDBG_PRINTING(sub)	(ndbg->print_mask & (1u << (sub)))
+#define NDBG_CNT(i)		(ndbg->cnt[(i)]++)
+#define NDBG_SET(i, v)		(ndbg->cnt[(i)] = (u32)(v))
+
 #endif /* NPU_INTERNAL_H */

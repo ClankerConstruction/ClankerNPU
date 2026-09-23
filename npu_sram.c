@@ -30,10 +30,10 @@
 #define SRAM_END          (SRAM_BASE + SRAM_SIZE - 2)
 #define SRAM_ERROR_ADDR   (SRAM_BASE + SRAM_SIZE)
 
-static u32 sram_alloc_offset;
+u32 sram_alloc_offset;
 static u32 sram_alloc_count;
 static u32 sram_alloc_calls;
-static u16 sram_alloc_table[SRAM_MAX_ENTRIES * 4];
+u16 sram_alloc_table[SRAM_MAX_ENTRIES * 4];
 
 /* SRAM region type descriptors: {u16 addr_type, u8 align_class, u8 pad, u32 size} */
 struct sram_region_desc {
@@ -97,6 +97,9 @@ static u32 sram_buf_alloc_impl(u16 addr_type, u32 size_class)
 	*(u32 *)(entry + 2) = (u32)base;
 	sram_alloc_offset = (u32)base - SRAM_BASE + size_class;
 	sram_alloc_count++;
+	NDBG_CNT(NC_SRAM_ALLOCS);
+	NDBG_SET(NC_SRAM_USED, sram_alloc_offset);
+	NDBG_TRACE(NDBG_SRAM, addr_type, (u32)base, size_class);
 
 	hw_mutex_unlock(sram_buf_mutex);
 	return (u32)base;

@@ -131,6 +131,8 @@ _start:
     li      a0, 0
     li      a1, 0
     call    core_dispatch
+    /* a hart whose main returns serves debug commands */
+    call    npu_dbg_idle
 .L_hang:
     j       .L_hang
 

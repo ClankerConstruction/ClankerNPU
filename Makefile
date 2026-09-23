@@ -13,7 +13,7 @@ WIFI    ?= MT7996
 MAILTRACE ?= 0
 # 0 stages host tx frames but never writes the WiFi tx ring
 NPUTX ?= 1
-# 1 reports the datapath counters every two seconds
+# 1 starts with the stats and WiFi print bits of the debug block set
 NPUDBG ?= 0
 # git short hash in the boot version line; pin it to compare images
 GITREV ?= $(shell git describe --always --dirty --abbrev=7 2>/dev/null || echo nogit)
@@ -44,7 +44,7 @@ SRCS_S  := crt0.S
 SRCS_C  := npu_globals.c \
            npu_main.c npu_util.c npu_mutex.c npu_plic.c npu_timer.c \
            npu_mbox.c npu_sram.c npu_bridge.c npu_printf.c \
-           npu_dba.c npu_tr471.c \
+           npu_dba.c npu_tr471.c npu_dbg.c \
            npu_wifi.c npu_wifi_bufid.c npu_wifi_fwd.c npu_wifi_ba.c \
            npu_wifi_rx.c npu_wifi_init.c \
            npu_wifi_kite.c npu_wifi_eagle.c npu_wifi_eagle_dp.c \
