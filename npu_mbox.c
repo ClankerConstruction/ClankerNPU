@@ -24,13 +24,13 @@ static u8 mbox_dispatch[MAX_CORE_NUM][80];
 
 void mbox_isr(int src)
 {
-	u32 mbox_idx = (u32)src - 8;
-	u32 rptr, base_ptr, max_cnt, func_idx;
+	u32 mbox_idx = (u8)(src - 8);
+	u32 core = get_hartid();
+	u32 rptr, base_ptr, max_cnt, func_idx, ret = 0;
 	mbox_handler_t handler;
 
-	if ((u8)mbox_idx != mbox_idx) {
-		npu_printf("Error: core_id:%d != mbox_idx:%d\n",
-			   mbox_idx, (u8)mbox_idx);
+	if (mbox_idx != core) {
+		npu_printf("Error: core_id:%d != mbox_idx:%d\n", core, mbox_idx);
 		return;
 	}
 
@@ -70,13 +70,15 @@ void mbox_isr(int src)
 
 		handler = (mbox_handler_t)(void *)callbacks[func_idx];
 		if (handler) {
-			u32 ret = (u32)handler(base_ptr, max_cnt);
+			ret = (u32)handler(base_ptr, max_cnt);
 			rptr = (rptr & 0xFFFFFFE3u) | ((ret & 7) << 2);
 		}
 
-		/* signal completion */
+		/* blocking: set done; else return result via queue 8 */
 		if (rptr & 1)
-			REG32(MBQ_CTRL3(mbox_idx)) = (rptr & ~2u) | 2;
+			REG32(MBQ_CTRL3(mbox_idx)) = (rptr | 2) & 0xFFFF;
+		else
+			mbox_notify_host(core, func_idx, ret);
 	}
 }
 
@@ -150,9 +152,9 @@ int mbox_notify_host(u32 core_id, u32 func_id, u32 len)
 	}
 
 	if (!(sts & 2))
-		npu_printf("Error(%s): npu notify host timeout (func_id:%d, core_id:%d)\n",
-			   "npu_notify_host", func_id, core_id);
+		npu_printf("Error: %s timeout for core_id:%d, func_id:%d\n",
+			   "npuMbox_notify_host", core_id, func_id);
 
 	hw_mutex_unlock_pri(mbox_notify_mutex);
-	return (sts >> 2) & 7;
+	return (sts & 2) ? (sts >> 2) & 7 : 0;
 }
