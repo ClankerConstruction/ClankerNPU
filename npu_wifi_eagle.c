@@ -50,14 +50,18 @@ static void npu_set_pcie_base_eagle(u32 addr, u32 ring)
 		eagle_ind_cmd_pcie_base = addr;
 		break;
 	case EAGLE_RING_TXDONE0:
+#ifdef HAS_NPU_WIFI_TX
 		eagle_txdone_pcie_base = addr;
+#endif
 		break;
 	case EAGLE_RING_ALL:
 		/* every base is in, publish the cpu index of each ring */
 		REG32(eagle_rx_ring_pcie_base[0] + 8) = EAGLE_RX_RING_MAX_IDX;
 		REG32(eagle_rx_ring_pcie_base[1] + 8) = EAGLE_RX_RING_MAX_IDX;
 		REG32(eagle_ind_cmd_pcie_base + 8) = EAGLE_RX_RING_MAX_IDX;
+#ifdef HAS_NPU_WIFI_TX
 		REG32(eagle_txdone_pcie_base + 8) = eagle_txdone_ring_cnt - 1;
+#endif
 		npu_printf("[NPU] set RRO ring cpu idx \n");
 		break;
 	default:
@@ -248,7 +252,10 @@ static void eagle_inode_txrx_reg(u32 id, u32 arg, u32 addr)
 		break;
 	case 6:				/* restart after a stop */
 #ifdef HAS_BME
+#ifndef AN7552
+		/* AN7552 goes straight to the BMGR reinit */
 		tdma_tx_wait_idle();
+#endif
 		tdma_bmgr_reinit();
 #endif
 		eagle_msdu_pg_pool_init();
@@ -573,6 +580,7 @@ static void npu_mbox_init_rxd_wrapper(u32 ring_size, u32 ring)
 		eagle_ind_cmd_ring_init(ring_size, 1);
 		break;
 	case EAGLE_RING_TXDONE0:
+#ifdef HAS_NPU_WIFI_TX
 		eagle_txdone_ring_fill(ring_size);
 #ifdef HAS_BME
 		/* AN7581 has no TDMA rx ring to reclaim buffers from */
@@ -580,6 +588,7 @@ static void npu_mbox_init_rxd_wrapper(u32 ring_size, u32 ring)
 #endif
 		eagle_txdone_ridx = 0;
 		eagle_fastpath_en = 1;
+#endif
 		break;
 	case EAGLE_RING_TXDONE1:
 		npu_printf("[NPU] ignore tx done ring1 currently because of no use\n");
@@ -799,8 +808,21 @@ int eagle_mail_set_band0_cpu(u32 *msg)
 	return 1;
 }
 
+#ifndef HAS_NPU_WIFI_TX
+/* tx ring mails without NPU tx: warn and succeed */
+static int eagle_no_tx(const char *fn)
+{
+	npu_printf("[WARN] func %s() is called but TCSUPPORT_NPU_WIFI_TX is not set\n",
+		   fn);
+	return 1;
+}
+#endif
+
 int eagle_mail_set_tx_ring_pcie(u32 *msg)
 {
+#ifndef HAS_NPU_WIFI_TX
+	return eagle_no_tx("npu_mbox_set_pcie_base_for_tx_ring_wrapper");
+#endif
 	npu_set_pcie_base_for_tx_ring_eagle(msg[2], msg[0] & 0xF);
 	return 1;
 }
@@ -815,18 +837,27 @@ int eagle_mail_set_tx_desc_hw(u32 *msg)
 
 int eagle_mail_set_tx_buf_hw(u32 *msg)
 {
+#ifndef HAS_NPU_WIFI_TX
+	return eagle_no_tx("npu_mbox_set_tx_ring_buf_space_phy_base_wrapper");
+#endif
 	npu_set_tx_ring_buf_space_phy_base_eagle(msg[2], msg[0] & 0xF);
 	return 1;
 }
 
 int eagle_mail_set_rx_txdone_hw(u32 *msg)
 {
+#ifndef HAS_NPU_WIFI_TX
+	return eagle_no_tx("npu_mbox_set_rx_ring_for_tx_done_phy_base_wrapper");
+#endif
 	npu_set_rx_ring_for_tx_done_phy_base_eagle(msg[2], msg[0] & 0xF);
 	return 1;
 }
 
 int eagle_mail_set_tx_pkt_buf(u32 *msg)
 {
+#ifndef HAS_NPU_WIFI_TX
+	return eagle_no_tx("npu_mbox_set_wait_tx_pkt_buf_addr_wrapper");
+#endif
 	eagle_addr_in_range(msg[2],
 			    "npu_mbox_set_wait_tx_pkt_buf_addr_wrapper");
 	npu_tx_pkt_buf_addr = msg[2];
@@ -892,6 +923,7 @@ int eagle_mail_get_npu_info(u32 *msg)
 	u32 id = msg[0] & 0xF;
 
 	switch (id) {
+#ifdef HAS_NPU_WIFI_TX
 	case 0:
 		msg[2] = eagle_tx_ring_cpu_idx[0];
 		break;
@@ -899,6 +931,7 @@ int eagle_mail_get_npu_info(u32 *msg)
 	case 2:
 		msg[2] = eagle_tx_ring_cpu_idx[1];
 		break;
+#endif
 	case 3:
 		msg[2] = (eagle_rx_stopped == 0) | eagle_rx_busy;
 		break;
@@ -956,6 +989,13 @@ int eagle_mail_get_rxdesc_base(u32 *msg)
 		break;
 	case 5:
 	case 6:
+#ifndef HAS_NPU_WIFI_TX
+		/* no WiFi tx rings without NPU tx */
+		npu_printf("[WARN]%s() TCSUPPORT_NPU_WIFI_TX is not set for %d\n",
+			   "npu_mbox_get_wait_rxdesc_base_wrapper", ring);
+		msg[2] = 0;
+		break;
+#endif
 		base = eagle_tx_ring_desc[ring - 5];
 		if (base == 0) {
 			npu_printf("[NPU][ERROR] wrong tx ring desc pase !!  band_idx=%d \n",
