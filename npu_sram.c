@@ -109,6 +109,42 @@ struct sram_size_ent {
 	u32 size;
 };
 
+#ifdef WIFI_KITE
+/* the kite tables, one per SoC */
+#if defined(AN7552)
+static const struct sram_size_ent sram_size_lo[] = {
+	{   1, 0x0C000 }, {   2, 0x02000 }, {   3, 0x01000 }, {   9, 0x002A8 },
+	{  10, 0x002A8 }, {  11, 0x00078 }, {  14, 0x00600 }, {  15, 0x00600 },
+	{   6, 0x00C00 }, {   4, 0x11940 }, {   7, 0x08340 }, {   8, 0x08340 },
+	{  12, 0x00FA0 }, {  13, 0x02710 }, {  19, 0x00400 }, {  20, 0x00400 },
+};
+
+static const struct sram_size_ent sram_size_hi[] = {
+	{ 138, 0x02BC0 }, { 129, 0x10FFF }, { 132, 0x04000 }, { 134, 0x01000 },
+	{ 137, 0x00004 },
+};
+#else
+static const struct sram_size_ent sram_size_lo[] = {
+	{   1, 0x0C040 }, {   2, 0x02020 }, {   3, 0x01020 }, {   9, 0x003E8 },
+	{  10, 0x003E8 }, {  11, 0x00078 }, {  14, 0x00600 }, {  15, 0x00600 },
+	{   6, 0x00C04 }, {   4, 0x11940 }, {   7, 0x08340 }, {   8, 0x08340 },
+	{  12, 0x00FA0 }, {  13, 0x02710 }, {  19, 0x00400 }, {  20, 0x00400 },
+	{  21, 0x06400 },
+};
+
+#if defined(AN7581)
+static const struct sram_size_ent sram_size_hi[] = {
+	{ 138, 0x02BC0 }, { 129, 0x13FFF }, { 132, 0x11000 }, { 133, 0x01080 },
+	{ 130, 0x00004 }, { 137, 0x00004 },
+};
+#else
+static const struct sram_size_ent sram_size_hi[] = {
+	{ 138, 0x02BC0 }, { 129, 0x13FFF }, { 132, 0x04000 }, { 133, 0x00080 },
+	{ 134, 0x01000 }, { 136, 0x08010 }, { 130, 0x00004 }, { 137, 0x00004 },
+};
+#endif
+#endif
+#else
 static const struct sram_size_ent sram_size_lo[] = {
 	{   1, 0x220C0 }, {   2, 0x01818 }, {   3, 0x01818 }, {   9, 0x003E8 },
 	{  10, 0x003E8 }, {  11, 0x00078 }, {  14, 0x00600 }, {  15, 0x00600 },
@@ -121,6 +157,7 @@ static const struct sram_size_ent sram_size_hi[] = {
 	{ 138, 0x06000 }, { 129, 0x13FFF }, { 132, 0x04000 }, { 133, 0x10000 },
 	{ 134, 0x01000 }, { 136, 0x08010 }, { 130, 0x00004 }, { 137, 0x00004 },
 };
+#endif
 
 /* Types missing from the tables above, sized from the loops that fill
  * them; any other type gets a bounded default. */
