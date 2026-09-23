@@ -526,7 +526,7 @@ extern u32 eagle_rx_ring_desc_base[2];
 extern u32 eagle_ind_cmd_desc_base;
 extern u16 eagle_rx_ring_size[2];
 extern u16 eagle_rx_ring_cpu_idx[2];
-extern u8 eagle_rx_ring_init_done[2];
+extern volatile u8 eagle_rx_ring_init_done[2];
 extern u16 eagle_rx_ring_bufid[2][1536];
 extern volatile u32 eagle_rx_en;
 extern volatile u32 eagle_tx_en;

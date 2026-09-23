@@ -597,7 +597,7 @@ u32 eagle_rx_ring_desc_base[2];
 u32 eagle_ind_cmd_desc_base;
 u16 eagle_rx_ring_size[2];
 u16 eagle_rx_ring_cpu_idx[2];
-u8 eagle_rx_ring_init_done[2];
+volatile u8 eagle_rx_ring_init_done[2];
 u16 eagle_rx_ring_bufid[2][1536];
 
 /* datapath state the host drives over the mailbox */

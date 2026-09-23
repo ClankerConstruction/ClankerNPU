@@ -18,7 +18,7 @@
 #define HOSTADPT_RX_DMA_PTR   0x1EC0D190
 
 static u32 hostadpt_tx_ring_base;
-u8  hostadpt_tx_ring_ready;
+volatile u8 hostadpt_tx_ring_ready;
 static u32 hostadpt_rx_ring_base;
 
 #ifdef HAS_NPU_WIFI_TX
