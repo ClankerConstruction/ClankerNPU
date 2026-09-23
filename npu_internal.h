@@ -222,9 +222,7 @@ void l4s_ecn_process(u32 port);
 /* npu_dba.c */
 #ifdef HAS_DBA
 int dba_mail_handler(u32 base, u32 cnt);
-void dba_init(void);
-void dba_timer_handler(int src);
-void dba_main_loop(void);
+void core5_dba_main(void) __attribute__((noreturn));
 #endif
 
 /* npu_tr471.c */
@@ -358,27 +356,12 @@ extern u8 tunnel_ctx[3][1024];
 #endif
 
 #ifdef HAS_DBA
-extern u32 dba_state[128];
-extern u32 npu_fttr_base;
-extern u8 dba_band_switch;
-extern u8 dba_bwmap_switch;
-extern u32 dba_alloc_state[20];
-extern u32 dba_timer0_snap;
-extern u8 dba_cfg_flag0;
-extern u8 dba_cfg_flag1;
-extern u8 dba_cfg_flag2;
-extern u32 dba_alloc_gran;
-extern u32 dba_tick_count;
-extern u32 dba_defaults[4];
-extern u32 dba_band_count;
-extern u32 dba_bw_unit;
-extern u32 dba_max_alloc_ids;
-extern u32 dba_cfg3;
-extern u32 dba_max_frame;
-extern u32 dba_alloc_mask;
-extern u8 dba_cfg4;
-extern u16 dba_cfg_word0;
-extern u16 dba_cfg_word1;
+extern u8 dba_new_en_cur;
+extern u8 dba_log_en;
+extern u8 dba_single_onu_en;
+extern u32 dba_rpt_step;
+extern u8 dba_new_en;
+extern u32 dba_burst_ovh;
 #endif
 
 extern u8 plic_threshold_table[8];

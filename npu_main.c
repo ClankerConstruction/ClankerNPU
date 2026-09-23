@@ -228,15 +228,7 @@ static void __attribute__((noinline)) core4_main(void)
 static void __attribute__((noinline)) core5_main(void)
 {
 #if defined(HAS_DBA)
-	npu_printf("%s: start\n", "core5_dba_main");
-
-	dba_init();
-
-	/* register DBA timer ISR on PLIC source 24 */
-	plic_register_isr(24, dba_timer_handler);
-
-	/* DBA main processing loop (never returns) */
-	dba_main_loop();
+	core5_dba_main();
 #elif defined(AN7581) && defined(HAS_WIFI)
 	npu_printf("%s\n", "core5_main");
 	wifi_bridge_loop();

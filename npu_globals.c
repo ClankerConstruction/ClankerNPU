@@ -221,18 +221,12 @@ u32 mutex_desc_pairs[512];
 s32 wifi_chip_index = -1;
 
 #ifdef HAS_DBA
-u8 dba_cfg_flag0 = 1;
-u8 dba_cfg_flag1 = 1;
-u8 dba_cfg_flag2;
-u32 dba_alloc_gran = 5;
-u32 dba_tick_count = 10;
-u32 dba_defaults[4] = { 1, 1, 1, 1 };
-u32 dba_band_count = 1;
-u32 dba_bw_unit = 46;
-u32 dba_max_alloc_ids = 128;
-u32 dba_cfg3 = 1;
-u32 dba_max_frame = 1500;
-u32 dba_alloc_mask = 0xFFFF;
+u8 dba_new_en_cur = 1;
+u8 dba_log_en = 1;
+u8 dba_single_onu_en = 1;
+u32 dba_rpt_step = 1;
+u8 dba_new_en = 1;
+u32 dba_burst_ovh = 46;
 #endif
 
 u32 npu_reset_pending = 1;
@@ -243,10 +237,6 @@ u32 tdma_bmgr_mode;
 #endif
 u32 npu_printf_prefix = 1;
 
-#ifdef HAS_DBA
-u8 dba_cfg4 = 1;
-#endif
-
 #ifdef HAS_TUNNEL
 u32 l4s_qid = 7;
 u32 l4s_qlen_thresh = 100;
@@ -254,11 +244,6 @@ u8 tunnel_cfg_flag = 1;
 #endif
 
 s32 sentinel_1 = -1;
-
-#ifdef HAS_DBA
-u16 dba_cfg_word0 = 25;
-u16 dba_cfg_word1 = 10;
-#endif
 
 s32 sentinel_2 = -1;
 
@@ -384,16 +369,6 @@ u32 tunnel_v6_reasm_len;
 u32 tunnel_v6_reasm_desc;
 u32 tunnel_encap_mtu = 1500;
 u32 tunnel_map_info_base;
-#endif
-
-/* DBA state */
-#ifdef HAS_DBA
-u32 dba_state[128];
-u32 npu_fttr_base;
-u8 dba_band_switch;
-u8 dba_bwmap_switch;
-u32 dba_alloc_state[20];
-u32 dba_timer0_snap;
 #endif
 
 /* PLIC threshold per-hart */
