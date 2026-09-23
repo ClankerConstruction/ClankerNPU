@@ -40,109 +40,125 @@ int l4s_set_config(u32 cmd, u32 arg)
 	return 0;
 }
 
+static u16 l4s_be16(u16 v)
+{
+	return (v >> 8) | (v << 8);
+}
+
+/* set CE in the IPv4 or IPv6 header past any VLAN tags or PPPoE */
+static void l4s_ecn_mark(u8 *pkt)
+{
+	u8 *p;
+	u16 type;
+
+	if (!pkt)
+		return;
+	p = pkt + 12;
+	for (;;) {
+		type = *(u16 *)p;
+		if ((type & ~0x10) != l4s_be16(0x8100) &&
+		    type != l4s_be16(0x88A8) && type != l4s_be16(0x884C))
+			break;
+		p += 4;
+	}
+
+	if (type == l4s_be16(0x8864)) {
+		type = *(u16 *)(p + 8);
+		if (type == l4s_be16(0x0021))
+			p[11] |= 3;
+		else if (type == l4s_be16(0x0057))
+			p[11] |= 0x30;
+		return;
+	}
+	type = l4s_be16(type);
+	if (type == 0x0800)
+		p[3] |= 3;
+	else if (type == 0x86DD)
+		p[3] |= 0x30;
+}
+
+/* Forward what the host queued on this bridge channel, marking CE
+ * while the QoS queue is over l4s_qlen_thresh. */
 void l4s_ecn_process(u32 port)
 {
-	volatile u32 *ring_stat = (volatile u32 *)(0x1EC12050 + 4 * port);
-	u32 desc_remaining;
-	u32 tx_credits;
-	u32 ring_base, desc_out, doorbell, trigger;
-	u32 port_cmd, port_idx;
-	u32 desc_ptr, uncached;
-	u32 hdr_field, pkt_len, desc_w0, ecn_byte;
-	u32 band_sel, band_idx;
-	u32 pkt_data, total;
-	u32 qthresh;
+	u32 remaining = (u8)REG32(0x1EC12050 + 4 * port);
+	u32 credits = 0;
+	u32 phys, info, len, w0, w4, band, grp, q;
+	u8 ecn;
+	volatile u32 *d;
 
-	desc_remaining = (u8)(*ring_stat);
-	if (desc_remaining == 0 || !tunnel_ecn_enabled)
+	if (remaining == 0 || !tunnel_ecn_enabled) {
+		delay_us(1);
 		return;
+	}
 
-	ring_base = 0x1EC12080 + 16 * port;
-	desc_out  = 0x1EC12100 + 32 * port;
-	doorbell  = 0x1EC12104 + 32 * port;
-	trigger   = 0x1EC12108 + 32 * port;
-	port_cmd  = port | 0xC0000000;
-	port_idx  = 16 * port;
-	tx_credits = 0;
+	do {
+		phys = REG32(0x1EC12080 + 16 * port);
+		d = (volatile u32 *)(phys | 0x20000000);
+		len = d[1] & 0x3FFFF;
+		info = *(volatile u16 *)((u32)d + 18);
+		w0 = d[0];
+		ecn = *(volatile u8 *)((u32)d + 20);
+		npu_memset((void *)(d + 1), 0, 28);
 
-	while (1) {
-		desc_ptr = REG32(ring_base);
-		uncached = desc_ptr | 0x20000000;
+		band = (info >> 5) & 0xFF;
+		grp = info >> 11;
+		w4 = 0x3800 | (len & 0xFFFF) << 14 | grp << 3;
+		d[4] = w4;
+		d[5] = 0x7F0007FF | ((info >> 9) & 1) << 14 |
+		       (info & 31) << 15 | (band & 15) << 20;
+		d[0] = port << 4;
+		d[4] = w4 | (l4s_qid & 7);
+		len = (w0 & 0xFFFF) + 32;
+		remaining--;
 
-		hdr_field = *(volatile u16 *)(uncached + 0x12);
-		pkt_len   = *(volatile u32 *)(uncached + 0x04) & 0x3FFFF;
-		desc_w0   = *(volatile u32 *)(uncached);
-		ecn_byte  = *(volatile u8  *)(uncached + 0x14);
+		if (ecn)
+			ecn |= 0x40;
+		*(volatile u8 *)((u32)d + 27) = ecn;
+		q = ++l4s_pkt_count;
 
-		npu_memset((void *)(uncached + 4), 0, 28);
-
-		band_sel = hdr_field >> 5;
-		band_idx = hdr_field >> 11;
-
-		*(volatile u32 *)(uncached + 0x10) =
-			(pkt_len << 14) | 0x3800 | (band_idx << 3);
-		*(volatile u32 *)(uncached + 0x14) =
-			0x7F0007FF
-			| ((u32)((hdr_field & 0x200) != 0) << 14)
-			| ((hdr_field & 0x1F) << 15)
-			| ((band_sel & 0xF) << 20);
-
-		*(volatile u32 *)(uncached + 0x10) =
-			(pkt_len << 14) | 0x3800 | (band_idx << 3) |
-			(l4s_qid & 7);
-		*(volatile u32 *)(uncached) = port_idx;
-
-		pkt_data = ((u16)desc_w0 + 32) << 16;
-		--desc_remaining;
-
-		if (ecn_byte != 0)
-			ecn_byte |= 0x40;
-
-		total = ++l4s_pkt_count;
-		*(volatile u8 *)(uncached + 0x1B) = ecn_byte;
-
-		if (total % 10 == 0)
-			goto query_hw;
-
-		if (l4s_qlen >= l4s_cached_qthresh)
-			goto submit;
-		++l4s_skip_count;
-		goto submit;
-
-query_hw:
-		if ((band_sel & 7) == 1) {
-			REG32(0x1FB55100) = (band_idx << 3) |
-					    l4s_qid | 0x1000000;
-			qthresh = (u16)REG32(0x1FB55104);
-		} else if ((band_sel & 0xF) == 2) {
-			REG32(0x1FB57100) = (band_idx << 3) |
-					    l4s_qid | 0x1000000;
-			qthresh = (u16)REG32(0x1FB57104);
-		} else {
-			qthresh = 0;
+		/* read the queue length every 10 packets and at each
+		 * 100-tick window, logging once per window */
+		if (timer_raw_tick % 100 != 0) {
+			l4s_log_phase = 0;
+		} else if (!l4s_log_phase) {
+			if (l4s_debug_enable)
+				npu_printf("CORE%d: ECN Tag: pkts(%d %d), qlen %d, qid %u\n",
+					   port, q, l4s_mark_count,
+					   l4s_qlen_thresh, l4s_qid);
+			l4s_log_phase = 1;
+			l4s_pkt_count = 0;
+			l4s_mark_count = 0;
+			q = 0;
 		}
-		l4s_cached_qthresh = qthresh;
+		if (q % 10 == 0) {
+			u32 sel = grp << 3 | l4s_qid | 0x1000000;
 
-		if (l4s_qlen < qthresh)
-			++l4s_skip_count;
-
-submit:
-		if (tx_credits == 0) {
-			while (1) {
-				tx_credits = ((volatile u8 *)ring_stat)[1];
-				if (tx_credits != 0)
-					break;
+			if ((band & 7) == 1) {
+				REG32(0x1FB55100) = sel;
+				l4s_qlen = REG32(0x1FB55104) & 0xFFFF;
+			} else if ((band & 15) == 2) {
+				REG32(0x1FB57100) = sel;
+				l4s_qlen = REG32(0x1FB57104) & 0xFFFF;
+			} else {
+				l4s_qlen = 0;
 			}
 		}
+		if (l4s_qlen > l4s_qlen_thresh) {
+			l4s_ecn_mark((u8 *)d + 32);
+			l4s_mark_count++;
+		}
 
-		REG32(doorbell) = pkt_data;
-		--tx_credits;
-		REG32(trigger) = port_cmd;
-		REG32(desc_out) = desc_ptr;
-
-		if (desc_remaining == 0)
-			return;
-	}
+		while (credits == 0) {
+			credits = (REG32(0x1EC12050 + 4 * port) >> 8) & 0xFF;
+			if (credits == 0)
+				delay_us(1);
+		}
+		REG32(0x1EC12104 + 32 * port) = len << 16;
+		REG32(0x1EC12108 + 32 * port) = port | 0xC0000000;
+		credits--;
+		REG32(0x1EC12100 + 32 * port) = phys & 0x1FFFFFFF;
+	} while (remaining != 0);
 }
 
 #endif /* HAS_TUNNEL */
