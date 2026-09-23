@@ -145,13 +145,19 @@ static void __attribute__((noinline)) core0_main(void)
 	buf_mgr_init();
 #endif
 
+#if defined(AN7552) && defined(WIFI_EAGLE)
+	/* bridge (type 129) before the WiFi SRAM types */
+	npu_bridge_buf_init();
+#endif
 	core0_wifi_init_wrapper();
 	plic_register_isr(59, dbg_cnt_isr);
 
 #if defined(AN7583) && defined(HAS_TUNNEL)
 	tunnel_offload_loop(0, "npu_tunnel_offload");
 #else
+#if !(defined(AN7552) && defined(WIFI_EAGLE))
 	npu_bridge_buf_init();
+#endif
 	npu_printf("%s\n", "core0_main");
 #if defined(AN7552) && defined(WIFI_EAGLE)
 	/* TODO run the tunnel dequeue here too */
