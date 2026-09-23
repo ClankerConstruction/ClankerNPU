@@ -373,132 +373,108 @@ static s32 tunnel_map(u32 port, u32 len, u32 *desc, u32 udf, u32 w1,
 	return 0;
 }
 
+/* desc[0] of IPv4 fragments and reassembled packets */
+#if defined(AN7581)
+#define TUNNEL_V4_FRAG_INFO	0x2200
+#else
+#define TUNNEL_V4_FRAG_INFO	0x1200
+#endif
+
+/* PPPoE length patch, the session header optionally behind one VLAN */
+static u32 pppoe_len_patch(u32 *desc, u32 len)
+{
+	u16 *h = (u16 *)desc;
+
+	if (h[22] == bswap16(0x8864))
+		return PATCH(0x32, len);
+	if (h[22] == bswap16(0x8100) && h[24] == bswap16(0x8864))
+		return PATCH(0x36, len);
+	return 0;
+}
+
+/* two IPv4 fragments, headers rewritten by patches */
+static s32 frag_v4(u32 port, u32 len, u32 *desc, u32 mtu, u32 hdr_off)
+{
+	u32 units = (u16)((mtu - 20) >> 3);
+	u32 fp = units << 3;
+	u32 h = (u16)hdr_off;
+
+	desc[0] = (port & 31) << 4 | TUNNEL_V4_FRAG_INFO;
+	tunnel_seg(port, (u32)desc, fp + hdr_off + 52, 0,
+		   SEG_FIRST | SEG_LAST | SEG_TYPE(1),
+		   PATCH(h + 34, fp + 20), PATCH(h + 38, 0x2000),
+		   pppoe_len_patch(desc, fp + 22), 0);
+	tunnel_seg(port, (u32)desc, hdr_off + 52, 0, SEG_FIRST | SEG_TYPE(1),
+		   PATCH(h + 34, len - 32 - h - fp), PATCH(h + 38, units),
+		   pppoe_len_patch(desc, len - fp - hdr_off - 30), 0);
+	tunnel_seg(port, (u32)desc, len - fp - hdr_off - 52, fp + hdr_off + 52,
+		   SEG_LAST, 0, 0, 0, 0);
+	return 0;
+}
+
+/* two IPv6 fragments; the fragment header is an 8-byte scratch
+ * segment filled by patches */
+static s32 frag_v6(u32 port, u32 len, u32 *desc, u32 mtu, u32 hdr_off)
+{
+	u32 frag_hdr = tunnel_sram_base() + 0xE00;
+	u8 *nh = (u8 *)desc + hdr_off + 38;
+	u32 units = (u16)((mtu - 48) >> 3);
+	u32 fs = units << 3;
+	u32 h = (u16)hdr_off;
+	u32 next, id;
+
+	desc[0] = (port & 31) << 4 | 0x200;
+	next = *nh;
+	*nh = 44;
+	id = ++tunnel_ipv6_frag_id;
+
+	tunnel_seg(port, (u32)desc, hdr_off + 72, 0, SEG_FIRST | SEG_TYPE(1),
+		   PATCH(h + 36, fs + 8), pppoe_len_patch(desc, fs + 50), 0, 0);
+	tunnel_seg(port, frag_hdr, 8, 0, SEG_TYPE(1), PATCH(0, next << 8),
+		   PATCH(2, 1), PATCH(4, id >> 16), PATCH(6, id));
+	tunnel_seg(port, (u32)desc, fs, hdr_off + 72, SEG_LAST | SEG_TYPE(1),
+		   0, 0, 0, 0);
+
+	tunnel_seg(port, (u32)desc, hdr_off + 72, 0, SEG_FIRST | SEG_TYPE(1),
+		   PATCH(h + 36, len - 64 - h - fs),
+		   pppoe_len_patch(desc, len - hdr_off - fs - 22), 0, 0);
+	tunnel_seg(port, frag_hdr, 8, 0, SEG_TYPE(1), PATCH(0, next << 8),
+		   PATCH(2, fs), PATCH(4, id >> 16), PATCH(6, id));
+	tunnel_seg(port, (u32)desc, len - hdr_off - fs - 72, hdr_off + 72 + fs,
+		   SEG_LAST, 0, 0, 0, 0);
+	return 0;
+}
+
+/* split a packet longer than the MTU in desc[4] */
+static s32 tunnel_fragment(u32 port, u32 len, u32 *desc)
+{
+	u32 w0 = desc[0];
+	u32 mtu = ((u16 *)desc)[9];
+	u32 hdr_off = (w0 >> 20) & 0x7F;
+
+	if (hdr_off + mtu >= (u16)w0) {
+		npu_printf("error pkt_len=%d mtu=%d in %s,%d\n", (u16)w0, mtu,
+			   "npu_tunnel_offload_fragment_op", 233);
+		return -1;
+	}
+	if (w0 & (1 << 27))
+		return frag_v4(port, len, desc, mtu, hdr_off);
+	if (w0 & (1 << 28))
+		return frag_v6(port, len, desc, mtu, hdr_off);
+	npu_printf("error ether type in %s,%d\n",
+		   "npu_tunnel_offload_fragment_op", 249);
+	return -1;
+}
+
 s32 tunnel_offload_handler(u32 port, u32 pkt_len, u32 *desc)
 {
 	u32 w0 = desc[0];
 	u32 w1 = desc[1];
 	u32 opcode = (w1 >> 28) & 7;
-	u32 hdr_off, mtu, udf;
-	u16 *hw;
+	u32 hdr_off, udf;
 
-	if (opcode == 1) {
-		/* fragment: dispatch IPv4 vs IPv6 */
-		u16 plen = (u16)w0;
-		mtu = ((u16 *)desc)[9];
-		hdr_off = (w0 >> 20) & 0x7F;
-
-		if (hdr_off + mtu >= plen) {
-			npu_printf("error pkt_len=%d mtu=%d in %s,%d\n",
-				   plen, mtu,
-				   "npu_tunnel_offload_fragment_op", 233);
-			return -1;
-		}
-
-		if (w1 & (1 << 27)) {
-			/* IPv4 fragmentation */
-			u32 frag_units = (mtu - 20) >> 3;
-			u32 frag_payload = 8 * frag_units;
-
-			desc[0] = (16 * (port & 0x1F)) | 0x2200;
-			hw = (u16 *)((u8 *)desc + hdr_off + 32);
-			hw[1] = bswap16((u16)(frag_payload + 20));
-			hw[3] = bswap16(0x2000);
-
-			if (((u16 *)desc)[22] == bswap16(0x8864) ||
-			    (((u16 *)desc)[22] == bswap16(0x8100) &&
-			     ((u16 *)desc)[24] == bswap16(0x8864)))
-				hw[1] = bswap16((u16)(frag_payload + 22));
-
-			tunnel_desc_flush(port, (u32)desc, pkt_len,
-					  0, 0, 0, 0, 0);
-
-			hw = (u16 *)((u8 *)desc + hdr_off + 32);
-			hw[1] = bswap16((u16)(pkt_len - 32 - hdr_off -
-					      frag_payload));
-			hw[3] = bswap16((u16)frag_units);
-
-			if (((u16 *)desc)[22] == bswap16(0x8864) ||
-			    (((u16 *)desc)[22] == bswap16(0x8100) &&
-			     ((u16 *)desc)[24] == bswap16(0x8864))) {
-				u32 adj = pkt_len - frag_payload - hdr_off - 30;
-				hw[1] = bswap16((u16)adj);
-			}
-
-			tunnel_desc_flush(port, (u32)desc, pkt_len,
-					  0, 0, 0, 0, 0);
-			tunnel_desc_flush(port, (u32)desc, pkt_len,
-					  0, 0, 0, 0, 0);
-			return 0;
-		}
-
-		if (w1 & (1 << 28)) {
-			/* IPv6 fragmentation */
-			u8 *pkt = (u8 *)desc + hdr_off + 38;
-			u8 orig_nh = *pkt;
-			u32 frag_units = (mtu - 48) >> 3;
-			u32 frag_sz = 8 * frag_units;
-			u32 frag_id;
-
-			tunnel_sram_base();
-			desc[0] = (16 * (port & 0x1F)) | 0x200;
-			*pkt = 44;
-			tunnel_ipv6_frag_id++;
-			frag_id = tunnel_ipv6_frag_id;
-
-			hw = (u16 *)((u8 *)desc + hdr_off + 32);
-			hw[2] = bswap16((u16)(frag_sz + 8));
-
-			if (((u16 *)desc)[22] == bswap16(0x8864) ||
-			    (((u16 *)desc)[22] == bswap16(0x8100) &&
-			     ((u16 *)desc)[24] == bswap16(0x8864)))
-				hw[2] = bswap16((u16)(frag_sz + 50));
-
-			tunnel_desc_flush(port, (u32)desc, pkt_len,
-					  0, 0, 0, 0, 0);
-
-			/* frag header: nh, reserved, offset|M, id */
-			hw = (u16 *)((u8 *)desc + hdr_off + 32);
-			hw[3] = bswap16((u16)(orig_nh << 8));
-			hw[4] = bswap16(1);
-			hw[5] = bswap16((u16)(frag_id >> 16));
-			hw[6] = bswap16((u16)frag_id);
-
-			tunnel_desc_flush(port, (u32)desc, pkt_len,
-					  0, 0, 0, 0, 0);
-			tunnel_desc_flush(port, (u32)desc, pkt_len,
-					  0, 0, 0, 0, 0);
-
-			/* second fragment payload */
-			hw = (u16 *)((u8 *)desc + hdr_off + 32);
-			hw[2] = bswap16((u16)(pkt_len - 64 - hdr_off -
-					      frag_sz));
-
-			if (((u16 *)desc)[22] == bswap16(0x8864) ||
-			    (((u16 *)desc)[22] == bswap16(0x8100) &&
-			     ((u16 *)desc)[24] == bswap16(0x8864))) {
-				u32 adj = pkt_len - hdr_off - frag_sz - 22;
-				hw[2] = bswap16((u16)adj);
-			}
-
-			tunnel_desc_flush(port, (u32)desc, pkt_len,
-					  0, 0, 0, 0, 0);
-
-			hw[3] = bswap16((u16)(orig_nh << 8));
-			hw[4] = bswap16((u16)frag_sz);
-			hw[5] = bswap16((u16)(frag_id >> 16));
-			hw[6] = bswap16((u16)frag_id);
-
-			tunnel_desc_flush(port, (u32)desc, pkt_len,
-					  0, 0, 0, 0, 0);
-			tunnel_desc_flush(port, (u32)desc, pkt_len,
-					  0, 0, 0, 0, 0);
-			return 0;
-		}
-
-		npu_printf("error ether type in %s,%d\n",
-			   "npu_tunnel_offload_fragment_op", 249);
-		return -1;
-	}
+	if (opcode == 1)
+		return tunnel_fragment(port, pkt_len, desc);
 
 	if (opcode == 2) {
 		/* reassemble: dispatch IPv4 vs IPv6 */
