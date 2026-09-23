@@ -411,9 +411,34 @@ static void ppe_filter_config(void)
 		REG32(0x1FB50514) |= 0x06A40000;
 }
 
+/* PPE0 0xE50 selector fields; bits 31:28 = 3 on the newer parts */
+static void ppe_tb_sel(u32 sel)
+{
+	u32 chip_rev = CHIP_FAMILY;
+
+	if (chip_rev == 10 || chip_rev == 12 || chip_rev == 14 ||
+	    chip_rev == 15 || chip_rev == 16) {
+		REG32(PPE0_ENABLE) = (REG32(PPE0_ENABLE) & ~0xF0u) |
+				     ((sel << 4) & 0xFF);
+		REG32(PPE0_ENABLE) = (REG32(PPE0_ENABLE) & 0xFFFF0FFF) | 0x1000;
+		if (chip_rev == 14) {
+			REG32(PPE1_ENABLE) = (REG32(PPE1_ENABLE) & ~0xF0u) |
+					     ((sel << 4) & 0xFF);
+			REG32(PPE1_ENABLE) = (REG32(PPE1_ENABLE) & 0xFFFF0FFF) |
+					     0x1000;
+		}
+	}
+	REG32(PPE0_ENABLE) = (REG32(PPE0_ENABLE) & 0xFF0FFFFF) |
+			     ((sel << 20) & 0xF00000);
+	if (chip_rev == 12 || chip_rev == 14 || chip_rev == 15 ||
+	    chip_rev == 16)
+		REG32(PPE0_ENABLE) = (REG32(PPE0_ENABLE) & 0x0FFFFFFF) |
+				     0x30000000;
+}
+
 /* Flow-table scan: turn the table walker on, tell it how many entries
  * the chip has, and seed the hash. */
-static void ppe_enable_config(void)
+static void ppe_enable_config(u32 sel)
 {
 	u32 chip_rev = CHIP_FAMILY;
 
@@ -445,6 +470,7 @@ static void ppe_enable_config(void)
 	}
 
 	REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xFFFFFFF8) | 4;
+	ppe_tb_sel(sel);
 	REG32(PPE0_HASH_SEED) = 0x12345678;
 	if (chip_rev == 14)
 		REG32(PPE0_HASH_SEED + PPE1_OFFSET) = 0x12345678;
@@ -673,7 +699,7 @@ void tunnel_init(void)
 			REG32(PPE1_CTRL2) = egr;
 	}
 
-	ppe_enable_config();
+	ppe_enable_config(0);
 
 	if (chip_rev == 11) {
 		REG32(0x1FB50EF4) = 3146112;
@@ -736,7 +762,7 @@ void tunnel_init(void)
 		REG32(PPE1_CTRL2) &= ~0x200C0u;
 
 	if (chip_rev == 15 || chip_rev == 16)
-		REG32(0x1FB50E58) = 0x01406082;
+		REG32(0x1FB50E58) = 0x01404082;
 
 	ppe_qdma_config(1);
 }
