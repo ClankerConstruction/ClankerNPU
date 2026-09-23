@@ -127,16 +127,26 @@ u32 eagle_ring_desc_base(u32 ring_id)
 /* Set up before the host starts handing over rings. */
 void eagle_rx_init(void)
 {
+	u32 *ind;
+
+	eagle_test_noba = 1;
 	eagle_mseg_retry = 3;
-	eagle_txq_mutex[0] = 10;
-	eagle_txq_mutex[1] = 0;
-	eagle_rxdmad_on_core2 = 0;
-	eagle_rx_ring_init_done[0] = 0;
-	eagle_rx_ring_init_done[1] = 0;
-	eagle_icv_err_table = sram_buf_alloc(22);
 	counter_init(2);
 	counter_init(0);
 	counter_init(1);
+	eagle_txq_mutex[0] = 10;
+	eagle_txq_mutex[1] = 0;
+	eagle_rxdmad_on_core2 = 0;
+	/* type 30 is reserved and never read; keeps the SRAM layout */
+	sram_buf_alloc(30);
+	eagle_rx_ring_init_done[1] = 0;
+	eagle_rx_ring_init_done[0] = 0;
+	/* indirect command state, 254 = idle */
+	ind = (u32 *)sram_buf_alloc(25);
+	ind[0] = 254;
+	ind[4] = 254;
+	ind[8] = 254;
+	eagle_icv_err_table = sram_buf_alloc(22);
 }
 
 /* ---- mailbox: npu_mbox_set_wait_inode_txrx_reg_addr ---- */
