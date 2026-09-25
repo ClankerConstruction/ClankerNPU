@@ -122,28 +122,31 @@ static u32 tdma_rx_ids_base;
 /* rx buffer id ring: 12288 ids over the WiFi packet buffer */
 static u32 rx_bufid_alloc_mutex[2];
 static u32 rx_bufid_free_mutex[2];
-static u16 rx_bufid_ridx;
-static u16 rx_bufid_widx;
+/* ring indices: written by one hart under the mutex, read by others */
+static volatile u16 rx_bufid_ridx;
+static volatile u16 rx_bufid_widx;
 static u32 rx_bufid_alloc_count;
 
 /* tx token ring: 13312 tokens over the NPU tx packet buffer */
 static u32 bufid_ring_base;
 static u32 tx_token_alloc_mutex[2];
 static u32 tx_token_free_mutex[2];
-static u16 bufid_ridx;
-static u16 bufid_widx;
+static volatile u16 bufid_ridx;
+static volatile u16 bufid_widx;
 static u32 bufid_deq_count;
 static u32 bufid_enq_count;
 
+/* several harts free: read the index only under the mutex */
 void buf_id_return(u16 buf_id)
 {
-	u16 next = (rx_bufid_widx == BUFID_POOL_LAST) ? 0 : rx_bufid_widx + 1;
+	u16 widx;
 
 	hw_mutex_lock(rx_bufid_free_mutex);
-	*(u16 *)(bufid_pool_base + 2 * (u32)rx_bufid_widx) = buf_id;
+	widx = rx_bufid_widx;
+	*(volatile u16 *)(bufid_pool_base + 2 * (u32)widx) = buf_id;
 	if ((wifi_debug_flags & 4) && counter_base_tri)
 		(*(u32 *)(counter_base_tri + 0x18))++;
-	rx_bufid_widx = next;
+	rx_bufid_widx = (widx == BUFID_POOL_LAST) ? 0 : widx + 1;
 	hw_mutex_unlock(rx_bufid_free_mutex);
 }
 
@@ -172,7 +175,7 @@ s32 buf_id_alloc_ring(void)
 void tx_token_free(u16 token)
 {
 	hw_mutex_lock(tx_token_free_mutex);
-	*(u16 *)(bufid_ring_base + 2 * (u32)bufid_widx) = token;
+	*(volatile u16 *)(bufid_ring_base + 2 * (u32)bufid_widx) = token;
 	bufid_enq_count++;
 	if ((wifi_debug_flags & 4) && counter_base_tri)
 		(*(u32 *)(counter_base_tri + 0x4C))++;

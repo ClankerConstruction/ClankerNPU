@@ -73,7 +73,9 @@ Two buffer pools:
 
 - **rx buffer ids**: 12288 ids (11200 on AN7552) over the WiFi packet
   buffer, 2 KB each with 192 bytes of headroom. Whoever finishes with a
-  frame returns its id.
+  frame returns its id: the PPE return ISR on core 0, the rxdmad hart
+  on a drop, core 3 after the host copy. Returns take mutex 13 and read
+  the ring's write index only while holding it.
 - **tx tokens**: 13312 tokens over the NPU tx packet buffer. The tx done
   ring returns them.
 
