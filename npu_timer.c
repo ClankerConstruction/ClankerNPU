@@ -36,6 +36,15 @@ void timer_isr(int src)
 	else
 		base = NPU_TIMER0_BASE;
 
+#ifdef AN7552
+	/* ack from the control word seen at the first tick; the tick
+	 * count is the AN7552 time base */
+	if (timer_prev_ctrl == 0)
+		timer_prev_ctrl = REG32(base);
+	REG32(base) = (timer_prev_ctrl & 0x1E0001EF) | (1u << bit);
+	timer_int_count++;
+	return;
+#endif
 	/* ack: rewrite the control word with only this timer's clear bit set */
 	timer_prev_ctrl = REG32(base);
 	REG32(base) = (timer_prev_ctrl & 0x1E0001EF) | (1u << bit);
@@ -89,7 +98,8 @@ void timer_init(int timer, int enable, int period)
 		(u32)period * cpu_clock_div4() * 1000 / 100;
 #else
 	REG32(timer_reload_reg[timer]) = 1000 * (u32)period * cpu_clock_div4();
-	plic_enable(timer_irq_map[timer]);
+	/* AN7552 has no timer core: the tick runs on hart 0 */
+	plic_register_isr(timer_irq_map[timer], timer_isr);
 #endif
 #endif
 	ctrl = REG32(base) | (1u << timer_bit_map[timer]);

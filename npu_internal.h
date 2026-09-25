@@ -253,6 +253,12 @@ extern u32 timer_reload_reg[NPU_TIMER_NUM];
 extern volatile u32 timer_raw_tick;
 extern volatile u32 timer_slow_tick;
 extern u32 timer_int_count;
+/* kite ageing clock: AN7552 counts timer ticks, the others the slow tick */
+#ifdef AN7552
+#define KITE_TICK (*(volatile u32 *)&timer_int_count)
+#else
+#define KITE_TICK timer_slow_tick
+#endif
 extern u32 timer_prev_ctrl;
 extern u32 timer_clk_mhz;
 extern u32 timer_tod_sec;

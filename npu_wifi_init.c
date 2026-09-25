@@ -70,7 +70,7 @@ static int wifi_init_rxd_5g(u32 ring_size, u32 band)
 	}
 
 	rxd_5g_cpu_idx = 0;
-	rxd_5g_flush_tick = timer_slow_tick;
+	rxd_5g_flush_tick = KITE_TICK;
 	rxd_5g_init_done = 1;
 	return 0;
 }
@@ -107,7 +107,7 @@ static int wifi_init_rxd_2g(u32 ring_size, u32 band)
 	}
 
 	rxd_2g_cpu_idx = 0;
-	rxd_2g_flush_tick = timer_slow_tick;
+	rxd_2g_flush_tick = KITE_TICK;
 	rxd_2g_init_done = 1;
 	return 0;
 }

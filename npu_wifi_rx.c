@@ -324,7 +324,7 @@ static s32 kite_classify(s32 buf_id, u32 len, u32 band)
 	*(u8 *)(node + 19) = pn.bss;
 	*(u32 *)(node + 4) = 0;
 	*(u32 *)(node + 8) = 0;
-	*(u32 *)(node + 32) = timer_slow_tick;
+	*(u32 *)(node + 32) = KITE_TICK;
 
 	if (*(u8 *)(e + 25) | wifi_dbdc_mode)
 		hw_mutex_lock(ba_mutex_5g);
@@ -548,9 +548,9 @@ static void kite_rx_2g(void)
 
 	wifi_cnt_inc(0, 4);
 	if (wifi_no_ba_test == 0 &&
-	    timer_slow_tick - rxd_2g_flush_tick > 9) {
+	    KITE_TICK - rxd_2g_flush_tick > 9) {
 		ba_timeout_scan(0);
-		rxd_2g_flush_tick = timer_slow_tick;
+		rxd_2g_flush_tick = KITE_TICK;
 	}
 
 	n = kite_rx_frame(ring, &ridx, &len, 0);
@@ -608,9 +608,9 @@ static void kite_rx_5g(void)
 
 	wifi_cnt_inc(1, 4);
 	if (wifi_no_ba_test == 0 &&
-	    timer_slow_tick - rxd_5g_flush_tick > 9) {
+	    KITE_TICK - rxd_5g_flush_tick > 9) {
 		ba_timeout_scan(1);
-		rxd_5g_flush_tick = timer_slow_tick;
+		rxd_5g_flush_tick = KITE_TICK;
 	}
 
 	n = kite_rx_frame(ring, &ridx, &len, 1);

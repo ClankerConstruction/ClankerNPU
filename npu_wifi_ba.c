@@ -345,7 +345,7 @@ static u32 *ba_band_entry(u32 band, u32 wcid, u32 tid)
 /* every 10 ticks from the rx loop */
 void ba_timeout_scan(u32 band)
 {
-	u32 now = timer_slow_tick;
+	u32 now = KITE_TICK;
 	u32 max = wifi_dbdc_mode ? 300 : 150;
 	u32 wcid, tid;
 	u32 *e;

@@ -68,7 +68,7 @@ enables it for itself.
 |---:|---|---|
 | 8 + n | mailbox of core n | core 0 registers all; core 5 enables 13 again for DBA |
 | 15 | mailbox of core 7 | tunnel offload hart |
-| 18 | timer tick | core 2 |
+| 18 | timer tick | core 2; core 0 on AN7552 |
 | 22 | boot UART rx console | core 0 |
 | 24 / 32 | BME done (AN7552 / others), kite | core 0 |
 | 25 / 33 | BMGR status (AN7552 / others) | core 0 |
@@ -95,6 +95,12 @@ counter register and reload register.
 - `timer_raw_tick` on every interrupt,
 - `timer_slow_tick` every 100 raw ticks,
 - a seconds and microseconds time of day.
+
+AN7552 has no core 2: `timer_init` registers the ISR on core 0. The
+tick must be acked, or the level interrupt re-enters forever and
+starves core 0. The AN7552 ISR acks from the control word saved at
+the first tick and only counts `timer_int_count`, the AN7552 kite
+ageing clock (`KITE_TICK`).
 
 `delay_us` (800 cycles per microsecond) and `delay_ms` busy-wait on
 `mcycle`. `delay_ms` scales by the CPU clock and rejects a delay whose
