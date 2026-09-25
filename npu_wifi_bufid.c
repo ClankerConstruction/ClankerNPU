@@ -317,8 +317,8 @@ void np_skb_tx_force_reset(void)
 }
 #endif /* HAS_BME */
 
-/* per-band counter words: 170 on AN7552 eagle */
-#if defined(AN7552) && defined(WIFI_EAGLE)
+/* per-band counter words: 170 on AN7552 (types 9/10 are 0x2A8) */
+#ifdef AN7552
 #define BAND_COUNTER_WORDS	170
 #else
 #define BAND_COUNTER_WORDS	250
