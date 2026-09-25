@@ -165,7 +165,13 @@ static NPU_INLINE void wifi_u64_add(u32 *c, u32 v)
 	u32 lo = c[0];
 
 	c[0] = lo + v;
+#ifdef AN7552
+	/* a load costs ten cycles: touch the high word only on a carry */
+	if (c[0] < lo)
+		c[1]++;
+#else
 	c[1] += c[0] < lo;
+#endif
 }
 #endif
 
