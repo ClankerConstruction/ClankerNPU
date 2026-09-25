@@ -46,10 +46,14 @@ static u16 buf_mgr_alloc_widx;
 static u16 buf_mgr_free_widx;
 
 /* TDMA descriptor ring state */
+#ifdef HAS_WIFI
 static u32 tdma_tx_ring0_base;
 static u32 tdma_tx_ring1_base;
+#ifdef HAS_BME
 static u32 tdma_tx_ring0_cnt;
 static u32 tdma_tx_ring1_cnt;
+#endif
+#endif
 
 /* TDMA TX ring per-band state */
 u32 tdma_tx_sw_idx[8];
