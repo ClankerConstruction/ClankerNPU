@@ -32,8 +32,9 @@
 
 u32 sram_alloc_offset;
 static u32 sram_alloc_count;
-static u32 sram_alloc_calls;
 u16 sram_alloc_table[SRAM_MAX_ENTRIES * 4];
+/* entries hold the address as a u32 over two u16 slots */
+typedef u32 __attribute__((may_alias)) u32_alias;
 
 /* SRAM region type descriptors: {u16 addr_type, u8 align_class, u8 pad, u32 size} */
 struct sram_region_desc {
@@ -63,7 +64,7 @@ static u32 sram_buf_alloc_impl(u16 addr_type, u32 size_class)
 	if (sram_alloc_count > 0) {
 		for (i = 0; i < sram_alloc_count; i++) {
 			if (sram_alloc_table[i * 4] == addr_type) {
-				u32 existing = *(u32 *)&sram_alloc_table[i * 4 + 2];
+				u32 existing = *(u32_alias *)&sram_alloc_table[i * 4 + 2];
 
 				npu_printf("already exist!!AddrType=%d,npu_init_sram_addr=%x\n",
 					   addr_type, existing);
@@ -94,7 +95,7 @@ static u32 sram_buf_alloc_impl(u16 addr_type, u32 size_class)
 	/* record entry */
 	entry = &sram_alloc_table[sram_alloc_count * 4];
 	entry[0] = addr_type;
-	*(u32 *)(entry + 2) = (u32)base;
+	*(u32_alias *)(entry + 2) = (u32)base;
 	sram_alloc_offset = (u32)base - SRAM_BASE + size_class;
 	sram_alloc_count++;
 	NDBG_CNT(NC_SRAM_ALLOCS);
@@ -244,7 +245,7 @@ void sram_buf_dump(void)
 	npu_printf("base:%x,total size:%x,current max use size:%x\n",
 		   SRAM_BASE, SRAM_SIZE, sram_alloc_offset);
 	for (i = 0; i < SRAM_MAX_ENTRIES; i++) {
-		u32 addr = *(u32 *)(entry + 2);
+		u32 addr = *(u32_alias *)(entry + 2);
 
 		if (addr == 0)
 			break;

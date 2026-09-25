@@ -19,7 +19,6 @@
 
 /* 0x000: system config base */
 u32 npu_max_frame_size = 1500;
-static u32 __data_pad0[3];
 
 /* 0x010 - 0x14C: five per-timer tables. AN7583 has a second bank of 8
  * timers at 0x1EC10200; AN7581 exposes only 4. */

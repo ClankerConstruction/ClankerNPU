@@ -77,10 +77,6 @@ static void pcie1_off(void)
 	REG32(0x1FA5C460) = 0;
 }
 
-static void npu_reboot(void);
-static s32 chip_idx = -1;
-static void (*port_off_hooks[6])(void);
-
 /* Reboot */
 static void npu_reboot(void)
 {
@@ -264,6 +260,9 @@ static void __attribute__((noinline)) core1_main(void)
 }
 
 #if MAX_CORE_NUM > 2
+static s32 chip_idx = -1;
+static void (*port_off_hooks[6])(void);
+
 static void __attribute__((noinline)) core2_main(void)
 {
 	plic_register_isr(18, timer_isr);
