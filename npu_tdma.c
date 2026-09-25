@@ -166,6 +166,11 @@ static void bmgr_isr(int src)
 {
 	(void)src;
 	REG32(BMGR_STATUS) = REG32(BMGR_STATUS);
+#ifdef WIFI_KITE
+	/* kite counts only with stats on */
+	if (!(wifi_debug_flags & 4))
+		return;
+#endif
 	if (counter_base_tri)
 		(*(u32 *)(counter_base_tri + 60))++;
 }
