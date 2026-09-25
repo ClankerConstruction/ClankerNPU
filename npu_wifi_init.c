@@ -507,7 +507,8 @@ void __attribute__((noinline)) npu_set_bar_info(u32 band, u32 packed)
 
 	ba_state_update(ssn & 0xFFFF, 3, entry_addr);
 
-	if ((*(u16 *)(entry_addr + 18) - ssn) & 0x8000) {
+	/* SSN ahead of the last SN in 12-bit sequence space */
+	if ((*(u16 *)(entry_addr + 18) - ssn) & 0x800) {
 		u16 new_ssn = (ssn != 0) ? ssn - 1 : 4095;
 
 		ba_indicate_le_seq((u32 *)entry_addr, new_ssn);
