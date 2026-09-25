@@ -247,7 +247,7 @@ running its loop.
 
 ```mermaid
 flowchart TD
-  S["NPU path misbehaves"] --> M{"sys memrl 1e906800<br/>= 0x4e444247?"}
+  S["NPU path misbehaves"] --> M{"sys memrl 1e906800<br/>(1e903000 on AN7552)<br/>= 0x4e444247?"}
   M -->|no| M1["firmware not running:<br/>boot log, npu.ko load"]
   M -->|yes| V{"version string<br/>is the expected build?"}
   V -->|no| V1["wrong image loaded:<br/>check /userfs/npu_rv32.bin"]
