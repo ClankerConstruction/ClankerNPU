@@ -500,7 +500,7 @@ int __attribute__((noinline)) tdma_tx_submit(u32 token, u32 pkt_len,
 
 	desc[1] = (buf_addr & 0x3FFFFFFF) | 0x80000000;
 	tdma_tx_sw_idx[band] = next;
-	desc[0] = (w0 & 0xFFFFE000) | pkt_len;
+	desc[0] = (w0 & 0xFFFFE000) | (pkt_len & 0x1FFF);
 #if defined(AN7552) && defined(WIFI_EAGLE)
 	/* short wait for the id's rx refill */
 	if (eagle_sync[token] == 0) {
