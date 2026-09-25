@@ -81,7 +81,7 @@ void wifi_pkt_queue_init(u32 band)
  * Packet forwarding engine: 1 when the ring is full
  * ================================================================ */
 
-int pkt_forward(u32 buf_id, u32 pkt_len, s16 wcid, u8 amsdu,
+NPU_HOT int pkt_forward(u32 buf_id, u32 pkt_len, s16 wcid, u8 amsdu,
 		u32 band, u8 fwd_type, u32 orig_len,
 		int classify_result, u8 tunnel)
 {

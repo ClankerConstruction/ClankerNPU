@@ -442,7 +442,7 @@ static u32 *tdma_stats_base(u32 band)
 static u32 tdma_tx_mutex[2];
 #endif
 
-int __attribute__((noinline)) tdma_tx_submit(u32 token, u32 pkt_len,
+NPU_HOT int __attribute__((noinline)) tdma_tx_submit(u32 token, u32 pkt_len,
 						    u32 buf_addr, u32 band)
 {
 	u32 base = (band != 0) ? tdma_tx_ring1_base : tdma_tx_ring0_base;

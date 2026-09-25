@@ -14,7 +14,7 @@
 
 #define REORDER_NODE_SIZE      36
 
-void reorder_node_free(u16 node_idx, u8 node_type, u32 band)
+NPU_HOT void reorder_node_free(u16 node_idx, u8 node_type, u32 band)
 {
 	hw_mutex_lock(reorder_free_mutex);
 
@@ -36,7 +36,7 @@ void reorder_node_free(u16 node_idx, u8 node_type, u32 band)
 }
 
 /* a node from the primary pool, else the secondary */
-u32 reorder_node_alloc(u32 band, u32 *pool_type, u16 *idx_out)
+NPU_HOT u32 reorder_node_alloc(u32 band, u32 *pool_type, u16 *idx_out)
 {
 	u16 widx, next;
 
@@ -79,7 +79,7 @@ u32 reorder_node_alloc(u32 band, u32 *pool_type, u16 *idx_out)
 
 /* host for a rate-limited BSS, a waiting band or no offload; else the
  * wire over TDMA from hdr, where the 802.3 frame starts */
-int pkt_enqueue_bridge(u32 buf_id, u32 pkt_len, u32 hdr,
+NPU_HOT int pkt_enqueue_bridge(u32 buf_id, u32 pkt_len, u32 hdr,
 		       u32 band, u32 bss)
 {
 	u32 size, tx_len;
@@ -137,7 +137,7 @@ int pkt_enqueue_bridge(u32 buf_id, u32 pkt_len, u32 hdr,
 /* entry: 0/4 head/tail, 8 count, 12 msdu chain, 16 win, 18 last sn,
  * 20 ref sn, 22 amsdu, 23 flag, 24 state, 25 band */
 
-static void ba_lock(u32 *entry)
+static NPU_HOT void ba_lock(u32 *entry)
 {
 	if (*(u8 *)((u32)entry + 25) | wifi_dbdc_mode)
 		hw_mutex_lock(ba_mutex_5g);
@@ -145,7 +145,7 @@ static void ba_lock(u32 *entry)
 		hw_mutex_lock(ba_mutex_2g);
 }
 
-static void ba_unlock(u32 *entry)
+static NPU_HOT void ba_unlock(u32 *entry)
 {
 	if (*(u8 *)((u32)entry + 25) | wifi_dbdc_mode)
 		hw_mutex_unlock(ba_mutex_5g);
@@ -153,7 +153,7 @@ static void ba_unlock(u32 *entry)
 		hw_mutex_unlock(ba_mutex_2g);
 }
 
-static void ba_check_node(u32 *node, u32 band, int msdu)
+static NPU_HOT void ba_check_node(u32 *node, u32 band, int msdu)
 {
 	s16 bid = *(s16 *)((u32)node + 20);
 	u16 len = *(u16 *)((u32)node + 26);
@@ -171,7 +171,7 @@ static void ba_check_node(u32 *node, u32 band, int msdu)
 }
 
 /* take the head MPDU off the entry */
-static u32 *ba_pop_mpdu(u32 *entry)
+static NPU_HOT u32 *ba_pop_mpdu(u32 *entry)
 {
 	u32 *mpdu = (u32 *)entry[0];
 
@@ -186,7 +186,7 @@ static u32 *ba_pop_mpdu(u32 *entry)
 
 /* send an MPDU and its MSDUs on, then free their nodes; mode 0 is
  * a flush, 1 an in-order release, 2 one that checks the nodes */
-static void ba_release_mpdu(u32 *mpdu, u32 band, int mode)
+static NPU_HOT void ba_release_mpdu(u32 *mpdu, u32 band, int mode)
 {
 	u32 *msdu;
 
@@ -224,7 +224,7 @@ static void ba_release_mpdu(u32 *mpdu, u32 band, int mode)
 }
 
 /* release every held frame */
-void ba_flush_entry(u32 *entry)
+NPU_HOT void ba_flush_entry(u32 *entry)
 {
 	u8 band = *(u8 *)((u32)entry + 25);
 	u32 *mpdu;
@@ -240,7 +240,7 @@ void ba_flush_entry(u32 *entry)
 }
 
 /* release the held frames up to and including seq */
-void ba_indicate_le_seq(u32 *entry, u32 seq)
+NPU_HOT void ba_indicate_le_seq(u32 *entry, u32 seq)
 {
 	u8 band = *(u8 *)((u32)entry + 25);
 	u16 sn;
@@ -257,7 +257,7 @@ void ba_indicate_le_seq(u32 *entry, u32 seq)
 
 /* release the frames that follow seq without a gap, return the last
  * one released or 0xFFFF */
-u32 ba_seq_scan(u32 *entry, u32 seq)
+NPU_HOT u32 ba_seq_scan(u32 *entry, u32 seq)
 {
 	u8 band = *(u8 *)((u32)entry + 25);
 	u32 last = 0xFFFF;
@@ -278,7 +278,7 @@ u32 ba_seq_scan(u32 *entry, u32 seq)
 }
 
 /* a retransmit of the last A-MSDU restarts the window */
-u32 ba_state_update(u32 sn, u32 check_type, u32 entry_addr)
+NPU_HOT u32 ba_state_update(u32 sn, u32 check_type, u32 entry_addr)
 {
 	u16 ref_sn = *(u16 *)(entry_addr + 20);
 	u8 state_adj = *(u8 *)(entry_addr + 22) - 2;
@@ -305,7 +305,7 @@ u32 ba_state_update(u32 sn, u32 check_type, u32 entry_addr)
 }
 
 /* release the frames held longer than flushone_timeout */
-static void ba_timeout_entry(u32 *entry, u32 now)
+static NPU_HOT void ba_timeout_entry(u32 *entry, u32 now)
 {
 	u16 sn, r;
 
@@ -322,7 +322,7 @@ static void ba_timeout_entry(u32 *entry, u32 now)
 }
 
 /* the active entry of (wcid, tid) the band owns, or NULL */
-static u32 *ba_band_entry(u32 band, u32 wcid, u32 tid)
+static NPU_HOT u32 *ba_band_entry(u32 band, u32 wcid, u32 tid)
 {
 	u32 off = (wcid - 1) * 224 + tid * 28;
 	u32 e;
@@ -343,7 +343,7 @@ static u32 *ba_band_entry(u32 band, u32 wcid, u32 tid)
 }
 
 /* every 10 ticks from the rx loop */
-void ba_timeout_scan(u32 band)
+NPU_HOT void ba_timeout_scan(u32 band)
 {
 	u32 now = KITE_TICK;
 	u32 max = wifi_dbdc_mode ? 300 : 150;

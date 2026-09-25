@@ -122,6 +122,16 @@ void rxnode_drain(u32 band);
 int pkt_forward_bme(s32 buf_id, u32 wcid, u32 info);
 
 /* bump a counter of the band's debug block when counters are on */
+#ifdef AN7552
+void wifi_cnt_add(u32 band, u32 off);
+
+/* per packet on hart 1: only the flag test is inline */
+static NPU_INLINE void wifi_cnt_inc(u32 band, u32 off)
+{
+	if (wifi_debug_flags & 4)
+		wifi_cnt_add(band, off);
+}
+#else
 static inline void wifi_cnt_inc(u32 band, u32 off)
 {
 	u32 base;
@@ -133,23 +143,24 @@ static inline void wifi_cnt_inc(u32 band, u32 off)
 	if (base)
 		(*(u32 *)(base + off))++;
 }
+#endif
 
 /* NPU view of a buffer in the host packet buffer */
-static inline u32 wifi_pkt_va(u32 buf_id)
+static NPU_INLINE u32 wifi_pkt_va(u32 buf_id)
 {
 	return ((wifi_pkt_buf_addr & 0x3FFFFFFF) | 0x40000000) +
 	       (buf_id << 12);
 }
 
 /* bus address of a buffer, for the WiFi DMA and the host adaptor */
-static inline u32 wifi_pkt_dma(u32 buf_id)
+static NPU_INLINE u32 wifi_pkt_dma(u32 buf_id)
 {
 	return (((buf_id << 12) + wifi_pkt_buf_addr) & 0x3FFFFFFF) |
 	       0x80000000;
 }
 
 /* 64-bit counter kept as a lo/hi pair */
-static inline void wifi_u64_add(u32 *c, u32 v)
+static NPU_INLINE void wifi_u64_add(u32 *c, u32 v)
 {
 	u32 lo = c[0];
 

@@ -75,4 +75,10 @@
 #define HAS_NPU_WIFI_TX
 #endif
 
+/* Per-packet functions in one .text.hot block, small helpers forced
+ * inline. AN7552 kite: hart 1 runs the whole rx path. */
+#if defined(AN7552) && defined(WIFI_KITE)
+#define HAS_HOT_TEXT
+#endif
+
 #endif /* NPU_CONFIG_H */

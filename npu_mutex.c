@@ -17,7 +17,7 @@
 
 /* Acquire is a single try: the hardware arbitrates, callers do not spin.
  * Returns 0 when this hart owns the mutex, -1 otherwise. */
-int hw_mutex_lock(u32 *desc)
+NPU_HOT int hw_mutex_lock(u32 *desc)
 {
 	u32 off = (desc[0] * 4) & HW_MUTEX_OFF_MASK;
 	u32 hart = get_hartid();
@@ -30,7 +30,7 @@ int hw_mutex_lock(u32 *desc)
 	return ((sts >> 8) & 0xFF) == hart ? 0 : -1;
 }
 
-int hw_mutex_unlock(u32 *desc)
+NPU_HOT int hw_mutex_unlock(u32 *desc)
 {
 	u32 off = (desc[0] * 4) & HW_MUTEX_OFF_MASK;
 	u32 hart = get_hartid();

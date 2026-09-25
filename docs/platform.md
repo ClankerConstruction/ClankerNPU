@@ -106,6 +106,23 @@ ageing clock (`KITE_TICK`), and `timer_raw_tick` for the debug block.
 `mcycle`. `delay_ms` scales by the CPU clock and rejects a delay whose
 cycle count would overflow 32 bits. `delay_1ms` is a plain loop.
 
+## Cost model
+
+Measured on AN7552 at 800 MHz, in cycles:
+
+| operation | cycles |
+|---|---:|
+| ALU instruction | 1 |
+| taken branch or jump | 5 |
+| load from SRAM or the D-cached stack | 10 |
+| MMIO register read | 40 |
+| uncached DRAM read (`0x4xxxxxxx`) | 73 |
+| PCIe register read | 1460 |
+
+Stores are posted and cost about one cycle. Back-to-back uncached
+loads do not overlap. Loads dominate: a restored callee-saved register
+costs as much as ten ALU instructions.
+
 ## Console output
 
 Two output paths share mutex 15.

@@ -29,7 +29,7 @@
 	(s32)(s16)__v; })
 
 /* one id from the buffer manager, -1 when it has none */
-s32 buf_id_alloc_hw(u32 type, u32 band)
+NPU_HOT s32 buf_id_alloc_hw(u32 type, u32 band)
 {
 #ifdef AN7552
 	/* no id CSRs: a load pops the id, beside the free register */
@@ -62,7 +62,7 @@ s32 buf_id_alloc_hw(u32 type, u32 band)
 }
 
 /* give an id back to the buffer manager */
-void buf_id_free(u32 type, u32 band, u32 buf_id)
+NPU_HOT void buf_id_free(u32 type, u32 band, u32 buf_id)
 {
 	u32 base;
 
@@ -89,6 +89,17 @@ u32 counter_base_5g;
 u32 counter_base_tri;
 u32 wcid_counter_base_2g;
 u32 wcid_counter_base_5g;
+
+#if defined(AN7552) && defined(WIFI_KITE)
+void wifi_cnt_add(u32 band, u32 off)
+{
+	u32 base = (band == 1) ? counter_base_5g :
+		   (band != 0) ? counter_base_tri : counter_base_2g;
+
+	if (base)
+		(*(u32 *)(base + off))++;
+}
+#endif
 
 /* tx buffer id rings.
  *

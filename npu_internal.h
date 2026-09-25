@@ -5,6 +5,16 @@
 #include "npu_types.h"
 #include "npu_regs.h"
 
+/* per-packet code: one contiguous block stays inside the 8 KB
+ * instruction cache (HAS_HOT_TEXT) */
+#ifdef HAS_HOT_TEXT
+#define NPU_HOT	__attribute__((section(".text.hot")))
+#define NPU_INLINE	inline __attribute__((always_inline))
+#else
+#define NPU_HOT
+#define NPU_INLINE	inline
+#endif
+
 /* rx buffer ids: 2 KB each over the WiFi packet buffer */
 #if defined(WIFI_KITE)
 #define BUFID_POOL_ENTRIES    5600

@@ -21,6 +21,7 @@ SECTIONS
 {
     .text : {
         *(.text.init)
+        *(.text.hot)
         *(.text .text.*)
     } > DRAM
 

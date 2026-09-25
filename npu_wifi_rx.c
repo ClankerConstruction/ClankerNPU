@@ -51,7 +51,7 @@ static u8 rxd_2g_kick;
  * ================================================================ */
 
 /* per-BSS, per-WCID and apcli counters */
-static void kite_rx_stats(u32 dir, u32 port, u8 state, u32 type,
+static NPU_HOT void kite_rx_stats(u32 dir, u32 port, u8 state, u32 type,
 			  u32 wcid, u32 bytes)
 {
 	if (port <= 15) {
@@ -85,7 +85,7 @@ static void kite_rx_stats(u32 dir, u32 port, u8 state, u32 type,
  * ================================================================ */
 
 /* -1: untranslated, errored or non-QoS data frames go to the host */
-static int kite_rx_parse(u32 buf_id, struct kite_node *n, u32 len, u32 band)
+static NPU_HOT int kite_rx_parse(u32 buf_id, struct kite_node *n, u32 len, u32 band)
 {
 	u32 buf = wifi_pkt_va(buf_id);
 	u32 w1 = *(u32 *)(buf + 4);
@@ -173,7 +173,7 @@ static s32 kite_rx_hdr_len(u32 buf_id, u32 band)
  * ================================================================ */
 
 /* -1 when the window took the frame, else the caller sends it up */
-static s32 kite_classify(s32 buf_id, u32 len, u32 band)
+static NPU_HOT s32 kite_classify(s32 buf_id, u32 len, u32 band)
 {
 	struct kite_node pn;
 	u32 *entry, e, node;
@@ -515,7 +515,7 @@ out:
  * ================================================================ */
 
 /* walk the descriptors of one frame; 0 when it is not complete */
-static u32 kite_rx_frame(u32 ring, u32 *ridx, u32 *len, u32 band)
+static NPU_INLINE u32 kite_rx_frame(u32 ring, u32 *ridx, u32 *len, u32 band)
 {
 	u32 idx = *ridx, n = 0, desc, w1;
 
@@ -696,7 +696,7 @@ static void kite_rx_5g(void)
  * ================================================================ */
 
 /* core 1 */
-void __attribute__((noreturn)) kite_core1_loop(void)
+NPU_HOT void __attribute__((noreturn)) kite_core1_loop(void)
 {
 	npu_dbg_loop(NDBG_TAG('K', 'R', 'X', '1'));
 	while (1) {
