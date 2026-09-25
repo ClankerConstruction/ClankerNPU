@@ -275,11 +275,12 @@ A call did work when the unit counter of the section moved.
 | 4 | `EHOUT` | eagle 3 (0 on AN7552) | packet queues to the host adaptor | frame |
 | 5 | `ETXD` | eagle 3 | tx done ring | report |
 | 6 | `ERFL` | eagle 4 (0 on AN7552) | rx ring refill | buffer |
+| 7 | `EPPE` | eagle 0, in the ISR | PPE buffer return FIFO | entry |
 | 8 | `KRX2G` | kite 1 (2 when not DBDC) | one 2.4 GHz rx step | frame |
 | 9 | `KRX5G` | kite 1 | one 5 GHz rx step | frame |
 
 The eagle units are the `EDBG` counters: `rxd`, `lan`, `push`, `in`,
-`rxout`, `txdone`, `refill`. The kite units are the moves of the rx
+`rxout`, `txdone`, `refill`, and for `EPPE` the FIFO entries taken. The kite units are the moves of the rx
 ring's cpu index.
 
 A section adds its own cost: two CSR reads before the step and a call

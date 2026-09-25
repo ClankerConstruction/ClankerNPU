@@ -136,18 +136,29 @@ static volatile u16 bufid_widx;
 static u32 bufid_deq_count;
 static u32 bufid_enq_count;
 
+#if defined(HAS_HOT_TEXT) && defined(WIFI_EAGLE)
+/* a return per frame: mutex 13 taken inline */
+#define rx_free_lock()		do { hw_mutex_take(13); npu_barrier(); } while (0)
+#define rx_free_unlock()	do { npu_barrier(); hw_mutex_give(13); } while (0)
+#define BUFID_RET_HOT		NPU_HOT
+#else
+#define rx_free_lock()		hw_mutex_lock(rx_bufid_free_mutex)
+#define rx_free_unlock()	hw_mutex_unlock(rx_bufid_free_mutex)
+#define BUFID_RET_HOT
+#endif
+
 /* several harts free: read the index only under the mutex */
-void buf_id_return(u16 buf_id)
+BUFID_RET_HOT void buf_id_return(u16 buf_id)
 {
 	u16 widx;
 
-	hw_mutex_lock(rx_bufid_free_mutex);
+	rx_free_lock();
 	widx = rx_bufid_widx;
 	*(volatile u16 *)(bufid_pool_base + 2 * (u32)widx) = buf_id;
 	if ((wifi_debug_flags & 4) && counter_base_tri)
 		(*(u32 *)(counter_base_tri + 0x18))++;
 	rx_bufid_widx = (widx == BUFID_POOL_LAST) ? 0 : widx + 1;
-	hw_mutex_unlock(rx_bufid_free_mutex);
+	rx_free_unlock();
 }
 
 s32 buf_id_alloc_ring(void)

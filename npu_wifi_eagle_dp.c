@@ -252,47 +252,26 @@ static u32 eagle_buf_phys(u32 buf_id)
 
 /* ---- packet queues ---- */
 
+/* harts 0, 1 and 3 enqueue per frame: mutex 10, inline where hot */
+#ifdef HAS_HOT_TEXT
+#define eagle_txq_lock()	do { hw_mutex_take(10); npu_barrier(); } while (0)
+#define eagle_txq_unlock()	do { npu_barrier(); hw_mutex_give(10); } while (0)
+#else
+#define eagle_txq_lock()	hw_mutex_lock(eagle_txq_mutex)
+#define eagle_txq_unlock()	hw_mutex_unlock(eagle_txq_mutex)
+#endif
+
 /* Queue one packet for the host adaptor. A frame that arrived whole goes
  * to the per-band queue; one spread over several rx buffers goes to the
  * multi-segment queue, which keeps the segments together. */
-#ifdef HAS_HOT_TEXT
-/* a whole frame into the band 1 queue, the one only the rxdmad hart
- * fills. Mutex 10 still guards dbg.rxq, which core 0 also counts. */
-static NPU_INLINE int eagle_txq1_put(u32 buf_id, u16 len)
-{
-	u32 idx, e;
-	int ret = 1;
-
-	hw_mutex_take(10);
-	npu_barrier();
-	idx = eagle_txq_widx[1];
-	e = eagle_txq_base[1] + EAGLE_Q_ENTRY * idx;
-	if ((*(volatile u8 *)(e + 10) & 1) == 0) {
-		*(volatile u32 *)e = buf_id;
-		*(volatile u16 *)(e + 4) = 0;
-		*(volatile u16 *)(e + 6) = len;
-		*(volatile u16 *)(e + 8) = len;
-		*(volatile u8 *)(e + 11) = 0;
-		*(volatile u8 *)(e + 10) = 2 | 1;
-		idx++;
-		eagle_txq_widx[1] = (idx == EAGLE_TXQ_ENTRIES) ? 0 : idx;
-		ret = 0;
-		dbg.rxq++;
-	}
-	npu_barrier();
-	hw_mutex_give(10);
-	return ret;
-}
-#endif
-
-static int eagle_pkt_enqueue(u32 buf_id, u16 seg_len, u16 wcid, u8 info,
-			     u32 dst, u8 flags, u16 pkt_len)
+static NPU_HOT int eagle_pkt_enqueue(u32 buf_id, u16 seg_len, u16 wcid,
+				     u8 info, u32 dst, u8 flags, u16 pkt_len)
 {
 	u32 band = (dst == 0) ? 0 : 1;
 	u32 idx, e;
 	int ret = 1;
 
-	hw_mutex_lock(eagle_txq_mutex);
+	eagle_txq_lock();
 
 	if (pkt_len == seg_len) {
 		idx = eagle_txq_widx[band];
@@ -322,9 +301,37 @@ static int eagle_pkt_enqueue(u32 buf_id, u16 seg_len, u16 wcid, u8 info,
 	ret = 0;
 	dbg.rxq++;
 out:
-	hw_mutex_unlock(eagle_txq_mutex);
+	eagle_txq_unlock();
 	return ret;
 }
+
+#ifdef HAS_HOT_TEXT
+/* a whole frame into the band 1 queue, the one only the rxdmad hart
+ * fills. Mutex 10 still guards dbg.rxq, which core 0 also counts. */
+static NPU_INLINE int eagle_txq1_put(u32 buf_id, u16 len)
+{
+	u32 idx, e;
+	int ret = 1;
+
+	eagle_txq_lock();
+	idx = eagle_txq_widx[1];
+	e = eagle_txq_base[1] + EAGLE_Q_ENTRY * idx;
+	if ((*(volatile u8 *)(e + 10) & 1) == 0) {
+		*(volatile u32 *)e = buf_id;
+		*(volatile u16 *)(e + 4) = 0;
+		*(volatile u16 *)(e + 6) = len;
+		*(volatile u16 *)(e + 8) = len;
+		*(volatile u8 *)(e + 11) = 0;
+		*(volatile u8 *)(e + 10) = 2 | 1;
+		idx++;
+		eagle_txq_widx[1] = (idx == EAGLE_TXQ_ENTRIES) ? 0 : idx;
+		ret = 0;
+		dbg.rxq++;
+	}
+	eagle_txq_unlock();
+	return ret;
+}
+#endif
 
 void eagle_queue_init(u32 band)
 {
@@ -370,33 +377,52 @@ void eagle_queue_init(u32 band)
 /* PPE_WIFI_BUF_ID (PLIC 95): the PPE returns WiFi rx buffers it did
  * not forward. Bit 30 set: just free the buffer. Clear: the flow is not
  * bound, so the frame goes to the host. */
-void ppe_wifi_bufid_isr(int src)
+/* entries taken. With HAS_HOT_TEXT it polls the FIFO again, up to 256
+ * entries, which spares a trap entry and exit per burst. */
+static inline u32 eagle_ppe_drain(void)
 {
-	u32 n = REG32(PPE_WIFI_BUF_CNT) & 0xFFFF, i = 0, v, info, hdr;
+	u32 n, i, v, info, hdr, done = 0;
 	u16 id;
 
-	(void)src;
-	if (n == 0)
-		return;
-	v = REG32(PPE_WIFI_BUF_ID);
-	while ((s32)v < 0) {
-		id = v & 0xFFFF;
-		if (v & 0x40000000) {
-			buf_id_return(id);
-		} else {
-			info = REG32(PPE_WIFI_BUF_INFO);
-			hdr = REG32(eagle_buf_uncached(id));
-			if (eagle_pkt_enqueue(id, (hdr >> 3) & 0x3FFF,
-					      info & PPE_WIFI_BUF_WCID,
-					      (info >> 16) & 31,
-					      0, 2, (hdr >> 3) & 0x3FFF) != 0)
-				buf_id_return(id);
-		}
-		REG32(PPE_WIFI_BUF_ID) = 0x80000000;
-		if (++i == n)
-			break;
+	while ((n = REG32(PPE_WIFI_BUF_CNT) & 0xFFFF) != 0) {
+		i = 0;
 		v = REG32(PPE_WIFI_BUF_ID);
+		while ((s32)v < 0) {
+			id = v & 0xFFFF;
+			if (v & 0x40000000) {
+				buf_id_return(id);
+			} else {
+				info = REG32(PPE_WIFI_BUF_INFO);
+				hdr = REG32(eagle_buf_uncached(id));
+				if (eagle_pkt_enqueue(id, (hdr >> 3) & 0x3FFF,
+						      info & PPE_WIFI_BUF_WCID,
+						      (info >> 16) & 31,
+						      0, 2, (hdr >> 3) & 0x3FFF) != 0)
+					buf_id_return(id);
+			}
+			REG32(PPE_WIFI_BUF_ID) = 0x80000000;
+			if (++i == n)
+				break;
+			v = REG32(PPE_WIFI_BUF_ID);
+		}
+		done += i;
+#ifdef HAS_HOT_TEXT
+		if (i != n || done >= 256)
+			break;
+#else
+		break;
+#endif
 	}
+	return done;
+}
+
+NPU_HOT void ppe_wifi_bufid_isr(int src)
+{
+	u32 n = 0;
+
+	(void)src;
+	NPU_PROF(NP_EPPE, n, n = eagle_ppe_drain());
+	(void)n;
 }
 
 /* ---- WiFi -> host ---- */

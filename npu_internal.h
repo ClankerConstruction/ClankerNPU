@@ -643,6 +643,7 @@ struct ndbg {
 /* profile sections, PROF=1 builds */
 enum {
 	NP_ERXD, NP_ELAN, NP_ETXP, NP_EHIN, NP_EHOUT, NP_ETXD, NP_ERFL,
+	NP_EPPE,
 	NP_KRX2G = 8, NP_KRX5G,
 	NP_MAX = 16,
 };

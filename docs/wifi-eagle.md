@@ -41,7 +41,7 @@ flowchart LR
 
 | core | loop | work |
 |---:|---|---|
-| 0 | `ppe_wifi_bufid_isr` (PLIC 95) | frames the PPE did not forward go to the host queue; free-only entries return the buffer |
+| 0 | `ppe_wifi_bufid_isr` (PLIC 95) | frames the PPE did not forward go to the host queue; free-only entries return the buffer. With `HAS_HOT_TEXT` it reads the FIFO count again before returning, up to 256 entries |
 | 1 | `eagle_rxdmad_loop` | one rxdmad descriptor at a time: `dst_sel` frames to TDMA tx, the rest to the host queue; chains multi-buffer frames |
 | 2 | `eagle_tx_fast_path` | staged host frames and the TDMA rx ring into the WiFi tx ring, paced by the ring's DMA index |
 | 3 | `eagle_core3_loop` | host adaptor in rings to staging, packet queue to host adaptor out rings, tx done ring |
@@ -75,7 +75,8 @@ Two buffer pools:
   buffer, 2 KB each with 192 bytes of headroom. Whoever finishes with a
   frame returns its id: the PPE return ISR on core 0, the rxdmad hart
   on a drop, core 3 after the host copy. Returns take mutex 13 and read
-  the ring's write index only while holding it.
+  the ring's write index only while holding it. With `HAS_HOT_TEXT`
+  mutex 13 and the packet queue's mutex 10 are taken inline.
 - **tx tokens**: 13312 tokens over the NPU tx packet buffer. The tx done
   ring returns them.
 
