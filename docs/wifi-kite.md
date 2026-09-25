@@ -98,6 +98,14 @@ flowchart TD
 With the no-BA test flag set (SET_WAIT 9), every frame goes straight to
 `pkt_enqueue_bridge`.
 
+AN7552 hart 1 runs `kite_classify_fast` first. A parsed frame that is
+the next SN of a running window (state 4), follows no A-MSDU restart,
+and needs no rate limit, band wait or host offload goes to TDMA there,
+with counters off. It takes the BA lock only when frames are held;
+only hart 1 queues them. Any other frame continues in
+`kite_classify_pn` without a second parse. About 90% of TCP frames take
+the fast path; a frame costs about 1660 cycles, down from 2520.
+
 ## BA reorder
 
 - One 28-byte entry per TID, 8 TIDs per wcid, in two tables (SRAM types

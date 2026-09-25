@@ -85,7 +85,7 @@ static NPU_HOT void kite_rx_stats(u32 dir, u32 port, u8 state, u32 type,
  * ================================================================ */
 
 /* -1: untranslated, errored or non-QoS data frames go to the host */
-static NPU_HOT int kite_rx_parse(u32 buf_id, struct kite_node *n, u32 len, u32 band)
+static NPU_HOT NPU_INLINE int kite_rx_parse(u32 buf_id, struct kite_node *n, u32 len, u32 band)
 {
 	u32 buf = wifi_pkt_va(buf_id);
 	u32 w1 = *(u32 *)(buf + 4);
@@ -172,8 +172,19 @@ static s32 kite_rx_hdr_len(u32 buf_id, u32 band)
  * BA reorder window classifier
  * ================================================================ */
 
+#if MAX_CORE_NUM <= 2
+/* the BA step of a parsed frame; kite_classify_fast enters here too */
+static NPU_HOT s32 kite_classify_pn(struct kite_node pn, s32 buf_id,
+				     u32 band)
+{
+	u32 *entry, e, node;
+	u32 sn, last, win, cnt;
+	u32 pool = 1;
+	u16 idx = 0xFFFF;
+	s32 fs;
+#else
 /* -1 when the window took the frame, else the caller sends it up */
-static NPU_HOT s32 kite_classify(s32 buf_id, u32 len, u32 band)
+static s32 kite_classify(s32 buf_id, u32 len, u32 band)
 {
 	struct kite_node pn;
 	u32 *entry, e, node;
@@ -193,6 +204,7 @@ static NPU_HOT s32 kite_classify(s32 buf_id, u32 len, u32 band)
 
 	if (kite_rx_parse(buf_id, &pn, len, band) == -1)
 		return buf_id;
+#endif
 
 	if (pn.wcid == 0) {
 		buf_id_free(0, band, pn.buf_id);
@@ -396,6 +408,82 @@ in_order:
 	return -1;
 }
 
+#if MAX_CORE_NUM <= 2
+/* -1 when the window took the frame, else the caller sends it up */
+static NPU_HOT s32 kite_classify(s32 buf_id, u32 len, u32 band)
+{
+	struct kite_node pn;
+	s32 hdr;
+
+	if (wifi_no_ba_test != 0) {
+		hdr = kite_rx_hdr_len(buf_id, band);
+		if (hdr == -1)
+			return buf_id;
+		/* the BSS is unknown here, pass 0 */
+		pkt_enqueue_bridge((u16)buf_id, len & 0xFFFF, hdr, band, 0);
+		return -1;
+	}
+
+	if (kite_rx_parse(buf_id, &pn, len, band) == -1)
+		return buf_id;
+	return kite_classify_pn(pn, buf_id, band);
+}
+
+/* In-order frames of an open BA session go straight to TDMA; any other
+ * frame, or counters on, takes kite_classify_pn after the parse. */
+static NPU_HOT __attribute__((noinline)) s32 kite_classify_fast(s32 buf_id,
+								 u32 len, u32 band)
+{
+	struct kite_node pn;
+	u32 e, last;
+
+	if (wifi_no_ba_test != 0 || (wifi_debug_flags & 4))
+		return kite_classify(buf_id, len, band);
+	if (kite_rx_parse(buf_id, &pn, len, band) == -1)
+		return buf_id;
+	if (pn.wcid == 0)
+		return kite_classify_pn(pn, buf_id, band);
+
+	if (wifi_dbdc_mode != 0 && pn.wcid > 150)
+		e = ba_table_a + 28 * (8 * (pn.wcid - 151) + pn.tid);
+	else if (wifi_dbdc_mode != 0 || band != 0)
+		e = ba_table_b + 28 * (8 * (pn.wcid - 1) + pn.tid);
+	else
+		e = ba_table_a + 28 * (8 * (pn.wcid - 1) + pn.tid);
+
+	/* ba_state_update has nothing to do after a non-A-MSDU frame */
+	if (*(u8 *)(e + 24) != 4 || (u8)(*(u8 *)(e + 22) - 2) <= 1 ||
+	    ((*(u16 *)(e + 18) + 1) & 0xFFF) != pn.sn ||
+	    ratelimit_table[band * 16 + pn.bss] != 0 || wifi_band_cap == 0 ||
+	    (wifi_force_to_cpu &&
+	     (band ? wifi_wait_band_5g : wifi_wait_band_2g) == 1))
+		return kite_classify_pn(pn, buf_id, band);
+
+	*(u8 *)(e + 25) = band;
+	if (tdma_tx_submit(pn.buf_id, (len - pn.hdr - 2) & 0xFFFF,
+			   wifi_pkt_va(pn.buf_id) + 2 + pn.hdr, band) != 0)
+		buf_id_free(0, band, pn.buf_id);
+
+	if (pn.amsdu <= 1) {
+		*(u16 *)(e + 18) = pn.sn;
+		/* only this hart queues frames, so an empty queue needs no lock */
+		if (*(u32 *)e != 0) {
+			last = ba_seq_scan((u32 *)e, pn.sn);
+			if (last != 0xFFFF)
+				*(u16 *)(e + 18) = last;
+		}
+		*(u32 *)(e + 12) = 0;
+	}
+	*(u8 *)(e + 22) = pn.amsdu;
+	*(u16 *)(e + 20) = pn.sn;
+	*(u8 *)(e + 23) = 0;
+	return -1;
+}
+#define kite_rx_classify	kite_classify_fast
+#else
+#define kite_rx_classify	kite_classify
+#endif
+
 /* ================================================================
  * Frames spanning several rx descriptors
  * ================================================================ */
@@ -586,7 +674,7 @@ static void kite_rx_2g(void)
 	if (old == -1)
 		return;
 	wifi_cnt_inc(0, 0xC);
-	r = kite_classify(old, len, 0);
+	r = kite_rx_classify(old, len, 0);
 	if (r == -1)
 		return;
 	if (pkt_forward(old, len & 0xFFFF, 0, 0, 0, 2, len & 0xFFFF,
@@ -659,7 +747,7 @@ static void kite_rx_5g(void)
 
 	/* no classifier core on AN7552: always classify here */
 	if (MAX_CORE_NUM <= 2 || !(kite_fast_flag() & 1)) {
-		r = kite_classify(old, len, 1);
+		r = kite_rx_classify(old, len, 1);
 		if (r == -1)
 			return;
 		if (pkt_forward(old, len & 0xFFFF, 0, 0, 1, 2, len & 0xFFFF,
