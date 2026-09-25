@@ -611,6 +611,11 @@ static void eagle_txq_drain(u32 band)
 	u16 ids[EAGLE_DRAIN_BATCH];
 	u16 seg_len;
 	u8 flags;
+#ifdef HAS_ASYNC_COPY
+	/* a frame's copy runs while the next one is read and claimed */
+	struct host_out o[2];
+	u32 k = 0, pend = 0, oidx = 0;
+#endif
 
 	do {
 		e = base + EAGLE_Q_ENTRY * idx;
@@ -622,17 +627,43 @@ static void eagle_txq_drain(u32 band)
 		flags = *(volatile u8 *)(e + 10);
 
 		if ((s32)buf_id >= 0 && seg_len != 0) {
+			u32 src = eagle_buf_phys(buf_id);
+			u32 info = *(volatile u32 *)eagle_buf_uncached(buf_id);
+			u16 wcid = *(volatile u16 *)(e + 4);
+			u16 orig = *(volatile u16 *)(e + 8);
+			u8 amsdu = *(volatile u8 *)(e + 11);
+
 			dbg.rxout++;
-			if (host_ring_submit(eagle_buf_phys(buf_id), seg_len, 0,
-					     *(volatile u16 *)(e + 4),
-					     *(volatile u8 *)(e + 11),
-					     flags >> 2,
-					     *(volatile u16 *)(e + 8),
-					     (flags >> 1) & 1,
-					     *(volatile u32 *)eagle_buf_uncached(buf_id)) != 0) {
+#ifdef HAS_ASYNC_COPY
+			if (pend == 0)
+				oidx = host_out_idx();
+			if (host_out_start(&o[k], pend ? &o[k ^ 1] : NULL,
+					   oidx, src, seg_len, wcid, amsdu,
+					   flags >> 2, orig, (flags >> 1) & 1,
+					   info) == 0) {
+				pend = 1;
+				oidx = o[k].next;
+				k ^= 1;
+			} else {
+				if (pend)
+					host_out_finish(&o[k ^ 1]);
+				pend = 0;
+				if (host_ring_submit(src, seg_len, 0, wcid,
+						     amsdu, flags >> 2, orig,
+						     (flags >> 1) & 1,
+						     info) != 0) {
+					dbg.rxoutfail++;
+					full = 1;
+				}
+			}
+#else
+			if (host_ring_submit(src, seg_len, 0, wcid, amsdu,
+					     flags >> 2, orig, (flags >> 1) & 1,
+					     info) != 0) {
 				dbg.rxoutfail++;
 				full = 1;
 			}
+#endif
 			ids[n++] = (u16)buf_id;
 		}
 
@@ -645,6 +676,10 @@ static void eagle_txq_drain(u32 band)
 		idx = (idx + 1 == EAGLE_TXQ_ENTRIES) ? 0 : idx + 1;
 	} while (--left != 0 && full == 0);
 
+#ifdef HAS_ASYNC_COPY
+	if (pend)
+		host_out_finish(&o[k ^ 1]);
+#endif
 	eagle_txq_ridx[band] = idx;
 	if (n != 0)
 		buf_id_return_n(ids, n);

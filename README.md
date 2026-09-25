@@ -168,6 +168,7 @@ Feature flags from `npu_config.h`:
 | `HAS_NPU_WIFI_TX` | AN7581 except MT7916, AN7583 eagle (host to NPU tx ring) |
 | `HAS_HOT_TEXT` | AN7552 kite, AN7583 eagle (per-packet code in one `.text.hot` block) |
 | `HAS_ID_BATCH` | AN7583 eagle (rx buffer ids and tx tokens move in batches, one mutex hold each) |
+| `HAS_ASYNC_COPY` | AN7583 eagle (host out ring copy overlaps the next frame's work) |
 | `HAS_LEAN_TRAP` | AN7583 eagle (trap entry saves only caller-saved registers) |
 
 ## Documentation

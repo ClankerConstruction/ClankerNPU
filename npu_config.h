@@ -87,6 +87,11 @@
 #define HAS_ID_BATCH
 #endif
 
+/* The out ring copy runs while the next frame is read and claimed */
+#if defined(AN7583) && defined(WIFI_EAGLE)
+#define HAS_ASYNC_COPY
+#endif
+
 /* The trap entry saves only the registers a C call may clobber.
  * AN7583 eagle takes a PPE buffer return interrupt per frame. */
 #if defined(AN7583) && defined(WIFI_EAGLE)

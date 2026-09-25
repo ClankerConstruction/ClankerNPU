@@ -46,6 +46,14 @@ so the valid bit lands last. The copy is capped at
 otherwise. If the entry two slots ahead is still valid, the ring counts
 as full and the call fails.
 
+With `HAS_ASYNC_COPY` (AN7583 eagle) the eagle drain splits this in two:
+`host_out_start` claims the slot, reads its buffer address, then
+finishes the previous frame and starts this frame's copy;
+`host_out_finish` waits, writes the words and publishes the index. The
+next frame is read and claimed while a copy runs. Only one copy is in
+flight at a time. With two in flight (channels 3 and 2) the host got
+damaged TCP streams, though every copy checked correct in isolation.
+
 ### In rings, host to NPU
 
 `HAS_NPU_WIFI_TX` only (AN7581 except MT7916, AN7583 eagle). Two rings
@@ -58,6 +66,25 @@ them into the tx staging ring.
 `bridge_dma_copy(ch, src, dst, len)` writes source, destination and
 `len << 16 | 0x23`, then spins on the channel's status bit and clears it.
 All addresses are physical.
+
+The engine is the SoC GDMA (`0x1FB30000`, 16 bytes per channel). Control
+word: bit 0 software mode, bit 1 enable, bits 5:3 burst size, bits
+31:16 length. `0x23` is the largest burst, 64 bytes; values 5 to 7 copy
+nothing and never set the done bit. Channels in use: 0 host tx frame
+and TXD (core 3), 1 TXD into the WiFi tx ring (core 2), 3 host adaptor
+out ring (core 3). Measured on AN7583:
+
+| copy | cycles |
+|---|---:|
+| 64 bytes | 280 |
+| 256 bytes | 906 |
+| 1500 bytes | 4760 (about 3.2 per byte, 250 MB/s) |
+| 1500 bytes, destination 2 bytes off | about 5200 |
+| two 1500-byte copies on two channels at once | 9500 |
+
+All channels share one engine: parallel copies take as long as the
+same copies in a row, and splitting one copy over two channels is
+slower.
 
 ## TDMA
 

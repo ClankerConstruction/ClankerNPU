@@ -109,6 +109,19 @@ int host_ring_submit(u32 buf_addr, u16 pkt_len, u32 band,
 		     u16 orig_len, u8 is_last, u32 info);
 #endif
 
+#ifdef HAS_ASYNC_COPY
+/* one out ring 0 slot whose copy is running */
+struct host_out {
+	u32 desc, dst, next, w0, w1, w2;
+};
+
+u32 host_out_idx(void);
+int host_out_start(struct host_out *o, struct host_out *prev, u32 idx,
+		   u32 buf_addr, u16 pkt_len, u16 wcid, u8 amsdu,
+		   u8 fwd_type, u16 orig_len, u8 is_last, u32 info);
+void host_out_finish(struct host_out *o);
+#endif
+
 /* ================================================================
  * npu_wifi_fwd.c
  * ================================================================ */

@@ -167,4 +167,71 @@ int host_ring_submit(u32 buf_addr, u16 pkt_len, u32 band,
 	}
 }
 
+#ifdef HAS_ASYNC_COPY
+/* bridge_dma_copy on channel 3, split at the wait */
+static inline void host_out_copy(u32 src, u32 dst, u32 len)
+{
+	REG32(DMA_COPY_SRC(3)) = src;
+	REG32(DMA_COPY_DST(3)) = dst;
+	REG32(DMA_COPY_CTRL(3)) = (len << 16) | 0x23;
+}
+
+static inline void host_out_wait(void)
+{
+	while (!(REG32(DMA_COPY_STATUS) & 8))
+		;
+	REG32(DMA_COPY_STATUS) = 8;
+}
+
+NPU_HOT u32 host_out_idx(void)
+{
+	return REG32(HOSTADPT_RX_DMA_IDX(0));
+}
+
+/* host_ring_submit for ring 0 in two steps, one copy in flight. -1:
+ * full ring or counters on, prev untouched; use host_ring_submit. */
+NPU_HOT int host_out_start(struct host_out *o, struct host_out *prev,
+			   u32 idx, u32 buf_addr, u16 pkt_len, u16 wcid,
+			   u8 amsdu, u8 fwd_type, u16 orig_len, u8 is_last,
+			   u32 info)
+{
+	u32 ring = hostadpt_tx_ring_base;
+	u32 check_idx = (idx + 2 > 511) ? idx - 510 : idx + 2;
+	volatile u32 *d = (volatile u32 *)(ring + idx * 24);
+	u32 dma_len = pkt_len;
+
+	if ((wifi_debug_flags & 4) ||
+	    (*(volatile u8 *)(ring + check_idx * 24) & 1))
+		return -1;
+	if (dma_len > HOSTADPT_BUFFER_LEN)
+		dma_len = orig_len < HOSTADPT_BUFFER_LEN ? orig_len :
+							   HOSTADPT_BUFFER_LEN;
+	o->desc = (u32)d;
+	o->dst = d[3];
+	if (prev)
+		host_out_finish(prev);
+	host_out_copy(buf_addr, o->dst, dma_len);
+
+	o->next = (idx + 1 < HOSTADPT_RING_SIZE) ? idx + 1 : 0;
+	o->w2 = info;
+	o->w1 = (wcid & 0xFFFF) | ((amsdu & 0x1F) << 16) |
+		((fwd_type & 0x3F) << 26);
+	o->w0 = 1 | ((orig_len & 0x3FFF) << 1) | ((pkt_len & 0x3FFF) << 15) |
+		((is_last & 1) << 29);
+	return 0;
+}
+
+/* word 0 carries the ready bit: store it last */
+NPU_HOT void host_out_finish(struct host_out *o)
+{
+	volatile u32 *d = (volatile u32 *)o->desc;
+
+	host_out_wait();
+	d[2] = o->w2;
+	d[1] = o->w1;
+	d[0] = o->w0;
+	REG32(HOSTADPT_RX_DMA_IDX(0)) = o->next;
+}
+#endif
+
 #endif /* HAS_WIFI */
