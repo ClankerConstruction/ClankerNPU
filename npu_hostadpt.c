@@ -64,8 +64,9 @@ static void host_ring_write_desc(u32 desc_addr, u32 buf_addr, u16 pkt_len,
 				 u16 wcid, u8 amsdu, u8 fwd_type,
 				 u16 orig_len, u8 is_last, u32 info)
 {
+	/* word 0 carries the ready bit: store it last */
+	volatile u32 *d = (volatile u32 *)desc_addr;
 	u32 dma_len;
-	u32 pkt_addr;
 
 	if (pkt_len <= HOSTADPT_BUFFER_LEN) {
 		dma_len = pkt_len;
@@ -79,21 +80,13 @@ static void host_ring_write_desc(u32 desc_addr, u32 buf_addr, u16 pkt_len,
 			(*(u32 *)(counter_base_tri + 0x30))++;
 	}
 
-	pkt_addr = *(u8 *)(desc_addr + 12) |
-		   ((u32)*(u8 *)(desc_addr + 13) << 8) |
-		   ((u32)*(u8 *)(desc_addr + 14) << 16) |
-		   ((u32)*(u8 *)(desc_addr + 15) << 24);
+	bridge_dma_copy(3, buf_addr, d[3], dma_len);
 
-	bridge_dma_copy(3, buf_addr, pkt_addr, dma_len);
-
-	*(u32 *)(desc_addr + 8) = info;
-	*(u32 *)(desc_addr + 4) = (wcid & 0xFFFF) |
-				   ((amsdu & 0x1F) << 16) |
-				   ((fwd_type & 0x3F) << 26);
-	*(u32 *)desc_addr = 1 |
-			    ((orig_len & 0x3FFF) << 1) |
-			    ((pkt_len & 0x3FFF) << 15) |
-			    ((is_last & 1) << 29);
+	d[2] = info;
+	d[1] = (wcid & 0xFFFF) | ((amsdu & 0x1F) << 16) |
+	       ((fwd_type & 0x3F) << 26);
+	d[0] = 1 | ((orig_len & 0x3FFF) << 1) | ((pkt_len & 0x3FFF) << 15) |
+	       ((is_last & 1) << 29);
 
 	if ((wifi_debug_flags & 4) && counter_base_tri)
 		(*(u32 *)(counter_base_tri + 0x38))++;

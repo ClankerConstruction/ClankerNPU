@@ -40,7 +40,8 @@ word 3   host buffer address, filled by the host
 ```
 
 `host_ring_submit` copies the frame into the host buffer with the DMA
-copy engine (channel 3), then writes words 0..2. The copy is capped at
+copy engine (channel 3), then writes words 2, 1 and 0, in that order,
+so the valid bit lands last. The copy is capped at
 1792 bytes on eagle and on parts with `HAS_NPU_WIFI_TX`, 3500 bytes
 otherwise. If the entry two slots ahead is still valid, the ring counts
 as full and the call fails.
