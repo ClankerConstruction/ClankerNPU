@@ -105,6 +105,9 @@ With the no-BA test flag set (SET_WAIT 9), every frame goes straight to
   otherwise one table per band.
 - Frames held in a window are 36-byte nodes from the node pool (type 4),
   indexed by two index pools (types 12 and 13).
+- SET_WAIT 4 packs an ADDBA as tid (bits 2:0), wcid (10:3), window
+  size (19:11) and start sequence number (31:20). The entry keeps the
+  size at +16 and the SSN at +18; both 0 resets it to window 8.
 - An entry moves from "ADDBA seen" (state 3) to "window running"
   (state 4) on its first frame, which sets the window start.
 - In-order frames and frames that close a gap are released in sequence.

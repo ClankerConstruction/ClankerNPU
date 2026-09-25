@@ -559,8 +559,8 @@ void __attribute__((noinline)) npu_set_bar_info(u32 band, u32 packed)
 void __attribute__((noinline)) npu_set_ba_entry(u32 band, u32 packed)
 {
 	u32 tid = packed & 7;
-	u32 win_size = packed >> 20;
-	u32 ssn = (packed >> 11) & 0x1FF;
+	u32 win_size = (packed >> 11) & 0x1FF;
+	u32 ssn = packed >> 20;
 	u32 wcid = (u8)(packed >> 3);
 	u32 entry_addr;
 
@@ -591,7 +591,7 @@ void __attribute__((noinline)) npu_set_ba_entry(u32 band, u32 packed)
 		ba_flush_entry((u32 *)entry_addr);
 		hw_mutex_lock(ba_mutex_5g);
 
-		if (win_size == 0) {
+		if ((win_size | ssn) == 0) {
 			*(u8 *)(entry_addr + 25) = (u8)band;
 			*(u32 *)(entry_addr + 16) = 8;
 			*(u32 *)(entry_addr + 20) = 0;
@@ -629,7 +629,7 @@ void __attribute__((noinline)) npu_set_ba_entry(u32 band, u32 packed)
 		else
 			hw_mutex_lock(ba_mutex_2g);
 
-		if (win_size == 0) {
+		if ((win_size | ssn) == 0) {
 			*(u32 *)(entry_addr + 16) = 8;
 			*(u32 *)(entry_addr + 20) = 0;
 			*(u16 *)(entry_addr + 24) = 0;
