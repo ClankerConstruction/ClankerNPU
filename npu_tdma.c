@@ -438,12 +438,116 @@ static u32 *tdma_stats_base(u32 band)
 /* WiFi -> wired. Eight-byte descriptors, 1024 to a ring: word 0 carries
  * the frame length in bits 12:0 and the buffer token in 28:14, word 1
  * the buffer itself. */
+#if defined(AN7552) && defined(WIFI_KITE)
+/* Hart 1 sends every rx frame here; hart 0's BA mail handlers send the
+ * frames a flush releases, so both hold mutex 0. */
+static u32 tdma_tx_free[2];
+
+/* more than four free slots: their count, or 0 when the ring stays full */
+static u32 __attribute__((noinline)) tdma_tx_room(u32 band, u32 sw_idx)
+{
+	volatile u32 *hw_idx_reg = (volatile u32 *)(TDMA_TX_RING0_DMA_IDX +
+						    16 * band);
+	u32 retries = 5;
+	u32 hw_idx, free_slots;
+
+	while (1) {
+		hw_idx = *hw_idx_reg;
+		free_slots = (sw_idx < hw_idx) ? (hw_idx - sw_idx - 1)
+					       : (1023 - sw_idx + hw_idx);
+		if (free_slots > 4)
+			return free_slots;
+		{ volatile u32 i; for (i = 0; i < 300; i++) ; }
+		if ((wifi_debug_flags & 4))
+			(*(tdma_stats_base(band) + 63))++;
+		if (--retries == 0) {
+			NDBG_CNT(NC_TDMA_TX_FULL);
+			NDBG_TRACE(NDBG_TDMA, band, sw_idx, hw_idx);
+			if ((wifi_debug_flags & 4))
+				(*(tdma_stats_base(band) + 64))++;
+			return 0;
+		}
+	}
+}
+
+/* the full submit: waits for room and counts */
+static int __attribute__((noinline)) tdma_tx_submit_slow(u32 token,
+							 u32 pkt_len,
+							 u32 buf_addr, u32 band)
+{
+	u32 base = (band != 0) ? tdma_tx_ring1_base : tdma_tx_ring0_base;
+	u32 sw_idx, next, w0;
+	u32 *desc;
+
+	if (base == 0)
+		return -1;
+	hw_mutex_take(0);
+	sw_idx = tdma_tx_sw_idx[band];
+	/* the count read last only drops as the ring fills */
+	if (tdma_tx_free[band] <= 4) {
+		tdma_tx_free[band] = tdma_tx_room(band, sw_idx);
+		if (tdma_tx_free[band] == 0) {
+			hw_mutex_give(0);
+			return -1;
+		}
+	}
+	tdma_tx_free[band]--;
+
+	desc = (u32 *)(base + 8 * sw_idx);
+	w0 = (desc[0] & 0x3FFFFFFF) | 0x40000000;
+	w0 = (w0 & 0xC0001FFF) | (token << 14);
+	if (pkt_len < 60) {
+		npu_memset((void *)(buf_addr + pkt_len), 0, 60 - pkt_len);
+		pkt_len = 60;
+	}
+	next = (sw_idx > 0x3FE) ? 0 : sw_idx + 1;
+	if ((wifi_debug_flags & 4))
+		(*(tdma_stats_base(band) + 79))++;
+
+	desc[1] = (buf_addr & 0x3FFFFFFF) | 0x80000000;
+	tdma_tx_sw_idx[band] = next;
+	desc[0] = (w0 & 0xFFFFE000) | (pkt_len & 0x1FFF);
+	REG32(TDMA_TX_RING0_IDX + 16 * band) = next;
+	hw_mutex_give(0);
+	return 0;
+}
+
+/* makes no calls, so it saves no registers; word 0 is rebuilt whole */
+NPU_HOT int tdma_tx_submit(u32 token, u32 pkt_len, u32 buf_addr, u32 band)
+{
+	u32 base = (band != 0) ? tdma_tx_ring1_base : tdma_tx_ring0_base;
+	u32 sw_idx, next;
+	u32 *desc;
+	u8 *pad;
+
+	if (base == 0 || (wifi_debug_flags & 4))
+		return tdma_tx_submit_slow(token, pkt_len, buf_addr, band);
+	hw_mutex_take(0);
+	if (tdma_tx_free[band] <= 4) {
+		hw_mutex_give(0);
+		return tdma_tx_submit_slow(token, pkt_len, buf_addr, band);
+	}
+	tdma_tx_free[band]--;
+
+	for (pad = (u8 *)(buf_addr + pkt_len); pkt_len < 60; pkt_len++)
+		*pad++ = 0;
+	sw_idx = tdma_tx_sw_idx[band];
+	desc = (u32 *)(base + 8 * sw_idx);
+	next = (sw_idx > 0x3FE) ? 0 : sw_idx + 1;
+	desc[1] = (buf_addr & 0x3FFFFFFF) | 0x80000000;
+	tdma_tx_sw_idx[band] = next;
+	desc[0] = 0x40000000 | (token << 14) | (pkt_len & 0x1FFF);
+	REG32(TDMA_TX_RING0_IDX + 16 * band) = next;
+	hw_mutex_give(0);
+	return 0;
+}
+#else
 #ifdef WIFI_KITE
 static u32 tdma_tx_mutex[2];
 #endif
 
-NPU_HOT int __attribute__((noinline)) tdma_tx_submit(u32 token, u32 pkt_len,
-						    u32 buf_addr, u32 band)
+int __attribute__((noinline)) tdma_tx_submit(u32 token, u32 pkt_len,
+					     u32 buf_addr, u32 band)
 {
 	u32 base = (band != 0) ? tdma_tx_ring1_base : tdma_tx_ring0_base;
 	volatile u32 *hw_idx_reg = (volatile u32 *)(TDMA_TX_RING0_DMA_IDX +
@@ -457,13 +561,8 @@ NPU_HOT int __attribute__((noinline)) tdma_tx_submit(u32 token, u32 pkt_len,
 		return -1;
 
 #ifdef WIFI_KITE
-#ifdef AN7552
-	/* core 0 mail handlers release BA frames while core 1 sends */
-	u32 locked = 1;
-#else
 	/* pipeline mode: cores 1 and 2 both send */
 	u32 locked = wifi_debug_flags & 1;
-#endif
 
 	if (locked) {
 		hw_mutex_lock(tdma_tx_mutex);
@@ -526,6 +625,7 @@ NPU_HOT int __attribute__((noinline)) tdma_tx_submit(u32 token, u32 pkt_len,
 #endif
 	return 0;
 }
+#endif
 #endif /* HAS_WIFI */
 
 /* Software buffer manager init (non-TDMA path) */

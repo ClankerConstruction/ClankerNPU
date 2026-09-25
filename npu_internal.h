@@ -40,6 +40,22 @@ int hw_mutex_unlock(u32 *desc);
 int hw_mutex_lock_pri(u32 *desc);
 int hw_mutex_unlock_pri(u32 *desc);
 
+/* hw_mutex_lock/unlock on a fixed id, inline for per-packet paths */
+static inline __attribute__((always_inline)) void hw_mutex_take(u32 id)
+{
+	u32 hart = get_hartid(), off = (id * 4) & HW_MUTEX_OFF_MASK;
+
+	REG32(HW_MUTEX_ACQ(off)) = (hart << 8) | 0x40;
+	(void)REG32(HW_MUTEX_STATUS(hart, off));
+}
+
+static inline __attribute__((always_inline)) void hw_mutex_give(u32 id)
+{
+	u32 hart = get_hartid();
+
+	REG32(HW_MUTEX_REL(hart, (id * 4) & HW_MUTEX_OFF_MASK)) = hart << 8;
+}
+
 /* npu_plic.c */
 void plic_init(void);
 void plic_enable(u32 src);
@@ -620,6 +636,7 @@ struct ndbg {
 };
 
 #define ndbg	((volatile struct ndbg *)NDBG_BASE)
+
 
 void npu_dbg_init(void);
 void npu_dbg_service(u32 hart);
