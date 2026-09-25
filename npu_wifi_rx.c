@@ -704,20 +704,24 @@ void __attribute__((noreturn)) kite_core1_loop(void)
 	npu_dbg_loop(NDBG_TAG('K', 'R', 'X', '1'));
 	while (1) {
 		npu_dbg_poll();
+#if MAX_CORE_NUM > 2
 		if (rxd_5g_init_done != 0)
 			goto rx_5g;
-#if MAX_CORE_NUM > 2
 		while (rxd_2g_init_done != 0 &&
 		       kite_dbdc_model(kite_driver_model())) {
-#else
-		while (rxd_2g_init_done != 0) {
-#endif
 			kite_rx_2g();
 			if (rxd_5g_init_done != 0) {
 rx_5g:
 				kite_rx_5g();
 			}
 		}
+#else
+		/* one frame per band a pass keeps the heartbeat moving */
+		if (rxd_2g_init_done != 0)
+			kite_rx_2g();
+		if (rxd_5g_init_done != 0)
+			kite_rx_5g();
+#endif
 	}
 }
 

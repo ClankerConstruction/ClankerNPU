@@ -93,6 +93,7 @@ Hart `n` starts at `0x1E906880 + n * 0x30`:
 | `EC0L` | eagle AN7552 core 0: queue drain and refill |
 | `ERFL` | eagle rx refill |
 | `KRX1`, `KRX2`, `KPIP` | kite rx, 2.4 GHz rx, classifier |
+| `KNOD` | kite host ring drain (hart 0 on AN7552, core 3 on AN758x) |
 | `DBA5` | GPON DBA |
 | `IDLE` | nothing to run; serves debug commands |
 

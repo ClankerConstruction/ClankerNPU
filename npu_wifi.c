@@ -97,7 +97,9 @@ int wifi_mail_dispatch(u32 base, u32 cnt)
 /* hand received frames to the host until the debug stop bit */
 static void kite_node_drain_loop(void)
 {
+	npu_dbg_loop(NDBG_TAG('K', 'N', 'O', 'D'));
 	do {
+		npu_dbg_poll();
 		if (rxd_5g_init_done != 0) {
 			if (hostadpt_tx_ring_ready == 1)
 				rxnode_drain(1);
