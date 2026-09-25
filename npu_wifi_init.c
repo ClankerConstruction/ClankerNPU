@@ -356,6 +356,8 @@ alloc_5g:
 
 pipeline_init:
 	wifi_pkt_queue_init(band);
+	/* no classifier core on AN7552: no pipeline */
+#if MAX_CORE_NUM > 2
 	npu_printf("[NPU]  %s...\n", "pipeline_pkt_queue_init");
 	{
 		u32 *p;
@@ -370,6 +372,7 @@ pipeline_init:
 			p = (u32 *)((u8 *)p + 8);
 		}
 	}
+#endif
 
 	counter_init(band);
 	wcid_counter_init(band);

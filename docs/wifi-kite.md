@@ -133,6 +133,8 @@ Fast flag bit 0 (SET_WAIT 17) splits 5 GHz work across two cores:
 core 1 only refills the ring and queues `{buffer id, length}` into the
 pipeline ring (SRAM type 21, 3200 entries of 8 bytes), and core 2
 classifies them. TDMA tx then takes a mutex because both cores submit.
+AN7552 has no core 2 and no pipeline: core 1 always classifies, and
+type 21 is never allocated.
 
 ## Returning unforwarded frames
 

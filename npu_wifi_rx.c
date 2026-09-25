@@ -41,7 +41,9 @@ struct kite_node {
 };
 
 u32 wifi_pipeline_base;
+#if MAX_CORE_NUM > 2
 static u16 wifi_pipeline_widx;
+#endif
 static u8 rxd_2g_kick;
 
 /* ================================================================
@@ -604,7 +606,9 @@ static void kite_rx_5g(void)
 	u32 ring = rxd_base_5g;
 	u32 len, n, desc, next;
 	s32 id, old = -1, r;
+#if MAX_CORE_NUM > 2
 	volatile u32 *slot;
+#endif
 
 	wifi_cnt_inc(1, 4);
 	if (wifi_no_ba_test == 0 &&
@@ -656,7 +660,8 @@ static void kite_rx_5g(void)
 	if (old == -1)
 		return;
 
-	if (!(kite_fast_flag() & 1)) {
+	/* no classifier core on AN7552: always classify here */
+	if (MAX_CORE_NUM <= 2 || !(kite_fast_flag() & 1)) {
 		r = kite_classify(old, len, 1);
 		if (r == -1)
 			return;
@@ -668,6 +673,7 @@ static void kite_rx_5g(void)
 		return;
 	}
 
+#if MAX_CORE_NUM > 2
 	/* pipeline mode: core 2 classifies */
 	slot = (volatile u32 *)(wifi_pipeline_base + wifi_pipeline_widx * 8);
 	if (*slot != (u32)-1) {
@@ -685,6 +691,7 @@ static void kite_rx_5g(void)
 	*slot = old;
 	wifi_pipeline_widx = (wifi_pipeline_widx + 1 == KITE_PIPE_ENTRIES) ?
 			     0 : wifi_pipeline_widx + 1;
+#endif
 }
 
 /* ================================================================
