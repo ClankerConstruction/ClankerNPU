@@ -306,7 +306,7 @@ void tdma_tx_init(void)
 		   TDMA_INT_CFG0, REG32(TDMA_INT_CFG0));
 
 	/* global TDMA config */
-#if defined(AN7552) && defined(WIFI_EAGLE)
+#ifdef AN7552
 	/* three ORs, no FC_CFG0/1 */
 	REG32(TDMA_GLB_CFG) |= 1;
 	REG32(TDMA_GLB_CFG) |= 0x40;

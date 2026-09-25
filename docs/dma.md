@@ -81,6 +81,10 @@ five slots are free.
 `0x02020202`/`0x11` for ring 1 to `0x1FB50A2C`/`0x1FB50A28`. Bit 0 of
 `0x1FB50A28` does not read back, so the log shows `=0` and `=10`.
 
+`TDMA_GLB_CFG` (`0x1FB50A04`): AN7552 only ORs in `0x1`, `0x40` and
+`0x30`. AN758x also sets bits 22 and 23, sets `0x3000` in bits 13:11 and
+ORs `0x40004000` into `TDMA_FC_CFG0` and `TDMA_FC_CFG1`.
+
 Flow control: on chip family 15 (AN7552) `TDMA_FC_CFG0 = 0x80048004`
 and `0x1FB501BC = 0x00EB00EA`; elsewhere `TDMA_FC_CFG2 = 3`.
 
