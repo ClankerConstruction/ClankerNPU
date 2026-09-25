@@ -119,6 +119,7 @@ file. Convert the address to host view before reading it.
 | `EDBG` | eagle datapath counters, `struct eagle_dbg` in `npu_wifi.h` |
 | `KFLG` | kite debug flags: bit 2 turns the kite counter blocks on |
 | `KC2G`, `KC5G` | variables holding the kite 2.4 GHz and 5 GHz counter block addresses |
+| `PROF` | profile block, `PROF=1` builds only ([Profiling](#profiling)) |
 
 ### Counters
 
@@ -168,6 +169,7 @@ packets.
 | 9 | `BRIDGE` | `arg0` 0 dump, 1 reset, 2 flush reassembly | console (tunnel parts) |
 | 10 (`0xA`) | `SRAM` | | SRAM allocation table to the console |
 | 11 (`0xB`) | `CSR` | `arg0` 0 `mstatus`, 1 `mie`, 2 `mip`, 3 `mtvec`, 4 `mcycle`, 5 `minstret`, 6 `mhartid` | `ret0` |
+| 12 (`0xC`) | `PROF` | see [Profiling](#profiling); `PROF=1` builds only, status 1 otherwise | |
 
 `status`: 0 done, 1 unknown command, 2 bad argument, 3 not built for
 this part. `READ`, `WRITE` and `COPY` take the NPU's own view, so they
@@ -219,6 +221,133 @@ ring of hart `n` starts at `0x1E906C00 + n * 0x100` and holds the last
 next slot. `TRACE` prints every ring in order.
 
 The `NPUDBG=1` build starts with print bits 1 and 15 set.
+
+## Profiling
+
+`make PROF=1` builds the profiler into the image. Without it, no code or
+data of it exists: the images are byte-identical to a build without the
+option. It measures two things:
+
+- **Section timers.** Each `NPU_PROF` site times one step of a hart's
+  loop with `mcycle` and `minstret`.
+- **PC sampling.** On every pass of its loop, one hart reads another
+  hart's live PC into a 256-bucket histogram.
+
+The profile block sits at the `PROF` address of the symbol table. The
+symbol table is at `0x1E906A00` (`0x1E903200` on AN7552); clear the top
+three bits of the address before reading it.
+
+| offset | field |
+|---:|---|
+| `0x00` | sampling hart + 1; 0 when sampling is off |
+| `0x04` | target hart, whose PC is sampled |
+| `0x08` | window base |
+| `0x0C` | bucket shift |
+| `0x10` | samples taken |
+| `0x14` | samples outside the window |
+| `0x20 + n * 0x20` | section `n` |
+
+| section offset | field |
+|---:|---|
+| `+0x00` | calls that did work |
+| `+0x04` | units done in them |
+| `+0x08` | their cycles |
+| `+0x0C` | their instructions retired |
+| `+0x10` | calls that found no work |
+| `+0x14` | their cycles |
+| `+0x18` | cycles of the slowest working call |
+
+A call did work when the unit counter of the section moved.
+
+| derived value | formula |
+|---|---|
+| cycles per unit | `+0x08 / +0x04` |
+| CPI | `+0x08 / +0x0C` |
+| cost of an empty poll | `+0x14 / +0x10` |
+| worst single call (latency) | `+0x18` |
+
+| n | section | hart | step timed | unit |
+|---:|---|---|---|---|
+| 0 | `ERXD` | eagle rxdmad hart | one rxdmad descriptor | descriptor |
+| 1 | `ELAN` | eagle 2 | TDMA rx ring into the WiFi tx ring | frame |
+| 2 | `ETXP` | eagle 2 | one staged host frame into the WiFi tx ring | frame |
+| 3 | `EHIN` | eagle 3 | host adaptor in rings, both bands | frame |
+| 4 | `EHOUT` | eagle 3 (0 on AN7552) | packet queues to the host adaptor | frame |
+| 5 | `ETXD` | eagle 3 | tx done ring | report |
+| 6 | `ERFL` | eagle 4 (0 on AN7552) | rx ring refill | buffer |
+| 8 | `KRX2G` | kite 1 (2 when not DBDC) | one 2.4 GHz rx step | frame |
+| 9 | `KRX5G` | kite 1 | one 5 GHz rx step | frame |
+
+The eagle units are the `EDBG` counters: `rxd`, `lan`, `push`, `in`,
+`rxout`, `txdone`, `refill`. The kite units are the moves of the rx
+ring's cpu index.
+
+A section adds its own cost: two CSR reads before the step and a call
+after it. Compare `PROF=1` builds with each other, not with a production
+build.
+
+### PC sampling
+
+The `PROF` command (12) controls sampling. Send it to any hart with a
+moving heartbeat.
+
+| `arg0` | effect |
+|---:|---|
+| 0 | stop sampling; zero the sections and the histogram |
+| 1 | the same, then start sampling. `arg1` = `target \| sampler << 8 \| shift << 16`; `arg2` (`0x1E906858`) = window base, 0 for `0x84000000` |
+| 2 | stop sampling and keep the results |
+
+Bucket `b` counts the samples whose PC falls in
+`[base + (b << shift), base + ((b + 1) << shift))`. The buckets are the
+256 words of the copy buffer (`0x1E907400`, `0x1E903C00` on AN7552), so
+a `COPY` command overwrites them. The sampling hart samples once per
+pass of its own loop, so its loop slows down while it samples. Pick a
+hart whose loop runs all the time and that is not the one under test:
+on AN7583, hart 0 (`TUNL`) when there is no tunnel traffic.
+
+Two passes find the hot code:
+
+1. Shift 8 over `0x84000000` covers 64 KB, which is the whole image.
+   One bucket spans 256 bytes, which can hold several small functions.
+2. Shift 2 over the hottest bucket's 1 KB gives one bucket per
+   instruction pair.
+
+To name a bucket, look up its address in `build/<variant>/firmware.dis`
+of the same build, or run
+`riscv64-unknown-elf-addr2line -f -e firmware.elf ADDR`.
+
+### Example
+
+AN7583 + MT7993, 2.4 GHz TCP from WiFi to LAN at 237 Mbit/s: the
+rxdmad hart is sampled from hart 0, first over the whole image, and
+the commands are sent to hart 3.
+
+```sh
+sys memwl 1e906850 1; sys memwl 1e906854 80001; sys memwl 1e906858 0
+sys memwl 1e906848 3; sys memwl 1e90684c c
+# ... traffic ...
+sys memwl 1e906850 2; sys memwl 1e90684c c
+sys memory 1e906a00 80        # symbol table: find tag 50524f46 (PROF)
+sys memory 1e903fe8 220       # profile block at PROF & 0x1fffffff
+sys memory 1e907400 400       # histogram
+```
+
+| section | units | cycles/unit | CPI | slowest | empty poll |
+|---|---:|---:|---:|---:|---:|
+| `ERXD` | 205941 | 606 | 2.33 | 1044 | 119 |
+| `ERFL` | 205941 | 691 | 3.37 | 1758 | 118 |
+
+Nearly all samples land in the bucket at `0x84006900`. Zoomed in at
+shift 2 on that bucket, 98% are in `eagle_delay`: the rxdmad hart is
+idle 98% of the time at this rate.
+
+### Adding a section
+
+Wrap the loop step in `NPU_PROF(section, counter, step)`, where `counter`
+is an expression that grows by the number of units the step completes.
+When the step completes at most one unit and the counter wraps, such as
+a ring index, use `NPU_PROF1`. Take a free number from the `NP_*` list in
+`npu_internal.h`, below `NP_MAX`, and add it to the table above.
 
 ## Troubleshooting
 

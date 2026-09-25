@@ -637,6 +637,51 @@ struct ndbg {
 
 #define ndbg	((volatile struct ndbg *)NDBG_BASE)
 
+/* profile sections, PROF=1 builds */
+enum {
+	NP_ERXD, NP_ELAN, NP_ETXP, NP_EHIN, NP_EHOUT, NP_ETXD, NP_ERFL,
+	NP_KRX2G = 8, NP_KRX5G,
+	NP_MAX = 16,
+};
+
+#ifdef NPU_PROFILE
+struct npu_prof_sec {
+	u32 calls, units, cycles, instret;	/* calls that did work */
+	u32 idle_calls, idle_cycles;		/* calls that found none */
+	u32 max_cycles, rsv;
+};
+
+struct npu_prof {
+	u32 sampler;	/* hart + 1 that samples, 0 off */
+	u32 target;	/* hart whose PC is sampled */
+	u32 base;	/* first address of the histogram window */
+	u32 shift;	/* bucket = (pc - base) >> shift */
+	u32 samples, outside;
+	u32 rsv[2];
+	struct npu_prof_sec sec[NP_MAX];
+};
+
+extern volatile struct npu_prof npu_prof;
+void npu_prof_add(u32 sec, u32 c0, u32 i0, u32 units);
+void npu_prof_sample(void);
+
+/* time stmt; units: how far cnt moved (NPU_PROF1: 1 if it moved) */
+#define NPU_PROF(sec, cnt, stmt) do {					\
+	u32 _pc = csr_read(mcycle), _pi = csr_read(minstret);		\
+	u32 _pu = (u32)(cnt);						\
+	stmt;								\
+	npu_prof_add((sec), _pc, _pi, (u32)(cnt) - _pu);		\
+} while (0)
+#define NPU_PROF1(sec, cnt, stmt) do {					\
+	u32 _pc = csr_read(mcycle), _pi = csr_read(minstret);		\
+	u32 _pu = (u32)(cnt);						\
+	stmt;								\
+	npu_prof_add((sec), _pc, _pi, (u32)(cnt) != _pu);		\
+} while (0)
+#else
+#define NPU_PROF(sec, cnt, stmt)	do { stmt; } while (0)
+#define NPU_PROF1(sec, cnt, stmt)	do { stmt; } while (0)
+#endif
 
 void npu_dbg_init(void);
 void npu_dbg_service(u32 hart);
@@ -649,6 +694,10 @@ static inline void npu_dbg_poll(void)
 	u32 h = get_hartid();
 
 	ndbg->hart[h].beat++;
+#ifdef NPU_PROFILE
+	if (npu_prof.sampler == h + 1)
+		npu_prof_sample();
+#endif
 	if (ndbg->cmd != 0 && ndbg->cmd_hart == h)
 		npu_dbg_service(h);
 }

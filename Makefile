@@ -15,6 +15,8 @@ MAILTRACE ?= 0
 NPUTX ?= 1
 # 1 starts with the stats and WiFi print bits of the debug block set
 NPUDBG ?= 0
+# 1 builds the profiler: section timers and PC sampling (docs/debug.md)
+PROF ?= 0
 # git short hash in the boot version line; pin it to compare images
 GITREV ?= $(shell git describe --always --dirty --abbrev=7 2>/dev/null || echo nogit)
 
@@ -25,7 +27,8 @@ CFLAGS  := $(ARCH) -Os -ffunction-sections -fdata-sections \
            -D$(SOC) -D$(WIFI) -DNPU_WIFI_NAME='"$(WIFI)"' \
            -DNPU_GIT_REV='"$(GITREV)"' $(if $(filter 1,$(MAILTRACE)),-DNPU_MAIL_TRACE) \
            $(if $(filter 0,$(NPUTX)),-DEAGLE_NO_TX_PUSH) \
-           $(if $(filter 1,$(NPUDBG)),-DNPU_DATAPATH_DBG)
+           $(if $(filter 1,$(NPUDBG)),-DNPU_DATAPATH_DBG) \
+           $(if $(filter 1,$(PROF)),-DNPU_PROFILE)
 ASFLAGS := $(ARCH) -D$(SOC) -D$(WIFI)
 LIBGCC  := $(shell $(CC) $(ARCH) -print-libgcc-file-name)
 LDFLAGS := -m elf32lriscv -T link.ld -nostdlib --gc-sections --relax \

@@ -16,7 +16,7 @@
 enum {
 	NDBG_CMD_PING = 1, NDBG_CMD_READ, NDBG_CMD_WRITE, NDBG_CMD_COPY,
 	NDBG_CMD_HEXDUMP, NDBG_CMD_STATUS, NDBG_CMD_CLEAR, NDBG_CMD_TRACE,
-	NDBG_CMD_BRIDGE, NDBG_CMD_SRAM, NDBG_CMD_CSR,
+	NDBG_CMD_BRIDGE, NDBG_CMD_SRAM, NDBG_CMD_CSR, NDBG_CMD_PROF,
 };
 
 enum { NDBG_OK, NDBG_EUNKNOWN, NDBG_EARG, NDBG_ENOTSUP };
@@ -71,6 +71,9 @@ void npu_dbg_init(void)
 #endif
 #ifdef WIFI_EAGLE
 	ndbg_sym(i++, NDBG_TAG('E', 'D', 'B', 'G'), (u32)&dbg);
+#endif
+#ifdef NPU_PROFILE
+	ndbg_sym(i++, NDBG_TAG('P', 'R', 'O', 'F'), (u32)&npu_prof);
 #endif
 #ifdef WIFI_KITE
 	ndbg_sym(i++, NDBG_TAG('K', 'F', 'L', 'G'), (u32)&wifi_debug_flags);
@@ -194,6 +197,66 @@ static u32 ndbg_csr(u32 idx, u32 *val)
 	return NDBG_OK;
 }
 
+#ifdef NPU_PROFILE
+volatile struct npu_prof npu_prof;
+
+void npu_prof_add(u32 sec, u32 c0, u32 i0, u32 units)
+{
+	volatile struct npu_prof_sec *s = &npu_prof.sec[sec];
+	u32 c = (u32)csr_read(mcycle) - c0;
+	u32 i = (u32)csr_read(minstret) - i0;
+
+	if (units == 0) {
+		s->idle_calls++;
+		s->idle_cycles += c;
+		return;
+	}
+	s->calls++;
+	s->units += units;
+	s->cycles += c;
+	s->instret += i;
+	if (c > s->max_cycles)
+		s->max_cycles = c;
+}
+
+/* one PC sample of the target hart into the copy buffer */
+void npu_prof_sample(void)
+{
+	u32 b = (REG32(NPU_CSR_PC(npu_prof.target)) - npu_prof.base) >>
+		npu_prof.shift;
+
+	npu_prof.samples++;
+	if (b < 256)
+		ndbg->buf[b]++;
+	else
+		npu_prof.outside++;
+}
+
+/* 0 stop and clear, 1 clear and sample, 2 stop */
+static u32 npu_prof_cmd(u32 op, u32 a1, u32 a2)
+{
+	volatile u32 *p = (volatile u32 *)&npu_prof;
+	u32 i;
+
+	if (op > 2 || (op == 1 && (a1 & 0xFF) >= MAX_CORE_NUM))
+		return NDBG_EARG;
+	npu_prof.sampler = 0;
+	if (op == 2)
+		return NDBG_OK;
+	for (i = 0; i < sizeof(npu_prof) / 4; i++)
+		p[i] = 0;
+	for (i = 0; i < 256; i++)
+		ndbg->buf[i] = 0;
+	if (op == 1) {
+		npu_prof.target = a1 & 0xFF;
+		npu_prof.shift = (a1 >> 16) & 31;
+		npu_prof.base = a2 ? a2 : 0x84000000;
+		npu_prof.sampler = ((a1 >> 8) & 0xFF) + 1;
+	}
+	return NDBG_OK;
+}
+#endif
+
 /* host command; runs on hart cmd_hart from its main loop */
 void npu_dbg_service(u32 hart)
 {
@@ -256,6 +319,11 @@ void npu_dbg_service(u32 hart)
 		st = ndbg_csr(a0, &v);
 		ndbg->ret[0] = v;
 		break;
+#ifdef NPU_PROFILE
+	case NDBG_CMD_PROF:
+		st = npu_prof_cmd(a0, a1, ndbg->arg[2]);
+		break;
+#endif
 	default:
 		st = cmd <= NDBG_CMD_CSR ? NDBG_ENOTSUP : NDBG_EUNKNOWN;
 		break;

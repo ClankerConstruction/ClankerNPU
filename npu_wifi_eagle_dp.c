@@ -979,6 +979,7 @@ static void eagle_rx_ring_sweep(u32 band)
 void eagle_rxdmad_loop(void)
 {
 	u8 chaining = 0;
+	int empty;
 
 	while (eagle_tx_en == 0 || eagle_rx_en == 0)
 		;
@@ -997,7 +998,9 @@ void eagle_rxdmad_loop(void)
 			eagle_delay(10000);
 		}
 		eagle_rx_busy = 1;
-		if (eagle_rxdmad_handle(&chaining) != 0)
+		NPU_PROF(NP_ERXD, dbg.rxd,
+			 empty = eagle_rxdmad_handle(&chaining));
+		if (empty != 0)
 			eagle_delay(500);
 	}
 }
@@ -1014,6 +1017,7 @@ void __attribute__((noreturn)) eagle_tx_fast_path(void)
 	u8 chaining = 0;
 	u16 dma[2] = { 0, 0 };
 	u32 band, cpu, free;
+	int empty;
 
 	while (eagle_init_done == 0 || eagle_fastpath_en == 0 ||
 	       eagle_txq_state != 3)
@@ -1043,7 +1047,9 @@ void __attribute__((noreturn)) eagle_tx_fast_path(void)
 
 		if (eagle_rxdmad_on_core2) {
 			eagle_rx_busy = 1;
-			if (eagle_rxdmad_handle(&chaining) != 0)
+			NPU_PROF(NP_ERXD, dbg.rxd,
+				 empty = eagle_rxdmad_handle(&chaining));
+			if (empty != 0)
 				eagle_delay(500);
 		}
 
@@ -1057,10 +1063,12 @@ void __attribute__((noreturn)) eagle_tx_fast_path(void)
 			}
 			while (free > EAGLE_TX_RING_ROOM) {
 				free--;
-				eagle_tx_ring_push(band);
+				NPU_PROF(NP_ETXP, dbg.push[band],
+					 eagle_tx_ring_push(band));
 				if (free == EAGLE_TX_RING_ROOM)
 					break;
-				eagle_tdma_to_wifi(band, free - 6);
+				NPU_PROF(NP_ELAN, dbg.lan[0] + dbg.lan[1],
+					 eagle_tdma_to_wifi(band, free - 6));
 				if (free <= 129)
 					break;
 			}
@@ -1074,6 +1082,7 @@ void __attribute__((noreturn)) eagle_tx_fast_path(void)
 void __attribute__((noreturn)) eagle_core3_loop(void)
 {
 	u32 started = 0;
+	int done;
 #ifdef AN758X
 	u32 t300 = timer_raw_tick;
 #endif
@@ -1103,17 +1112,17 @@ void __attribute__((noreturn)) eagle_core3_loop(void)
 			continue;
 
 #ifdef HAS_NPU_WIFI_TX
-		eagle_hostadpt_drain(0);
-		eagle_hostadpt_drain(1);
+		NPU_PROF(NP_EHIN, dbg.in[0] + dbg.in[1],
+			 eagle_hostadpt_drain(0); eagle_hostadpt_drain(1));
 #endif
 		if (eagle_rx_ring_init_done[0] != 0 &&
 		    eagle_rx_ring_init_done[1] != 0 &&
-		    hostadpt_tx_ring_ready == 1) {
-			eagle_txq_drain(0);
-			eagle_txq_drain(1);
-			eagle_mseg_drain(1);
-		}
-		if (eagle_txdone_poll() == 0)
+		    hostadpt_tx_ring_ready == 1)
+			NPU_PROF(NP_EHOUT, dbg.rxout,
+				 eagle_txq_drain(0); eagle_txq_drain(1);
+				 eagle_mseg_drain(1));
+		NPU_PROF(NP_ETXD, dbg.txdone, done = eagle_txdone_poll());
+		if (done == 0)
 			eagle_delay(10);
 	}
 }
@@ -1138,13 +1147,12 @@ void __attribute__((noreturn)) eagle_core0_loop(void)
 			eagle_delay(1000);
 		}
 
-		if (hostadpt_tx_ring_ready == 1) {
-			eagle_txq_drain(0);
-			eagle_txq_drain(1);
-			eagle_mseg_drain(1);
-		}
-		eagle_rx_ring_sweep(0);
-		eagle_rx_ring_sweep(1);
+		if (hostadpt_tx_ring_ready == 1)
+			NPU_PROF(NP_EHOUT, dbg.rxout,
+				 eagle_txq_drain(0); eagle_txq_drain(1);
+				 eagle_mseg_drain(1));
+		NPU_PROF(NP_ERFL, dbg.refill[0] + dbg.refill[1],
+			 eagle_rx_ring_sweep(0); eagle_rx_ring_sweep(1));
 		eagle_delay(100);
 	}
 }
@@ -1167,9 +1175,9 @@ void __attribute__((noreturn)) eagle_rx_refill_loop(void)
 			eagle_delay(10000);
 		}
 
-		eagle_rx_ring_sweep(0);
+		NPU_PROF(NP_ERFL, dbg.refill[0], eagle_rx_ring_sweep(0));
 		eagle_delay(100);
-		eagle_rx_ring_sweep(1);
+		NPU_PROF(NP_ERFL, dbg.refill[1], eagle_rx_ring_sweep(1));
 		eagle_delay(100);
 	}
 }

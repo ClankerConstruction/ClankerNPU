@@ -794,18 +794,19 @@ NPU_HOT void __attribute__((noreturn)) kite_core1_loop(void)
 			goto rx_5g;
 		while (rxd_2g_init_done != 0 &&
 		       kite_dbdc_model(kite_driver_model())) {
-			kite_rx_2g();
+			NPU_PROF1(NP_KRX2G, rxd_2g_cpu_idx, kite_rx_2g());
 			if (rxd_5g_init_done != 0) {
 rx_5g:
-				kite_rx_5g();
+				NPU_PROF1(NP_KRX5G, rxd_5g_cpu_idx,
+					  kite_rx_5g());
 			}
 		}
 #else
 		/* one frame per band a pass keeps the heartbeat moving */
 		if (rxd_2g_init_done != 0)
-			kite_rx_2g();
+			NPU_PROF1(NP_KRX2G, rxd_2g_cpu_idx, kite_rx_2g());
 		if (rxd_5g_init_done != 0)
-			kite_rx_5g();
+			NPU_PROF1(NP_KRX5G, rxd_5g_cpu_idx, kite_rx_5g());
 #endif
 	}
 }
@@ -818,7 +819,7 @@ static void kite_core2_rx_2g(void)
 
 	do {
 		if (rxd_2g_init_done != 0 && model == 0) {
-			kite_rx_2g();
+			NPU_PROF1(NP_KRX2G, rxd_2g_cpu_idx, kite_rx_2g());
 			model = kite_driver_model();
 			if (kite_dbdc_model(model))
 				return;
