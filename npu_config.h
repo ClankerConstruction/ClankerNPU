@@ -87,6 +87,12 @@
 #define HAS_ID_BATCH
 #endif
 
+/* WiFi rx and tx loops poll without long idle waits: core 2 serves
+ * both bands every pass instead of spinning on one */
+#if defined(AN7583) && defined(WIFI_EAGLE)
+#define HAS_FAST_POLL
+#endif
+
 /* The out ring copy runs while the next frame is read and claimed */
 #if defined(AN7583) && defined(WIFI_EAGLE)
 #define HAS_ASYNC_COPY

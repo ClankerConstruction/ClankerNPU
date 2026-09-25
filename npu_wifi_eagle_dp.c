@@ -1420,6 +1420,13 @@ static NPU_INLINE int eagle_rxdmad_next(u8 *chaining)
 
 /* ---- cores ---- */
 
+/* empty ring: a frame waits half of this, 32 cycles a loop */
+#ifdef HAS_FAST_POLL
+#define EAGLE_RX_IDLE	20
+#else
+#define EAGLE_RX_IDLE	500
+#endif
+
 /* core 1: the rxdmad ring */
 NPU_HOT void eagle_rxdmad_loop(void)
 {
@@ -1446,7 +1453,7 @@ NPU_HOT void eagle_rxdmad_loop(void)
 		NPU_PROF(NP_ERXD, dbg.rxd,
 			 empty = eagle_rxdmad_next(&chaining));
 		if (empty != 0)
-			eagle_delay(500);
+			eagle_delay(EAGLE_RX_IDLE);
 	}
 }
 
@@ -1498,6 +1505,28 @@ void __attribute__((noreturn)) eagle_tx_fast_path(void)
 				eagle_delay(500);
 		}
 
+#ifdef HAS_FAST_POLL
+		/* Both bands every pass. The room comes from the last DMA
+		 * index read, which only undercounts; the costly PCIe read
+		 * happens when the room runs low. */
+		for (band = 1; band != (u32)-1; band--) {
+			cpu = eagle_tx_ring_cpu_idx[band];
+			free = (dma[band] - cpu - 1) & EAGLE_TX_RING_MASK;
+			if (free <= EAGLE_TX_RING_ROOM + 128) {
+				dma[band] = (u16)REG32(eagle_tx_ring_pcie_base[band] +
+						       0xC);
+				free = (dma[band] - cpu - 1) & EAGLE_TX_RING_MASK;
+				if (free <= EAGLE_TX_RING_ROOM) {
+					eagle_delay(5000);
+					continue;
+				}
+			}
+			NPU_PROF(NP_ETXP, dbg.push[band], eagle_tx_ring_push(band));
+			if (--free > EAGLE_TX_RING_ROOM)
+				NPU_PROF(NP_ELAN, dbg.lan[0] + dbg.lan[1],
+					 eagle_tdma_to_wifi(band, free - 6));
+		}
+#else
 		for (band = 1; band != (u32)-1; band--) {
 			cpu = eagle_tx_ring_cpu_idx[band];
 			free = (dma[band] - cpu - 1) & EAGLE_TX_RING_MASK;
@@ -1520,6 +1549,7 @@ void __attribute__((noreturn)) eagle_tx_fast_path(void)
 			eagle_delay(1000);
 			dma[band] = (u16)REG32(eagle_tx_ring_pcie_base[band] + 0xC);
 		}
+#endif
 	}
 }
 

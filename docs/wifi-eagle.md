@@ -42,10 +42,17 @@ flowchart LR
 | core | loop | work |
 |---:|---|---|
 | 0 | `ppe_wifi_bufid_isr` (PLIC 95) | frames the PPE did not forward go to the host queue; free-only entries return the buffer. With `HAS_HOT_TEXT` it reads the FIFO count again before returning, up to 256 entries |
-| 1 | `eagle_rxdmad_loop` | one rxdmad descriptor at a time: `dst_sel` frames to TDMA tx, the rest to the host queue; chains multi-buffer frames |
+| 1 | `eagle_rxdmad_loop` | one rxdmad descriptor at a time: `dst_sel` frames to TDMA tx, the rest to the host queue; chains multi-buffer frames. An empty ring waits 500 delay loops, 20 with `HAS_FAST_POLL` |
 | 2 | `eagle_tx_fast_path` | staged host frames and the TDMA rx ring into the WiFi tx ring, paced by the ring's DMA index |
 | 3 | `eagle_core3_loop` | host adaptor in rings to staging, packet queue to host adaptor out rings, tx done ring |
 | 4 | `eagle_rx_refill_loop` | refills both rx rings |
+
+Core 2 serves one band at a time: it polls that band once per slot the
+last DMA index read left free, about 1900 times on an idle ring, then
+waits 1000 delay loops and reads the index over PCIe. A frame for the
+other band waits out that spin, a few hundred us. With `HAS_FAST_POLL`
+(AN7583) each pass serves both bands once and reads the index only when
+the room it gives drops to 133 slots or fewer.
 
 AN7552 has two cores and no NPU tx path: core 1 runs the rxdmad loop and
 core 0 runs `eagle_core0_loop`, which drains the packet queues and
