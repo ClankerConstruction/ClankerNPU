@@ -179,6 +179,7 @@ int wifi_mail_set_debug_flag(u32 *msg)
 	u32 flag = msg[2];
 	u32 band = msg[0] & 0xF;
 
+	npu_printf("set band:%d debugflag=%d\n", band, flag);
 	npu_mbox_set_debug_flag(band, flag);
 	return 1;
 }
@@ -189,6 +190,8 @@ int wifi_mail_set_wait_inode_cfg(u32 *msg)
 	u32 b = ((u8 *)msg)[9];
 	u32 band = msg[0] & 0xF;
 
+	npu_printf("%s L%d set band %d epmask=%d, vap_mask=%d\n",
+		   "wifi_mail_set_wait_inode_cfg_info", 293, band, a, b);
 	npu_mbox_rx_hw_cfg_set(band, a, b);
 	return 1;
 }
@@ -197,6 +200,8 @@ int wifi_mail_set_wait_inode_stop(u32 *msg)
 {
 	u32 band = msg[0] & 0xF;
 
+	npu_printf("%s L%d set. band:%d\n",
+		   "wifi_mail_set_wait_inode_stop_action", 306, band);
 	npu_mbox_stop_set(band);
 	return 1;
 }
@@ -205,6 +210,8 @@ int wifi_mail_set_pcie_swap(u32 *msg)
 {
 	u32 val = msg[2];
 
+	npu_printf("%s L%d set %d\n",
+		   "wifi_mail_set_wait_inode_pcie_swap", 322, val);
 	npu_mbox_pcie_swap_set(val);
 	return 1;
 }
