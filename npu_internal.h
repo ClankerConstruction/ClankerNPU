@@ -548,7 +548,12 @@ extern volatile u32 kite_test_active;
  * with sys memrl / memwl at NDBG_BASE & 0x1FFFFFFF. See docs/debug.md.
  * ================================================================ */
 
+/* AN7552 cluster local SRAM is 16 KB: the block takes its last 4 KB */
+#ifdef AN7552
+#define NDBG_BASE	0x3E903000
+#else
 #define NDBG_BASE	0x3E906800
+#endif
 #define NDBG_SIZE	0x1000
 /* tags and text read in order in a word dump, first char in the MSB */
 #define NDBG_TAG(a, b, c, d)	((u32)(a) << 24 | (b) << 16 | (c) << 8 | (d))

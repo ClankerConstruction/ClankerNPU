@@ -23,8 +23,10 @@ same bytes at `0x1E8xxxxx`/`0x1E9xxxxx`. Clear the top three bits of
 any address the NPU console prints before handing it to `sys`.
 
 The debug block is at NPU `0x3E906800`, host **`0x1E906800`**, up to
-`0x1E9077FF`. It sits above the firmware globals, which the linker
-keeps below it.
+`0x1E9077FF`. AN7552's cluster local SRAM is only 16 KB, so there it is
+at NPU `0x3E903000`, host **`0x1E903000`**, the last 4 KB. It sits above
+the firmware globals, which the linker keeps below it. Examples below
+use the AN758x address.
 
 `sys memory` prints every word most significant byte first. Tags and
 text in the block are stored so that they read in order in that dump:

@@ -10,6 +10,9 @@
 #include "npu_internal.h"
 #include "npu_wifi.h"
 
+#define NDBG_XSTR(x)	#x
+#define NDBG_STR(x)	NDBG_XSTR(x)
+
 enum {
 	NDBG_CMD_PING = 1, NDBG_CMD_READ, NDBG_CMD_WRITE, NDBG_CMD_COPY,
 	NDBG_CMD_HEXDUMP, NDBG_CMD_STATUS, NDBG_CMD_CLEAR, NDBG_CMD_TRACE,
@@ -27,6 +30,9 @@ extern u16 sram_alloc_table[];
 extern u32 sram_alloc_offset;
 extern char __data_start[], __bss_end[];
 extern u8 mbox_dispatch[][80];
+
+/* link.ld keeps the globals below this */
+__asm__(".globl __ndbg_base\n.set __ndbg_base, " NDBG_STR(NDBG_BASE));
 
 static void ndbg_sym(u32 i, u32 tag, u32 addr)
 {

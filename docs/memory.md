@@ -19,7 +19,8 @@
 0x1FBF0000  SoC UART
 0x3E800000  NPU SRAM: 256 KB AN7552, 480 KB AN7581, 512 KB AN7583
 0x3E900000  firmware .data and .bss (inside the SRAM window)
-0x3E906800  debug block, 4 KB (docs/debug.md); globals end below it
+0x3E906800  debug block, 4 KB (docs/debug.md), 0x3E903000 on AN7552;
+            globals end below it
 0x84000000  firmware code, rodata and stacks in host DRAM
 ```
 
