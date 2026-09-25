@@ -329,6 +329,7 @@ void counter_init(u32 band)
 	u32 *base;
 	u32 count;
 
+	npu_printf("%s:%d\n", "counter_init", band);
 	if (band == 1) {
 		counter_base_5g = sram_buf_alloc(9);
 		base = (u32 *)counter_base_5g;
