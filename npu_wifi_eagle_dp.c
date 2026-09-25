@@ -64,8 +64,12 @@ static void eagle_tx_ring_publish(u32 band)
 /* one frame into the WiFi tx ring, cpu index not published.
  * Only the TXP words are written; TXD words 0-7 of
  * the fast path TXD space stay zero. */
-static int eagle_tx_ring_fill(u32 buf, u16 len, u16 token, u32 info,
-			      u8 *band_out)
+#ifdef HAS_ID_BATCH
+static int __attribute__((noinline))
+#else
+static int
+#endif
+eagle_tx_ring_fill(u32 buf, u16 len, u16 token, u32 info, u8 *band_out)
 {
 	u32 w0 = REG32(info), w2 = REG32(info + 8);
 	u32 band = (w0 >> 25) & 1;
@@ -120,6 +124,157 @@ static int eagle_tx_ring_fill(u32 buf, u16 len, u16 token, u32 info,
 	return 0;
 }
 
+#ifdef HAS_ID_BATCH
+/* descriptors the PPE has filled from ridx on, at most max */
+static NPU_INLINE u32 eagle_tdma_ready(u32 base, u32 ridx, u32 max)
+{
+	u32 n = 0;
+
+	while (n < max &&
+	       (s32)REG32(base + TDMA_RX_DESC_SIZE * ridx + 4) < 0) {
+		n++;
+		ridx = (ridx > TDMA_RX_RING_DESCS - 2) ? 0 : ridx + 1;
+	}
+	return n;
+}
+
+/* the four further tries of eagle_tx_ring_fill's descriptor write */
+static int __attribute__((noinline)) eagle_tx_desc_retry(u32 desc, u32 phys,
+							 u32 buf)
+{
+	u32 i;
+
+	for (i = 4; i != 0; i--) {
+		eagle_delay(10000);
+		REG32(desc) = phys;
+		REG32(desc + 8) = buf;
+		REG32(desc + 4) = EAGLE_TX_DESC_CTRL;
+		if ((s32)REG32(desc + 4) >= 0)
+			return 0;
+	}
+	return -1;
+}
+
+/* eagle_tx_ring_fill when the slot and the one five ahead are already
+ * back: no waits. -2: take eagle_tx_ring_fill. */
+static NPU_INLINE int eagle_tx_ring_fill_fast(u32 buf, u32 len, u32 token,
+					      u32 w0, u32 w2, u32 band)
+{
+	u32 cpu = eagle_tx_ring_cpu_idx[band];
+	u32 ring = eagle_tx_ring_desc[band];
+	u32 desc = ring + 16 * cpu;
+	u32 txd, phys;
+
+	if ((s32)REG32(desc + 4) >= 0 ||
+	    (s32)REG32(ring + (((cpu + 5) << 4) & 0x7FF0) + 4) >= 0 ||
+	    eagle_rxdmad_on_core2)
+		return -2;
+
+	txd = eagle_tx_buf_space_pg[band] + (cpu << 8);
+	REG32(txd + 32) = (token << 16) | 0x80;
+	REG32(txd + 36) = (((w0 >> 14) & 0x7FF) << 8) | ((w2 >> 24) & 0x7F) |
+			  0x1000000;
+	REG32(txd + 40) = buf;
+	REG32(txd + 64) = len;
+
+	phys = (txd & 0x3FFFFFFF) | 0x80000000;
+	REG32(desc) = phys;
+	REG32(desc + 8) = buf;
+	REG32(desc + 4) = EAGLE_TX_DESC_CTRL;
+	if ((s32)REG32(desc + 4) < 0 &&
+	    eagle_tx_desc_retry(desc, phys, buf) != 0)
+		return -1;
+
+	eagle_tx_ring_cpu_idx[band] = (cpu + 1) & EAGLE_TX_RING_MASK;
+	dbg.lan[band]++;
+	return 0;
+}
+
+/* drain up to budget frames of TDMA rx ring 'ring' into the WiFi tx
+ * ring. Each consumed slot gets a fresh tx token; the tokens for the
+ * filled descriptors ahead come in one hold of mutex 3. */
+static NPU_HOT __attribute__((noinline)) int eagle_tdma_to_wifi(u32 ring,
+								 u32 budget)
+{
+	u32 base = tdma_rx_dscp_base[ring];
+	u32 kick = TDMA_RX_BASE_PTR(ring) + 8;
+	u32 ridx = tdma_rx_ridx[ring];
+	u32 pkt = npu_tx_pkt_buf_addr;
+	u32 batch = 0, fail = 0, stop, d, w0, w1, buf, tok;
+	u32 ntok = 0, used = 0;
+	u16 toks[8];
+	int pushed = 0, r;
+	u8 band = 0;
+
+	if (budget > 127)
+		budget = 128;
+
+	do {
+		d = base + TDMA_RX_DESC_SIZE * ridx;
+		w1 = REG32(d + 4);
+		if ((s32)w1 >= 0)
+			break;
+
+		buf = REG32(d + 8);
+		stop = 0;
+		if (used == ntok) {
+			ntok = tx_token_alloc_n(toks,
+				eagle_tdma_ready(base, ridx,
+						 budget < 8 ? budget : 8));
+			used = 0;
+		}
+		if (used == ntok) {
+			/* no spare buffer: drop the frame, rearm the slot */
+			tdma_rx_alloc_fail++;
+			dbg.lanfail++;
+			fail++;
+			REG32(d + 4) = 0x800;
+			stop = 1;
+		} else {
+			tok = (buf - pkt) >> 11;
+			REG32(d + 8) = ((((u32)toks[used++] << 11) + pkt) &
+					0x3FFFFFFF) | 0x80000000;
+			REG32(d + 4) = 0x800;
+			w0 = REG32(d + 16);
+			band = (w0 >> 25) & 1;
+			r = eagle_tx_ring_fill_fast(buf, w1 & 0xFFFF, tok, w0,
+						    REG32(d + 24), band);
+			if (r == -2)
+				r = eagle_tx_ring_fill(buf, w1 & 0xFFFF,
+						       (u16)tok, d + 16, &band);
+			if (r == -1) {
+				tx_token_free((u16)tok);
+				dbg.lanfail++;
+				fail++;
+				stop = 1;
+			}
+		}
+
+		if (++batch == 8) {
+			REG32(kick) = ridx;
+			eagle_tx_ring_publish(band);
+			pushed = 1;
+			batch = 0;
+			fail = 0;
+		}
+		ridx = (ridx > TDMA_RX_RING_DESCS - 2) ? 0 : ridx + 1;
+		if (stop)
+			break;
+	} while (--budget);
+
+	if (batch) {
+		REG32(kick) = ridx ? ridx - 1 : TDMA_RX_RING_DESCS - 1;
+		pushed = 1;
+		if (fail != batch)
+			eagle_tx_ring_publish(band);
+	}
+	/* a stop leaves tokens taken for frames not reached */
+	if (used != ntok)
+		tx_token_free_n(toks + used, ntok - used);
+	tdma_rx_ridx[ring] = ridx;
+	return pushed;
+}
+#else
 /* drain up to budget frames of TDMA rx ring 'ring' into the WiFi tx
  * ring. Each consumed slot gets a fresh tx token. */
 static int eagle_tdma_to_wifi(u32 ring, u32 budget)
@@ -186,6 +341,7 @@ static int eagle_tdma_to_wifi(u32 ring, u32 budget)
 	tdma_rx_ridx[ring] = ridx;
 	return pushed;
 }
+#endif
 
 /* Where frames are supposed to appear. With the stats print bit set,
  * core 3 prints them every two seconds. Fields are in npu_wifi.h. */
@@ -441,6 +597,59 @@ static void eagle_drain_free(u16 buf_id)
 #define eagle_drain_free(id) buf_id_return(id)
 #endif
 
+#ifdef HAS_ID_BATCH
+#define EAGLE_DRAIN_BATCH	16
+
+/* Hand up to 16 queued packets to the host adaptor out ring, stopping
+ * after one the full ring refused, and give their rx buffer ids back
+ * together: the host copy already took the data. */
+static void eagle_txq_drain(u32 band)
+{
+	u32 base = eagle_txq_base[band];
+	u32 idx = eagle_txq_ridx[band];
+	u32 left = EAGLE_DRAIN_BATCH, n = 0, full = 0, e, buf_id;
+	u16 ids[EAGLE_DRAIN_BATCH];
+	u16 seg_len;
+	u8 flags;
+
+	do {
+		e = base + EAGLE_Q_ENTRY * idx;
+		if ((*(volatile u8 *)(e + 10) & 1) == 0)
+			break;
+
+		buf_id = *(volatile u32 *)e;
+		seg_len = *(volatile u16 *)(e + 6);
+		flags = *(volatile u8 *)(e + 10);
+
+		if ((s32)buf_id >= 0 && seg_len != 0) {
+			dbg.rxout++;
+			if (host_ring_submit(eagle_buf_phys(buf_id), seg_len, 0,
+					     *(volatile u16 *)(e + 4),
+					     *(volatile u8 *)(e + 11),
+					     flags >> 2,
+					     *(volatile u16 *)(e + 8),
+					     (flags >> 1) & 1,
+					     *(volatile u32 *)eagle_buf_uncached(buf_id)) != 0) {
+				dbg.rxoutfail++;
+				full = 1;
+			}
+			ids[n++] = (u16)buf_id;
+		}
+
+		*(volatile u32 *)e = 0xFFFFFFFF;
+		*(volatile u32 *)(e + 4) = 0;
+		*(volatile u16 *)(e + 8) = 0;
+		*(volatile u8 *)(e + 11) = 0;
+		*(volatile u8 *)(e + 10) = 0;
+
+		idx = (idx + 1 == EAGLE_TXQ_ENTRIES) ? 0 : idx + 1;
+	} while (--left != 0 && full == 0);
+
+	eagle_txq_ridx[band] = idx;
+	if (n != 0)
+		buf_id_return_n(ids, n);
+}
+#else
 /* Hand one queued packet to the host adaptor out ring and give the rx
  * buffer id back either way: the host copy already took the data. */
 static void eagle_txq_drain(u32 band)
@@ -479,6 +688,7 @@ static void eagle_txq_drain(u32 band)
 	idx = eagle_txq_ridx[band] + 1;
 	eagle_txq_ridx[band] = (idx == EAGLE_TXQ_ENTRIES) ? 0 : idx;
 }
+#endif
 
 /* Drain one frame's worth of segments out of the multi-segment queue.
  * The segments of a frame are contiguous; the last one carries bit 1 and
@@ -898,6 +1108,20 @@ static int eagle_tx_ring_push(u32 band)
 
 /* The WiFi chip reports finished frames here. A report frees the tokens
  * it lists; anything else is a stray buffer that only needs recycling. */
+#ifdef HAS_ID_BATCH
+/* tokens go back 32 to a hold of mutex 4 */
+#define EAGLE_TOK_BATCH	32
+#define eagle_tok_free(t) do {						\
+	toks[nt++] = (u16)(t);						\
+	if (nt == EAGLE_TOK_BATCH) {					\
+		tx_token_free_n(toks, nt);				\
+		nt = 0;							\
+	}								\
+} while (0)
+#else
+#define eagle_tok_free(t)	tx_token_free((u16)(t))
+#endif
+
 static int eagle_txdone_poll(void)
 {
 	u32 d, dw1, buf, hdr, i, n, cnt;
@@ -905,6 +1129,10 @@ static int eagle_txdone_poll(void)
 	u32 idx = eagle_txdone_ridx;
 	s32 buf_id;
 	int any = 0;
+#ifdef HAS_ID_BATCH
+	u16 toks[EAGLE_TOK_BATCH];
+	u32 nt = 0;
+#endif
 
 	if (ids == NULL || eagle_rx_txdone_desc_base == 0)
 		return 0;
@@ -935,12 +1163,12 @@ static int eagle_txdone_poll(void)
 				if (lo != 0x7FFF) {
 					n++;
 					if (lo <= 0x33FF)
-						tx_token_free((u16)lo);
+						eagle_tok_free(lo);
 				}
 				if (hi != 0x7FFF) {
 					n++;
 					if (hi <= 0x33FF)
-						tx_token_free((u16)hi);
+						eagle_tok_free(hi);
 				}
 			}
 		} else {
@@ -975,6 +1203,10 @@ static int eagle_txdone_poll(void)
 		}
 		any = 1;
 	}
+#ifdef HAS_ID_BATCH
+	if (nt != 0)
+		tx_token_free_n(toks, nt);
+#endif
 	return any;
 }
 
@@ -1012,6 +1244,48 @@ static int eagle_rx_ring_refill(u32 band, u32 desc, u32 *idx)
 	return 0;
 }
 
+#ifdef HAS_ID_BATCH
+/* Up to 32 ids a lock. The scan counts only slots the chip handed
+ * back, which nothing else writes before the refill. */
+static void eagle_rx_ring_sweep(u32 band)
+{
+	u32 idx = eagle_rx_ring_ridx[band];
+	u32 base = eagle_rx_ring_desc_base[band];
+	u32 size = eagle_rx_ring_size[band];
+	u32 budget = EAGLE_REFILL_BUDGET;
+	u32 want, got, i, j, desc;
+	u16 ids[32];
+
+	while (budget != 0) {
+		for (want = 0, j = idx; want < 32 && want < budget; want++) {
+			if ((s32)REG32(base + 16 * j + 4) >= 0)
+				break;
+			j = (j + 1 < size) ? j + 1 : 0;
+		}
+		if (want == 0)
+			break;
+		got = buf_id_alloc_ring_n(ids, want);
+		for (i = 0; i < got; i++) {
+			desc = base + 16 * idx;
+			eagle_rx_ring_bufid[band][idx] = ids[i];
+			REG32(desc) = eagle_buf_phys(ids[i]);
+			REG32(desc + 8) = (u32)ids[i] << 16;
+			REG32(desc + 4) = EAGLE_RX_DESC_CTRL;
+			/* publish the refilled slots every 128 buffers */
+			if (++eagle_rx_ring_kick[band] < 0) {
+				REG32(eagle_rx_ring_pcie_base[band] + 8) = idx;
+				eagle_rx_ring_kick[band] = 0;
+			}
+			idx = (idx + 1 < size) ? idx + 1 : 0;
+		}
+		dbg.refill[band] += got;
+		budget -= got;
+		if (got < want)
+			break;
+	}
+	eagle_rx_ring_ridx[band] = idx;
+}
+#else
 static void eagle_rx_ring_sweep(u32 band)
 {
 	u32 idx = eagle_rx_ring_ridx[band];
@@ -1028,6 +1302,7 @@ static void eagle_rx_ring_sweep(u32 band)
 	}
 	eagle_rx_ring_ridx[band] = idx;
 }
+#endif
 
 #ifdef HAS_HOT_TEXT
 /* The common descriptor: a whole frame, dst_sel 1, no error, nothing

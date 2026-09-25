@@ -68,6 +68,12 @@ s32 buf_id_alloc_hw(u32 type, u32 band);
 void buf_id_free(u32 type, u32 band, u32 buf_id);
 void buf_id_return(u16 buf_id);
 s32 buf_id_alloc_ring(void);
+#ifdef HAS_ID_BATCH
+u32 buf_id_alloc_ring_n(u16 *ids, u32 max);
+void buf_id_return_n(const u16 *ids, u32 n);
+u32 tx_token_alloc_n(u16 *ids, u32 max);
+void tx_token_free_n(const u16 *ids, u32 n);
+#endif
 void tx_token_free(u16 token);
 s32 tx_token_alloc(void);
 void counter_init(u32 band);

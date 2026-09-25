@@ -82,6 +82,11 @@
 #define HAS_HOT_TEXT
 #endif
 
+/* Rx buffer ids and tx tokens move in batches, one mutex hold each */
+#if defined(AN7583) && defined(WIFI_EAGLE)
+#define HAS_ID_BATCH
+#endif
+
 /* The trap entry saves only the registers a C call may clobber.
  * AN7583 eagle takes a PPE buffer return interrupt per frame. */
 #if defined(AN7583) && defined(WIFI_EAGLE)

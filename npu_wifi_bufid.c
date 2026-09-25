@@ -183,6 +183,88 @@ s32 buf_id_alloc_ring(void)
 	return id;
 }
 
+#ifdef HAS_ID_BATCH
+/* Up to max ids from a ring under one hold of its alloc mutex, with
+ * the counts a single alloc keeps; fewer than max is one failure. */
+static inline u32 id_ring_take(u32 mutex, u32 base, u32 last,
+			       volatile u16 *ridx, volatile u16 *widx,
+			       u32 *count, u32 ok, u16 *ids, u32 max)
+{
+	u32 r, w, n, next;
+
+	hw_mutex_take(mutex);
+	npu_barrier();
+	r = *ridx;
+	w = *widx;
+	for (n = 0; n < max; n++) {
+		next = (r == last) ? 0 : r + 1;
+		if (next == w)
+			break;
+		ids[n] = *(volatile u16 *)(base + 2 * r);
+		r = next;
+	}
+	*ridx = r;
+	*count += n;
+	if ((wifi_debug_flags & 4) && counter_base_tri) {
+		(*(u32 *)(counter_base_tri + ok)) += n;
+		if (n < max)
+			(*(u32 *)(counter_base_tri + ok + 4))++;
+	}
+	npu_barrier();
+	hw_mutex_give(mutex);
+	return n;
+}
+
+/* the ids are stored before widx moves: the alloc side reads widx */
+static inline void id_ring_put(u32 mutex, u32 base, u32 last,
+			       volatile u16 *widx, u32 *count, u32 cnt,
+			       const u16 *ids, u32 n)
+{
+	u32 w, i;
+
+	hw_mutex_take(mutex);
+	npu_barrier();
+	w = *widx;
+	for (i = 0; i < n; i++) {
+		*(volatile u16 *)(base + 2 * w) = ids[i];
+		w = (w == last) ? 0 : w + 1;
+	}
+	if (count)
+		*count += n;
+	if ((wifi_debug_flags & 4) && counter_base_tri)
+		(*(u32 *)(counter_base_tri + cnt)) += n;
+	*widx = w;
+	npu_barrier();
+	hw_mutex_give(mutex);
+}
+
+u32 buf_id_alloc_ring_n(u16 *ids, u32 max)
+{
+	return id_ring_take(12, bufid_pool_base, BUFID_POOL_LAST,
+			    &rx_bufid_ridx, &rx_bufid_widx,
+			    &rx_bufid_alloc_count, 0x1C, ids, max);
+}
+
+NPU_HOT void buf_id_return_n(const u16 *ids, u32 n)
+{
+	id_ring_put(13, bufid_pool_base, BUFID_POOL_LAST, &rx_bufid_widx,
+		    NULL, 0x18, ids, n);
+}
+
+NPU_HOT u32 tx_token_alloc_n(u16 *ids, u32 max)
+{
+	return id_ring_take(3, bufid_ring_base, TX_FREE_RING_LAST,
+			    &bufid_ridx, &bufid_widx, &bufid_deq_count, 0x50,
+			    ids, max);
+}
+
+NPU_HOT void tx_token_free_n(const u16 *ids, u32 n)
+{
+	id_ring_put(4, bufid_ring_base, TX_FREE_RING_LAST, &bufid_widx,
+		    &bufid_enq_count, 0x4C, ids, n);
+}
+#endif
+
 void tx_token_free(u16 token)
 {
 	hw_mutex_lock(tx_token_free_mutex);

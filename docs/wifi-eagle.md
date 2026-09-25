@@ -80,6 +80,13 @@ Two buffer pools:
 - **tx tokens**: 13312 tokens over the NPU tx packet buffer. The tx done
   ring returns them.
 
+With `HAS_ID_BATCH` (AN7583) both pools move ids in batches, one mutex
+hold each: the refill takes up to 32 ids for the slots the chip handed
+back, the host drain returns the ids of up to 16 frames, the tx done
+ring frees up to 32 tokens, and the LAN to WiFi drain takes tokens for
+up to 8 filled TDMA descriptors and gives back any it did not use. The
+host drain stops after a frame the full out ring refused.
+
 ## Bring-up
 
 The host hands over the rings with WiFi SET_WAIT and GET_WAIT mails
