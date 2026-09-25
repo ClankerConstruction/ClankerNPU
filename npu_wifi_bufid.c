@@ -18,7 +18,8 @@
  * Buffer ID management
  *
  * The buffer manager hands out ids through CSR 0xBC8 + 16 * type + band
- * and takes them back through a per-band MMIO register.
+ * (AN7552: an MMIO load) and takes them back through a per-band MMIO
+ * register.
  * band=0 → 2.4G, band=1 → 5G, band=2 → 6G (future)
  * ================================================================ */
 
@@ -30,6 +31,12 @@
 /* one id from the buffer manager, -1 when it has none */
 s32 buf_id_alloc_hw(u32 type, u32 band)
 {
+#ifdef AN7552
+	/* no id CSRs: a load pops the id, beside the free register */
+	u32 base = type ? 0x1EC0A000 : BMGR_BASE;
+
+	return (s16)REG32(base + band * 0x800 + (64 + band) * 4);
+#endif
 	switch (type * 4 + band) {
 	case 0:
 		return bufid_csr(0xBC8);
@@ -61,10 +68,15 @@ void buf_id_free(u32 type, u32 band, u32 buf_id)
 
 	if (type == 0)
 		base = BMGR_BASE;
+#ifdef AN7552
+	else
+		base = 0x1EC0A000;
+#else
 	else if (type == 1)
 		base = 0x1EC0A000;
 	else
 		base = 0x1EC07000;
+#endif
 	REG32(base + band * 0x800 + (67 + band) * 4) = buf_id;
 }
 
