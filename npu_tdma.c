@@ -453,8 +453,13 @@ int __attribute__((noinline)) tdma_tx_submit(u32 token, u32 pkt_len,
 		return -1;
 
 #ifdef WIFI_KITE
+#ifdef AN7552
+	/* core 0 mail handlers release BA frames while core 1 sends */
+	u32 locked = 1;
+#else
 	/* pipeline mode: cores 1 and 2 both send */
 	u32 locked = wifi_debug_flags & 1;
+#endif
 
 	if (locked) {
 		hw_mutex_lock(tdma_tx_mutex);
