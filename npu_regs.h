@@ -73,6 +73,8 @@
 /* AN7552: second window sits beside the first */
 #define PCIE1_WIN_BASE          0x1FA90030
 #define PCIE1_WIN_END           0x1FA90034
+/* WiFi link state; 6 disables the tunnel offload */
+#define WIFI_LINK_STAT          0x1FA90050
 #else
 #define PCIE1_WIN_BASE          0x1FC28030
 #define PCIE1_WIN_END           0x1FC28034

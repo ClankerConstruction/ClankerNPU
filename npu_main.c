@@ -231,6 +231,11 @@ static void __attribute__((noinline)) core0_main(void)
 	/* bridge (type 129) before the WiFi SRAM types */
 	npu_bridge_buf_init();
 #endif
+#if defined(AN7552) && defined(WIFI_KITE)
+	npu_printf("is_wifi_link_up = %d\n", REG32(WIFI_LINK_STAT));
+	if (REG32(WIFI_LINK_STAT) == 6)
+		npu_printf("is_wifi_linkup_disable_npu_tunnel = %d\n", 1);
+#endif
 	core0_wifi_init_wrapper();
 #ifndef AN7552
 	/* AN7552 has no debug counter ISR */

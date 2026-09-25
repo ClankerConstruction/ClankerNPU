@@ -34,7 +34,10 @@ flowchart LR
 | 3 | drains the piNode and rxNode rings of both bands to the host |
 | 4 | nothing |
 
-AN7552 kite has two cores: core 0 init, core 1 rx.
+AN7552 kite has two cores. Core 0 runs init, then drains both bands'
+node rings to the host (core 3's job elsewhere); core 1 runs rx. Core
+0 prints `is_wifi_link_up` (`0x1FA90050`) first; 6 means no tunnel
+offload.
 
 ## Bring-up
 

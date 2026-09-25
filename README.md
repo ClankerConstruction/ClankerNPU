@@ -75,7 +75,7 @@ Kite WiFi:
 
 | hart | AN7552 | AN7581 | AN7583 |
 |---:|---|---|---|
-| 0 | init; BME ISR | init | init, BME ISR; tunnel offload |
+| 0 | init, timer tick, BME ISR; node rings to host | init | init, BME ISR; tunnel offload |
 | 1 | rx, both bands | rx | rx |
 | 2 | | timer tick; 2.4 GHz rx or classifier | timer tick; 2.4 GHz rx or classifier |
 | 3 | | node rings to host | node rings to host |

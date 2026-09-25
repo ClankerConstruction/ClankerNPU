@@ -93,6 +93,27 @@ int wifi_mail_dispatch(u32 base, u32 cnt)
 }
 #endif /* HAS_WIFI */
 
+#ifdef WIFI_KITE
+/* hand received frames to the host until the debug stop bit */
+static void kite_node_drain_loop(void)
+{
+	do {
+		if (rxd_5g_init_done != 0) {
+			if (hostadpt_tx_ring_ready == 1)
+				rxnode_drain(1);
+			if (hostadpt_tx_ring_ready == 1)
+				pinode_drain(1);
+		}
+		if (rxd_2g_init_done != 0) {
+			if (hostadpt_tx_ring_ready == 1)
+				rxnode_drain(0);
+			if (hostadpt_tx_ring_ready == 1)
+				pinode_drain(0);
+		}
+	} while (!(*(volatile u8 *)&wifi_debug_flags & 2));
+}
+#endif
+
 /* Core0 WiFi init wrapper */
 void core0_wifi_init_wrapper(void)
 {
@@ -140,6 +161,10 @@ void core0_wifi_init_wrapper(void)
 	result = hostadpt_init();
 	if (result != 0)
 		npu_printf("Error: there is something wrong with hostadpt\n");
+#if defined(AN7552) && defined(WIFI_KITE)
+	/* no core 3: core 0 feeds the host */
+	kite_node_drain_loop();
+#endif
 #endif
 }
 
@@ -148,20 +173,7 @@ void core3_wifi_init_wrapper(void)
 {
 #ifdef HAS_WIFI
 #ifdef WIFI_KITE
-	do {
-		if (rxd_5g_init_done != 0) {
-			if (hostadpt_tx_ring_ready == 1)
-				rxnode_drain(1);
-			if (hostadpt_tx_ring_ready == 1)
-				pinode_drain(1);
-		}
-		if (rxd_2g_init_done != 0) {
-			if (hostadpt_tx_ring_ready == 1)
-				rxnode_drain(0);
-			if (hostadpt_tx_ring_ready == 1)
-				pinode_drain(0);
-		}
-	} while (!(*(volatile u8 *)&wifi_debug_flags & 2));
+	kite_node_drain_loop();
 #else
 	eagle_core3_loop();
 #endif
