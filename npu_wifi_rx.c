@@ -228,9 +228,6 @@ static s32 kite_classify(s32 buf_id, u32 len, u32 band)
 	if (pn.amsdu != 0)
 		wifi_cnt_inc(band, 72);
 
-	if (kite_fast_flag() == 0 &&
-	    (*(u32 *)(wifi_pkt_va(buf_id) + 4) & 0x4000))
-		pn.sn = *(u16 *)(wifi_pkt_va(buf_id) + 32) >> 4;
 	sn = pn.sn;
 
 	ba_state_update(sn, pn.amsdu, e);
