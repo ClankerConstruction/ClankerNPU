@@ -386,17 +386,24 @@ int wifi_mail_set_ratelimit(u32 *msg)
 	return 1;
 }
 
+/* one chip info word per SerDes port, then the PHY tx gpio */
+#ifdef AN7552
+#define ARHT_PORTS	1
+#else
+#define ARHT_PORTS	6
+#endif
+
 int wifi_mail_set_arht_chip_info(u32 *msg)
 {
 	u32 i;
 
-	if (msg[9] == 0xFFFFFFFF) {
+	arht_phy_tx_gpio = msg[2 + ARHT_PORTS + 1];
+	if (arht_phy_tx_gpio == 0xFFFFFFFF) {
 		npu_printf("%s get phy tx gpio error\n",
 			   "wifi_mail_set_wait_arht_chip_info");
 		return 0;
 	}
-	arht_phy_tx_gpio = msg[9];
-	for (i = 0; i < 6; i++)
+	for (i = 0; i < ARHT_PORTS; i++)
 		arht_chip_info[i] = msg[2 + i];
 	arht_chip_info_valid = 1;
 	return 1;
