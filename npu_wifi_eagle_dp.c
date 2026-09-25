@@ -238,7 +238,7 @@ static void eagle_dbg_tick(void)
 	eagle_dbg_print();
 }
 
-static u32 eagle_buf_uncached(u32 buf_id)
+static NPU_INLINE u32 eagle_buf_uncached(u32 buf_id)
 {
 	return ((eagle_pkt_buf_addr & 0x3FFFFFFF) | 0x40000000) +
 	       (buf_id << EAGLE_PKT_BUF_SHIFT);
@@ -255,6 +255,36 @@ static u32 eagle_buf_phys(u32 buf_id)
 /* Queue one packet for the host adaptor. A frame that arrived whole goes
  * to the per-band queue; one spread over several rx buffers goes to the
  * multi-segment queue, which keeps the segments together. */
+#ifdef HAS_HOT_TEXT
+/* a whole frame into the band 1 queue, the one only the rxdmad hart
+ * fills. Mutex 10 still guards dbg.rxq, which core 0 also counts. */
+static NPU_INLINE int eagle_txq1_put(u32 buf_id, u16 len)
+{
+	u32 idx, e;
+	int ret = 1;
+
+	hw_mutex_take(10);
+	npu_barrier();
+	idx = eagle_txq_widx[1];
+	e = eagle_txq_base[1] + EAGLE_Q_ENTRY * idx;
+	if ((*(volatile u8 *)(e + 10) & 1) == 0) {
+		*(volatile u32 *)e = buf_id;
+		*(volatile u16 *)(e + 4) = 0;
+		*(volatile u16 *)(e + 6) = len;
+		*(volatile u16 *)(e + 8) = len;
+		*(volatile u8 *)(e + 11) = 0;
+		*(volatile u8 *)(e + 10) = 2 | 1;
+		idx++;
+		eagle_txq_widx[1] = (idx == EAGLE_TXQ_ENTRIES) ? 0 : idx;
+		ret = 0;
+		dbg.rxq++;
+	}
+	npu_barrier();
+	hw_mutex_give(10);
+	return ret;
+}
+#endif
+
 static int eagle_pkt_enqueue(u32 buf_id, u16 seg_len, u16 wcid, u8 info,
 			     u32 dst, u8 flags, u16 pkt_len)
 {
@@ -973,10 +1003,89 @@ static void eagle_rx_ring_sweep(u32 band)
 	eagle_rx_ring_ridx[band] = idx;
 }
 
+#ifdef HAS_HOT_TEXT
+/* The common descriptor: a whole frame, dst_sel 1, no error, nothing
+ * sending it to the host, WiFi print off. 0 done, 1 ring empty, 2 not
+ * this kind: eagle_rxdmad_handle takes it. */
+static NPU_INLINE int eagle_rxdmad_fast(void)
+{
+	u32 ridx = eagle_rxdmad_ridx;
+	u32 d = eagle_ind_cmd_desc_base + 16 * ridx;
+	u32 dw1, dw2, info, buf, off, next, len, host;
+	u16 buf_id;
+
+	if (REG32(d + 12) >> 28 != eagle_rxdmad_gen)
+		return 1;
+	dw1 = REG32(d + 4);
+	dw2 = REG32(d + 8);
+	if ((dw1 & 0x40002000) != 0x40000000 ||
+	    (dw2 & 0xF000) == 0x1000 || (dw2 & 0xF000) == 0x2000 ||
+	    NDBG_PRINTING(NDBG_WIFI))
+		return 2;
+
+	dbg.rxd++;
+	if (ridx == EAGLE_RX_RING_MAX_IDX)
+		eagle_rxdmad_gen = (eagle_rxdmad_gen + 1) & 0xF;
+	next = ridx + 1;
+	if (next >= 1536)
+		next = 0;
+
+	buf_id = dw2 >> 16;
+	buf = eagle_buf_uncached(buf_id);
+	len = (dw1 >> 16) & 0x3FFF;
+	info = (len << 3) | ((dw2 >> 12) << 28);
+	host = (dw2 & 0x80) | *(volatile u8 *)&wifi_force_to_cpu;
+	if ((dw1 & 0x1800) == 0x800) {
+		REG32(buf) = info | 2 | ((dw1 & 0x7F) << 17);
+		if (host == 0) {
+			off = (dw1 & 0x7F) << 1;
+			dbg.rxfast++;
+			if (tdma_tx_submit(buf_id, (len - off) & 0xFFFF,
+					   buf + EAGLE_PKT_HEADROOM + off,
+					   0) != 0) {
+				dbg.rxdrop++;
+				buf_id_return(buf_id);
+			}
+			goto done;
+		}
+	} else {
+		REG32(buf) = info;
+	}
+	if (eagle_txq1_put(buf_id, len) != 0) {
+		dbg.rxdrop++;
+		buf_id_return(buf_id);
+		if ((dw1 & 0x1800) != 0x800 && host == 0)
+			npu_printf("enq slow path faill\n");
+	}
+done:
+	eagle_rxdmad_ridx = next;
+	if (++eagle_rxdmad_kick < 0) {
+		u32 cidx = next ? next - 1 : EAGLE_RX_RING_MAX_IDX;
+
+		if (eagle_emi_cidx_valid == 1)
+			REG32(eagle_emi_cidx) = cidx;
+		else
+			REG32(eagle_ind_cmd_pcie_base + 8) = cidx;
+		eagle_rxdmad_kick = 0;
+	}
+	return 0;
+}
+
+/* 0 done, 1 ring empty */
+static NPU_INLINE int eagle_rxdmad_next(u8 *chaining)
+{
+	int r = *chaining ? 2 : eagle_rxdmad_fast();
+
+	return r == 2 ? eagle_rxdmad_handle(chaining) : r;
+}
+#else
+#define eagle_rxdmad_next(chaining)	eagle_rxdmad_handle(chaining)
+#endif
+
 /* ---- cores ---- */
 
 /* core 1: the rxdmad ring */
-void eagle_rxdmad_loop(void)
+NPU_HOT void eagle_rxdmad_loop(void)
 {
 	u8 chaining = 0;
 	int empty;
@@ -999,7 +1108,7 @@ void eagle_rxdmad_loop(void)
 		}
 		eagle_rx_busy = 1;
 		NPU_PROF(NP_ERXD, dbg.rxd,
-			 empty = eagle_rxdmad_handle(&chaining));
+			 empty = eagle_rxdmad_next(&chaining));
 		if (empty != 0)
 			eagle_delay(500);
 	}

@@ -76,8 +76,9 @@
 #endif
 
 /* Per-packet functions in one .text.hot block, small helpers forced
- * inline. AN7552 kite: hart 1 runs the whole rx path. */
-#if defined(AN7552) && defined(WIFI_KITE)
+ * inline. Hart 1's rx path: AN7552 kite, AN7583 eagle. */
+#if (defined(AN7552) && defined(WIFI_KITE)) || \
+    (defined(AN7583) && defined(WIFI_EAGLE))
 #define HAS_HOT_TEXT
 #endif
 

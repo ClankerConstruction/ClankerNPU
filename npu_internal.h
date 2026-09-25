@@ -41,6 +41,9 @@ int hw_mutex_lock_pri(u32 *desc);
 int hw_mutex_unlock_pri(u32 *desc);
 
 /* hw_mutex_lock/unlock on a fixed id, inline for per-packet paths */
+/* keeps memory accesses on their side of a mutex take, give or kick */
+#define npu_barrier()	__asm__ __volatile__("" ::: "memory")
+
 static inline __attribute__((always_inline)) void hw_mutex_take(u32 id)
 {
 	u32 hart = get_hartid(), off = (id * 4) & HW_MUTEX_OFF_MASK;
@@ -689,7 +692,7 @@ void npu_dbg_trace(u32 sub, u32 ev, u32 a, u32 b);
 void __attribute__((noreturn)) npu_dbg_idle(void);
 
 /* once per pass of a hart's main loop */
-static inline void npu_dbg_poll(void)
+static NPU_INLINE void npu_dbg_poll(void)
 {
 	u32 h = get_hartid();
 

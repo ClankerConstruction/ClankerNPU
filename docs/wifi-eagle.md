@@ -171,7 +171,10 @@ write an rx one, and its DMA index never moves.
 
 - **WiFi to LAN.** Core 1 sends `dst_sel=1` frames to TDMA tx. The PPE
   forwards bound flows and returns the rest on the buffer return FIFO;
-  core 0 queues those to the host.
+  core 0 queues those to the host. With `HAS_HOT_TEXT` (AN7583) a whole,
+  error-free frame with WiFi printing off takes a call-free path in
+  `eagle_rxdmad_loop` to TDMA tx or the band 1 queue; any other
+  descriptor goes to `eagle_rxdmad_handle`.
 - **WiFi to host.** Frames without `dst_sel`, with errors, or with force
   to CPU set go on the packet queue; core 3 copies them to the host
   adaptor out ring and returns the buffer id.

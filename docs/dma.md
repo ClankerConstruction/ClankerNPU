@@ -78,12 +78,13 @@ Descriptors start as `(d & 0x3FFFC000) | 0xC0000800`. `tdma_tx_submit`
 pads frames to 60 bytes and gives up after five tries when fewer than
 five slots are free.
 
-AN7552 kite keeps the free-slot count of each ring from the last DMA
-index read and lowers it per submit, so it reads the index only when
-the count drops to four. Its fast submit makes no calls: counters on
-or a near-full ring go to `tdma_tx_submit_slow`. It always holds
-mutex 0, taken inline, and writes word 0 whole as
-`0x40000000 | token << 14 | length`.
+With `HAS_HOT_TEXT` (AN7552 kite, AN7583 eagle) the free-slot count of
+each ring is kept from the last DMA index read and lowered per submit,
+so the index is read only when the count drops to four. The fast
+submit makes no calls: counters on or a near-full ring go to
+`tdma_tx_submit_slow`. It writes word 0 whole as
+`0x40000000 | token << 14 | length`. Kite holds mutex 0, taken inline;
+eagle takes none, since only the rxdmad hart submits.
 
 `tdma_set_tx_ring_to_int` writes `0x01010101`/`1` for ring 0 and
 `0x02020202`/`0x11` for ring 1 to `0x1FB50A2C`/`0x1FB50A28`. Bit 0 of

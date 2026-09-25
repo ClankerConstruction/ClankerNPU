@@ -438,9 +438,17 @@ static u32 *tdma_stats_base(u32 band)
 /* WiFi -> wired. Eight-byte descriptors, 1024 to a ring: word 0 carries
  * the frame length in bits 12:0 and the buffer token in 28:14, word 1
  * the buffer itself. */
-#if defined(AN7552) && defined(WIFI_KITE)
+#ifdef HAS_HOT_TEXT
+#ifdef WIFI_KITE
 /* Hart 1 sends every rx frame here; hart 0's BA mail handlers send the
  * frames a flush releases, so both hold mutex 0. */
+#define tdma_tx_lock()		hw_mutex_take(0)
+#define tdma_tx_unlock()	hw_mutex_give(0)
+#else
+/* eagle: only the rxdmad hart sends */
+#define tdma_tx_lock()		do { } while (0)
+#define tdma_tx_unlock()	do { } while (0)
+#endif
 static u32 tdma_tx_free[2];
 
 /* more than four free slots: their count, or 0 when the ring stays full */
@@ -481,13 +489,13 @@ static int __attribute__((noinline)) tdma_tx_submit_slow(u32 token,
 
 	if (base == 0)
 		return -1;
-	hw_mutex_take(0);
+	tdma_tx_lock();
 	sw_idx = tdma_tx_sw_idx[band];
 	/* the count read last only drops as the ring fills */
 	if (tdma_tx_free[band] <= 4) {
 		tdma_tx_free[band] = tdma_tx_room(band, sw_idx);
 		if (tdma_tx_free[band] == 0) {
-			hw_mutex_give(0);
+			tdma_tx_unlock();
 			return -1;
 		}
 	}
@@ -508,7 +516,7 @@ static int __attribute__((noinline)) tdma_tx_submit_slow(u32 token,
 	tdma_tx_sw_idx[band] = next;
 	desc[0] = (w0 & 0xFFFFE000) | (pkt_len & 0x1FFF);
 	REG32(TDMA_TX_RING0_IDX + 16 * band) = next;
-	hw_mutex_give(0);
+	tdma_tx_unlock();
 	return 0;
 }
 
@@ -522,9 +530,9 @@ NPU_HOT int tdma_tx_submit(u32 token, u32 pkt_len, u32 buf_addr, u32 band)
 
 	if (base == 0 || (wifi_debug_flags & 4))
 		return tdma_tx_submit_slow(token, pkt_len, buf_addr, band);
-	hw_mutex_take(0);
+	tdma_tx_lock();
 	if (tdma_tx_free[band] <= 4) {
-		hw_mutex_give(0);
+		tdma_tx_unlock();
 		return tdma_tx_submit_slow(token, pkt_len, buf_addr, band);
 	}
 	tdma_tx_free[band]--;
@@ -538,7 +546,7 @@ NPU_HOT int tdma_tx_submit(u32 token, u32 pkt_len, u32 buf_addr, u32 band)
 	tdma_tx_sw_idx[band] = next;
 	desc[0] = 0x40000000 | (token << 14) | (pkt_len & 0x1FFF);
 	REG32(TDMA_TX_RING0_IDX + 16 * band) = next;
-	hw_mutex_give(0);
+	tdma_tx_unlock();
 	return 0;
 }
 #else
