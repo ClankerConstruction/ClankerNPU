@@ -47,6 +47,12 @@ comes up when the host sends SET_WAIT 1 (ring descriptors) for it,
 which fills the rx ring and sets `rxd_2g_init_done` or
 `rxd_5g_init_done`. Core 1 polls those flags.
 
+Both bands' rx rings share SRAM block type 1: the first at its base,
+the second `0x6000` further on AN7552 (`0x6020` elsewhere). The same
+mail opens a PCIe inbound window over each band's ring, picked by the
+host's port type: `PCIE0_WIN_*`, or `PCIE1_WIN_*` on AN7552 and
+`PCIE0_MAC_BASE + 0x8030` on AN758x.
+
 The interface id in a kite mail is a band: 0 for 2.4 GHz, 1 for 5 GHz.
 
 ## Rx ring

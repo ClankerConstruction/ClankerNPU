@@ -223,11 +223,27 @@ void wifi_pcie_desc_alloc(void)
 	npu_printf("PCIE_TOTAL_DESC_BASE=%x\n", wifi_pcie_desc_base);
 }
 
-/* WiFi PCIe BAR descriptor offset: type 1=base, type 2=base+0x6020 */
+/* second band's ring: the type 1 block is 0xC000 on AN7552, 0xC040 elsewhere */
+#ifdef AN7552
+#define KITE_DESC_BAND_OFF	0x6000
+#else
+#define KITE_DESC_BAND_OFF	0x6020
+#endif
+
+/* the window beside PCIE0_WIN: MAC space on AN758x, SCU on AN7552 */
+#ifdef AN7552
+#define KITE_WIN1_BASE		PCIE1_WIN_BASE
+#define KITE_WIN1_END		PCIE1_WIN_END
+#else
+#define KITE_WIN1_BASE		(PCIE0_MAC_BASE + 0x8030)
+#define KITE_WIN1_END		(PCIE0_MAC_BASE + 0x8034)
+#endif
+
+/* WiFi PCIe BAR descriptor offset: type 1=base, type 2=base+band offset */
 static u32 wifi_pcie_desc_offset(u32 base, u32 type)
 {
 	if (type == 2)
-		return base + 0x6020;
+		return base + KITE_DESC_BAND_OFF;
 	if (type != 1) {
 		npu_printf("not support type[wificase:%d,wifisubcase:%d]\n",
 			   1, type);
@@ -290,37 +306,37 @@ void __attribute__((noinline)) wifi_npu_init(u32 band)
 
 	desc_type2 = wifi_pcie_desc_offset(wifi_pcie_desc_base, 2);
 	desc_type1 = wifi_pcie_desc_offset(wifi_pcie_desc_base, 1);
-	bar_5g = desc_type2 + 0x6020;
-	bar_2g = desc_type1 + 0x6020;
+	bar_5g = desc_type2 + KITE_DESC_BAND_OFF;
+	bar_2g = desc_type1 + KITE_DESC_BAND_OFF;
 
 	switch (wifi_pcie_port_type) {
 	case 1:
-		REG32(0x1FA90038) = desc_type1 & 0x1FFFFFFF;
-		REG32(0x1FA9003C) = bar_5g & 0x1FFFFFFF;
+		REG32(PCIE0_WIN_BASE) = desc_type1 & 0x1FFFFFFF;
+		REG32(PCIE0_WIN_END) = bar_5g & 0x1FFFFFFF;
 		break;
 	case 0:
-		REG32(PCIE0_MAC_BASE + 0x8030) = desc_type1 & 0x1FFFFFFF;
-		REG32(PCIE0_MAC_BASE + 0x8034) = bar_5g & 0x1FFFFFFF;
+		REG32(KITE_WIN1_BASE) = desc_type1 & 0x1FFFFFFF;
+		REG32(KITE_WIN1_END) = bar_5g & 0x1FFFFFFF;
 		if (band != 0)
 			goto alloc_5g;
 		goto alloc_2g;
 	case 2:
 		if (band != 0) {
-			REG32(0x1FA90038) = desc_type1 & 0x1FFFFFFF;
-			REG32(0x1FA9003C) = bar_2g & 0x1FFFFFFF;
+			REG32(PCIE0_WIN_BASE) = desc_type1 & 0x1FFFFFFF;
+			REG32(PCIE0_WIN_END) = bar_2g & 0x1FFFFFFF;
 			goto alloc_5g;
 		}
-		REG32(PCIE0_MAC_BASE + 0x8030) = desc_type2 & 0x1FFFFFFF;
-		REG32(PCIE0_MAC_BASE + 0x8034) = bar_5g & 0x1FFFFFFF;
+		REG32(KITE_WIN1_BASE) = desc_type2 & 0x1FFFFFFF;
+		REG32(KITE_WIN1_END) = bar_5g & 0x1FFFFFFF;
 		goto alloc_2g;
 	case 3:
 		if (band == 0) {
-			REG32(0x1FA90038) = desc_type2 & 0x1FFFFFFF;
-			REG32(0x1FA9003C) = bar_5g & 0x1FFFFFFF;
+			REG32(PCIE0_WIN_BASE) = desc_type2 & 0x1FFFFFFF;
+			REG32(PCIE0_WIN_END) = bar_5g & 0x1FFFFFFF;
 			goto alloc_2g;
 		}
-		REG32(PCIE0_MAC_BASE + 0x8030) = desc_type1 & 0x1FFFFFFF;
-		REG32(PCIE0_MAC_BASE + 0x8034) = bar_2g & 0x1FFFFFFF;
+		REG32(KITE_WIN1_BASE) = desc_type1 & 0x1FFFFFFF;
+		REG32(KITE_WIN1_END) = bar_2g & 0x1FFFFFFF;
 		goto alloc_5g;
 	default:
 		break;
