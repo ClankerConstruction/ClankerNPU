@@ -99,8 +99,8 @@ counter register and reload register.
 AN7552 has no core 2: `timer_init` registers the ISR on core 0. The
 tick must be acked, or the level interrupt re-enters forever and
 starves core 0. The AN7552 ISR acks from the control word saved at
-the first tick and only counts `timer_int_count`, the AN7552 kite
-ageing clock (`KITE_TICK`).
+the first tick and only counts: `timer_int_count`, the AN7552 kite
+ageing clock (`KITE_TICK`), and `timer_raw_tick` for the debug block.
 
 `delay_us` (800 cycles per microsecond) and `delay_ms` busy-wait on
 `mcycle`. `delay_ms` scales by the CPU clock and rejects a delay whose

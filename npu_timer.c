@@ -43,6 +43,7 @@ void timer_isr(int src)
 		timer_prev_ctrl = REG32(base);
 	REG32(base) = (timer_prev_ctrl & 0x1E0001EF) | (1u << bit);
 	timer_int_count++;
+	timer_raw_tick++;
 	return;
 #endif
 	/* ack: rewrite the control word with only this timer's clear bit set */
