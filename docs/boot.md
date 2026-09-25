@@ -103,7 +103,11 @@ the SoC through `0x1FB00040`.
 
 ## Trap handling
 
-`trap_vector` saves the registers and calls `trap_dispatch`:
+`trap_vector` saves the registers and calls `trap_dispatch`. With
+`HAS_LEAN_TRAP` (AN7583 eagle, one PPE return interrupt per burst of
+frames) it saves only the 16 a C call may clobber; `trap_dispatch` and
+every ISR are C and keep `s0`-`s11` themselves. The entry then sits in
+`.text.hot`.
 
 - `mcause` = machine external interrupt: claim from the PLIC and call the
   registered ISR.

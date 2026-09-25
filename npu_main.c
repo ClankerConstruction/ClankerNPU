@@ -420,7 +420,14 @@ void core_dispatch(int a0, int a1)
  * through the ISR table lands in default_isr, whose npu_printf re-enters a
  * printf that already holds the printf mutex, and a held-mutex acquire stalls
  * the NPU bus. */
-u32 trap_dispatch(u32 mcause, u32 mepc, u32 *sp, u32 ra)
+/* per-frame interrupts on lean trap parts: the entry joins the hot block */
+#ifdef HAS_LEAN_TRAP
+#define TRAP_HOT	NPU_HOT
+#else
+#define TRAP_HOT
+#endif
+
+TRAP_HOT u32 trap_dispatch(u32 mcause, u32 mepc, u32 *sp, u32 ra)
 {
 	volatile struct ndbg_hart *hp = &ndbg->hart[get_hartid()];
 
@@ -448,10 +455,17 @@ u32 trap_dispatch(u32 mcause, u32 mepc, u32 *sp, u32 ra)
 	return mepc + (((*(volatile u16 *)mepc) & 3) == 3 ? 4 : 2);
 }
 
-void __attribute__((naked, aligned(4))) trap_vector(void)
+/* trap_dispatch and every ISR are C and keep s0-s11 themselves */
+#ifdef HAS_LEAN_TRAP
+#define TRAP_FRAME	"64"
+#else
+#define TRAP_FRAME	"128"
+#endif
+
+TRAP_HOT void __attribute__((naked, aligned(4))) trap_vector(void)
 {
 	__asm__ volatile(
-		"addi sp, sp, -128\n"
+		"addi sp, sp, -" TRAP_FRAME "\n"
 		"sw ra,   0(sp)\n"
 		"sw t0,   4(sp)\n"
 		"sw t1,   8(sp)\n"
@@ -468,6 +482,7 @@ void __attribute__((naked, aligned(4))) trap_vector(void)
 		"sw t4,  52(sp)\n"
 		"sw t5,  56(sp)\n"
 		"sw t6,  60(sp)\n"
+#ifndef HAS_LEAN_TRAP
 		"sw s0,  64(sp)\n"
 		"sw s1,  68(sp)\n"
 		"sw s2,  72(sp)\n"
@@ -480,6 +495,7 @@ void __attribute__((naked, aligned(4))) trap_vector(void)
 		"sw s9, 100(sp)\n"
 		"sw s10,104(sp)\n"
 		"sw s11,108(sp)\n"
+#endif
 		"csrr a0, mcause\n"
 		"csrr a1, mepc\n"
 		"mv a2, sp\n"
@@ -504,6 +520,7 @@ void __attribute__((naked, aligned(4))) trap_vector(void)
 		"lw t4,  52(sp)\n"
 		"lw t5,  56(sp)\n"
 		"lw t6,  60(sp)\n"
+#ifndef HAS_LEAN_TRAP
 		"lw s0,  64(sp)\n"
 		"lw s1,  68(sp)\n"
 		"lw s2,  72(sp)\n"
@@ -516,7 +533,8 @@ void __attribute__((naked, aligned(4))) trap_vector(void)
 		"lw s9, 100(sp)\n"
 		"lw s10,104(sp)\n"
 		"lw s11,108(sp)\n"
-		"addi sp, sp, 128\n"
+#endif
+		"addi sp, sp, " TRAP_FRAME "\n"
 		"mret\n"
 	);
 }

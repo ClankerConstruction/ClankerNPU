@@ -82,4 +82,10 @@
 #define HAS_HOT_TEXT
 #endif
 
+/* The trap entry saves only the registers a C call may clobber.
+ * AN7583 eagle takes a PPE buffer return interrupt per frame. */
+#if defined(AN7583) && defined(WIFI_EAGLE)
+#define HAS_LEAN_TRAP
+#endif
+
 #endif /* NPU_CONFIG_H */
