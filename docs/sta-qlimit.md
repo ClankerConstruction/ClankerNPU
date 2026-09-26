@@ -317,10 +317,11 @@ runs dry.
 | + | A slow client no longer holds the channel with a deep queue: a fast client beside it gets up to a fifth more. |
 | + | One station can no longer drain the shared token pool, so host traffic and other stations keep getting tokens. |
 | + | Drops come early and one at a time, not in bursts when the pool is empty: fewer retransmissions. |
-| + | No cost in forwarding rate; every count and probe has one writer per field, so no locks. |
+| + | No locks: every count and probe field has one writer. |
 | + | Every value changes at run time, per the table above. |
 | − | Two fast clients on one radio lose up to 2 to 6 % of their sum, and the slower of them gives up share: it meets the delay target first. `delay` 20 ms gives that back for a few ms more queue at 2.4 GHz. |
 | − | One frame per station is timed at a time, so `t` lags a sudden change by up to one trip through the queue. |
+| − | Core 2 spends about 155 cycles more per LAN to WiFi frame with the delay target than with everything off (1194 against 1039, `ELAN` in a `PROF=1` build), 65 more than with the frame target alone. Its ceiling falls from about 690 to 600 kpps, several times what one radio carries. |
 | − | Only wcids below 1024 are tracked; others pass unlimited. |
 | − | Drops only; no ECN marking, and one queue per station, not per flow. A packet marked DSCP EF goes to the chip's voice queue and waits far less (7 ms against 190 ms at 2.4 GHz, measured with no time target); unmarked flows share the station's queue. |
 | − | The upload direction (WiFi to LAN) and frames the host sends to WiFi are not limited; the host queues those. |

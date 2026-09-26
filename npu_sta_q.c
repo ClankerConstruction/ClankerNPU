@@ -59,7 +59,7 @@ void sta_q_init(void)
 	}
 	npu_memset(sta_q_aqm, 0, STA_Q_STAS * sizeof(*sta_q_aqm));
 	for (i = 0; i < STA_Q_STAS; i++) {
-		sta_q_probe[i].tok = STA_Q_NONE;
+		sta_q_probe[i].tokts = STA_Q_NONE;
 		sta_q_probe[i].delay = 0;
 	}
 	/* last: the hooks start counting once the map is there */
@@ -68,15 +68,14 @@ void sta_q_init(void)
 
 /* Ticks the station's frames spend in the chip: the last timed frame,
  * or the one in flight if it is older already. */
-static NPU_HOT u32 sta_q_delay(u32 sta, u32 now)
+static NPU_HOT u32 sta_q_delay(struct sta_q_probe *p, u32 now)
 {
-	struct sta_q_probe *p = &sta_q_probe[sta];
-	u32 d = p->delay, tok = p->tok, age;
+	u32 w = p->tokts, d = p->delay, age;
 
-	if (tok != STA_Q_NONE) {
-		age = (u16)((now >> STA_Q_TICK) - p->ts);
+	if ((w & 0xFFFF) != STA_Q_NONE) {
+		age = (u16)((now >> STA_Q_TICK) - (w >> 16));
 		if (age > STA_Q_PROBE_LOST)
-			p->tok = STA_Q_NONE;	/* restart or lost report */
+			p->tokts = STA_Q_NONE;	/* restart or lost report */
 		else if (age > d)
 			d = age;
 	}
@@ -86,24 +85,22 @@ static NPU_HOT u32 sta_q_delay(u32 sta, u32 now)
 /* 1: drop the frame. A station's queue in the chip that stands above
  * target, in frames or in time, for an interval starts drops, spaced
  * interval / sqrt(n) as CoDel does (RFC 8289); dipping below ends them. */
-NPU_HOT int sta_q_decide(u32 sta, u32 now, u32 len)
+NPU_HOT int sta_q_decide(const struct sta_q_cfg *c, u32 sta, u32 now, u32 len)
 {
 	struct sta_q_aqm *a = &sta_q_aqm[sta];
-	volatile struct wifi_sta_q *cfg = &wifi_sta_q;
-	u32 interval = cfg->interval, target = cfg->target, limit = cfg->limit;
-	u32 delay = cfg->delay;
-	s16 d = (s16)(sta_q_sent[sta] - sta_q_done[sta]);
+	u32 interval = c->interval;
+	s16 d = (s16)(c->sent[sta] - c->done[sta]);
 	/* done never passes sent, but a stale count must not read as full */
 	u32 q = d > 0 ? (u32)d : 0, n, above = 0;
 
-	if (limit != 0 && q >= limit) {
-		cfg->limit_drops++;
+	if (c->limit != 0 && q >= c->limit) {
+		wifi_sta_q.limit_drops++;
 		return 1;
 	}
-	if (target != 0 && q >= target)
+	if (c->target != 0 && q >= c->target)
 		above = 1;
-	if (delay != 0 && q >= cfg->min_q &&
-	    (sta_q_delay(sta, now) << STA_Q_TICK) >= delay)
+	else if (c->delay != 0 && q >= c->min_q &&
+		 (sta_q_delay(&c->probe[sta], now) << STA_Q_TICK) >= c->delay)
 		above = 1;
 	if (!above) {
 		a->flags = 0;
@@ -117,7 +114,7 @@ NPU_HOT int sta_q_decide(u32 sta, u32 now, u32 len)
 	if ((s32)(now - a->above) < 0)
 		return 0;
 	/* acks, games, calls: little airtime, much harm when lost */
-	if (len <= cfg->small)
+	if (len <= c->small)
 		return 0;
 
 	if (a->flags & AQM_DROPPING) {
@@ -138,7 +135,7 @@ NPU_HOT int sta_q_decide(u32 sta, u32 now, u32 len)
 		a->next = now;
 	}
 	a->next += interval / npu_isqrt(a->count);
-	cfg->aqm_drops++;
+	wifi_sta_q.aqm_drops++;
 	return 1;
 }
 

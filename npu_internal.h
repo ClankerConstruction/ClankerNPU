@@ -56,8 +56,7 @@ struct wifi_sta_q {
 
 /* one frame per station timed through the chip; two harts write it */
 struct sta_q_probe {
-	volatile u16 tok;	/* timed token, or none; the sending hart arms it */
-	volatile u16 ts;	/* when it was sent, ticks */
+	volatile u32 tokts;	/* token | send tick << 16, or STA_Q_NONE */
 	volatile u16 delay;	/* ticks the last timed frame spent in the chip */
 	u16 pad;
 };
@@ -68,42 +67,68 @@ extern volatile u16 *sta_q_sent;	/* the sending hart writes */
 extern volatile u16 *sta_q_done;	/* the tx done hart writes */
 extern struct sta_q_probe *sta_q_probe;
 
+/* the settings and tables, read once per batch of the sending hart */
+struct sta_q_cfg {
+	u32 on;		/* map there and a limit, target or delay set */
+	u32 limit, target, interval, delay, min_q, small;
+	volatile u16 *map, *sent, *done;
+	struct sta_q_probe *probe;
+};
+
 void sta_q_init(void);
-int sta_q_decide(u32 sta, u32 now, u32 len);
+int sta_q_decide(const struct sta_q_cfg *c, u32 sta, u32 now, u32 len);
+
+/* a write to wifi_sta_q counts from the next snapshot */
+static NPU_INLINE void sta_q_snap(struct sta_q_cfg *c)
+{
+	volatile struct wifi_sta_q *q = &wifi_sta_q;
+
+	c->map = sta_q_tok;
+	c->sent = sta_q_sent;
+	c->done = sta_q_done;
+	c->probe = sta_q_probe;
+	c->limit = q->limit;
+	c->target = q->target;
+	c->interval = q->interval;
+	c->delay = q->delay;
+	c->min_q = q->min_q;
+	c->small = q->small;
+	c->on = c->map != NULL && (c->limit | c->target | c->delay) != 0;
+}
 
 /* 1: drop this len-byte frame of station sta (wcid) */
-static NPU_INLINE int sta_q_drop(u32 sta, u32 now, u32 len)
+static NPU_INLINE int sta_q_drop(const struct sta_q_cfg *c, u32 sta, u32 now,
+				 u32 len)
 {
-	if (sta >= STA_Q_STAS || sta_q_tok == NULL ||
-	    (wifi_sta_q.limit | wifi_sta_q.target | wifi_sta_q.delay) == 0)
+	if (!c->on || sta >= STA_Q_STAS)
 		return 0;
-	return sta_q_decide(sta, now, len);
+	return sta_q_decide(c, sta, now, len);
 }
 
 /* token tok carries a frame of station sta; before the chip sees it */
-static NPU_INLINE void sta_q_sent_tok(u32 tok, u32 sta, u32 now)
+static NPU_INLINE void sta_q_sent_tok(const struct sta_q_cfg *c, u32 tok,
+				      u32 sta, u32 now)
 {
 	struct sta_q_probe *p;
 
-	if (sta < STA_Q_STAS && tok < STA_Q_TOKENS && sta_q_tok != NULL) {
-		sta_q_tok[tok] = (u16)sta;
-		sta_q_sent[sta]++;
-		p = &sta_q_probe[sta];
-		if (p->tok == STA_Q_NONE) {
-			p->ts = (u16)(now >> STA_Q_TICK);
-			p->tok = (u16)tok;
-		}
+	if (sta < STA_Q_STAS && tok < STA_Q_TOKENS && c->map != NULL) {
+		c->map[tok] = (u16)sta;
+		c->sent[sta]++;
+		p = &c->probe[sta];
+		if ((p->tokts & 0xFFFF) == STA_Q_NONE)
+			p->tokts = tok | ((now >> STA_Q_TICK) << 16);
 	}
 }
 
 /* the frame never reached the chip */
-static NPU_INLINE void sta_q_unsent_tok(u32 tok, u32 sta)
+static NPU_INLINE void sta_q_unsent_tok(const struct sta_q_cfg *c, u32 tok,
+					u32 sta)
 {
-	if (sta < STA_Q_STAS && tok < STA_Q_TOKENS && sta_q_tok != NULL) {
-		sta_q_tok[tok] = STA_Q_NONE;
-		sta_q_sent[sta]--;
-		if (sta_q_probe[sta].tok == tok)
-			sta_q_probe[sta].tok = STA_Q_NONE;
+	if (sta < STA_Q_STAS && tok < STA_Q_TOKENS && c->map != NULL) {
+		c->map[tok] = STA_Q_NONE;
+		c->sent[sta]--;
+		if ((c->probe[sta].tokts & 0xFFFF) == tok)
+			c->probe[sta].tokts = STA_Q_NONE;
 	}
 }
 
@@ -112,7 +137,7 @@ static NPU_INLINE void sta_q_done_tok(u32 tok, u32 tick)
 {
 	volatile u16 *map = sta_q_tok;
 	struct sta_q_probe *p;
-	u32 sta;
+	u32 sta, w;
 
 	if (map == NULL || tok >= STA_Q_TOKENS)
 		return;
@@ -121,9 +146,10 @@ static NPU_INLINE void sta_q_done_tok(u32 tok, u32 tick)
 		map[tok] = STA_Q_NONE;
 		sta_q_done[sta]++;
 		p = &sta_q_probe[sta];
-		if (p->tok == tok) {
-			p->delay = (u16)(tick - p->ts);
-			p->tok = STA_Q_NONE;
+		w = p->tokts;
+		if ((w & 0xFFFF) == tok) {
+			p->delay = (u16)(tick - (w >> 16));
+			p->tokts = STA_Q_NONE;
 		}
 	}
 }

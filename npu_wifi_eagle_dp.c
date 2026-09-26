@@ -216,6 +216,9 @@ static NPU_HOT __attribute__((noinline)) int eagle_tdma_to_wifi(u32 ring,
 	u8 band = 0;
 #ifdef HAS_EAGLE_STA_QLIMIT
 	u32 now = (u32)csr_read(mcycle), sta;
+	struct sta_q_cfg qc;
+
+	qc.map = NULL;		/* no snapshot until a frame is there */
 #endif
 
 	if (budget > 127)
@@ -232,7 +235,9 @@ static NPU_HOT __attribute__((noinline)) int eagle_tdma_to_wifi(u32 ring,
 #ifdef HAS_EAGLE_STA_QLIMIT
 		w0 = REG32(d + 16);
 		sta = (w0 >> 14) & 0x7FF;
-		if (sta_q_drop(sta, now, w1 & 0xFFFF)) {
+		if (qc.map == NULL)
+			sta_q_snap(&qc);
+		if (sta_q_drop(&qc, sta, now, w1 & 0xFFFF)) {
 			/* drop: the slot keeps its buffer */
 			REG32(d + 4) = 0x800;
 			goto next;
@@ -256,7 +261,7 @@ static NPU_HOT __attribute__((noinline)) int eagle_tdma_to_wifi(u32 ring,
 					0x3FFFFFFF) | 0x80000000;
 			REG32(d + 4) = 0x800;
 #ifdef HAS_EAGLE_STA_QLIMIT
-			sta_q_sent_tok(tok, sta, now);
+			sta_q_sent_tok(&qc, tok, sta, now);
 #else
 			w0 = REG32(d + 16);
 #endif
@@ -272,7 +277,7 @@ static NPU_HOT __attribute__((noinline)) int eagle_tdma_to_wifi(u32 ring,
 					dbg.lanxband++;
 			} else if (r == -1) {
 #ifdef HAS_EAGLE_STA_QLIMIT
-				sta_q_unsent_tok(tok, sta);
+				sta_q_unsent_tok(&qc, tok, sta);
 #endif
 				tx_token_free((u16)tok);
 				dbg.lanfail++;
@@ -320,6 +325,9 @@ static int eagle_tdma_to_wifi(u32 ring, u32 budget)
 	u8 band = 0;
 #ifdef HAS_EAGLE_STA_QLIMIT
 	u32 now = (u32)csr_read(mcycle), sta;
+	struct sta_q_cfg qc;
+
+	qc.map = NULL;		/* no snapshot until a frame is there */
 #endif
 
 	if (budget > 127)
@@ -335,7 +343,9 @@ static int eagle_tdma_to_wifi(u32 ring, u32 budget)
 		stop = 0;
 #ifdef HAS_EAGLE_STA_QLIMIT
 		sta = (REG32(d + 16) >> 14) & 0x7FF;
-		if (sta_q_drop(sta, now, w1 & 0xFFFF)) {
+		if (qc.map == NULL)
+			sta_q_snap(&qc);
+		if (sta_q_drop(&qc, sta, now, w1 & 0xFFFF)) {
 			/* drop: the slot keeps its buffer */
 			REG32(d + 4) = 0x800;
 			goto next;
@@ -354,7 +364,7 @@ static int eagle_tdma_to_wifi(u32 ring, u32 budget)
 					0x3FFFFFFF) | 0x80000000;
 			REG32(d + 4) = 0x800;
 #ifdef HAS_EAGLE_STA_QLIMIT
-			sta_q_sent_tok(tok, sta, now);
+			sta_q_sent_tok(&qc, tok, sta, now);
 #endif
 			if (eagle_tx_ring_fill(buf, w1 & 0xFFFF, (u16)tok,
 					       d + 16, &band) == 0) {
@@ -363,7 +373,7 @@ static int eagle_tdma_to_wifi(u32 ring, u32 budget)
 					dbg.lanxband++;
 			} else {
 #ifdef HAS_EAGLE_STA_QLIMIT
-				sta_q_unsent_tok(tok, sta);
+				sta_q_unsent_tok(&qc, tok, sta);
 #endif
 				tx_token_free((u16)tok);
 				dbg.lanfail++;
