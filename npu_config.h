@@ -105,6 +105,13 @@
 #define HAS_EAGLE_STA_QLIMIT
 #endif
 
+/* Tx done reports are read through the D-cache after their lines are
+ * invalidated, as the stock firmware reads RRO pages: one line fill
+ * per 64 bytes instead of an uncached load per word. */
+#if defined(AN7583) && defined(WIFI_EAGLE)
+#define HAS_CACHED_TXDONE
+#endif
+
 /* The trap entry saves only the registers a C call may clobber.
  * AN7583 eagle takes a PPE buffer return interrupt per frame. */
 #if defined(AN7583) && defined(WIFI_EAGLE)

@@ -146,7 +146,13 @@ interesting results:
 | `0xFC2xx073` (imm `0xFC2`, rd 0) | invalidate the line; dirty data is lost |
 
 The stock eagle firmware issues `0xFC2` once per 64-byte line before it
-reads descriptors the chip wrote through the cached alias.
+reads descriptors the chip wrote through the cached alias: its RRO MSDU
+page walk, five 24-byte records a page, three fields read from each.
+This firmware reads tx done token reports that way on AN7583
+(`HAS_CACHED_TXDONE`, [wifi-eagle.md](wifi-eagle.md#rings-and-buffers)).
+`dcache_inv_line()` in `npu_internal.h` issues it. Invalidate only
+lines of buffers the NPU never writes through the cache: a line that
+also holds a stack or a global loses its dirty data.
 
 The D-cache is 8 KB with 64-byte lines, write-back and write-allocate,
 and does not snoop DMA or uncached writes. Through `0x8xxxxxxx`, a hit

@@ -165,6 +165,14 @@ int hw_mutex_unlock_pri(u32 *desc);
 /* keeps memory accesses on their side of a mutex take, give or kick */
 #define npu_barrier()	__asm__ __volatile__("" ::: "memory")
 
+/* Vendor line op 0xFC2: drop the 64-byte D-cache line holding addr,
+ * dirty data included. Before reading what DMA wrote through 0x8xxxxxxx. */
+#define NPU_DCACHE_LINE	64
+static inline __attribute__((always_inline)) void dcache_inv_line(u32 addr)
+{
+	__asm__ __volatile__(".insn i 0x73, 0, x0, %0, -62" :: "r"(addr) : "memory");
+}
+
 static inline __attribute__((always_inline)) void hw_mutex_take(u32 id)
 {
 	u32 hart = get_hartid(), off = (id * 4) & HW_MUTEX_OFF_MASK;

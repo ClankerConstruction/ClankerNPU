@@ -99,7 +99,19 @@ Two buffer pools:
   the ring's write index only while holding it. With `HAS_HOT_TEXT`
   mutex 13 and the packet queue's mutex 10 are taken inline.
 - **tx tokens**: 13312 tokens over the NPU tx packet buffer. The tx done
-  ring returns them.
+  ring returns them: each slot holds an rx buffer id whose buffer the
+  chip fills with a token report, 15-bit tokens two per word after a
+  12-byte header.
+
+With `HAS_CACHED_TXDONE` (AN7583) core 3 reads a token report through
+the D-cache alias (`0x8xxxxxxx`) instead of the uncached one. The cache
+does not see the chip's writes, so it first drops every 64-byte line the
+report covers with the vendor op `0xFC2` ([platform.md](platform.md#core-isa-and-data-cache)),
+bounded to the 2 KB buffer. One line fill then serves 16 words; the
+uncached read cost 80 to 95 cycles a word. A report of about 63 tokens
+(a 5 GHz download) took 14265 cycles and takes 10618; one of about 39
+tokens (2.4 GHz) 10347 and 7855 (`ETXD`, `PROF=1`). The stock firmware
+reads its RRO MSDU pages the same way.
 
 With `HAS_ID_BATCH` (AN7583) both pools move ids in batches, one mutex
 hold each: the refill takes up to 32 ids for the slots the chip handed

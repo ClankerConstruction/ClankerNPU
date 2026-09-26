@@ -469,6 +469,19 @@ static NPU_INLINE u32 eagle_buf_uncached(u32 buf_id)
 	       (buf_id << EAGLE_PKT_BUF_SHIFT);
 }
 
+#ifdef HAS_CACHED_TXDONE
+/* the buffer through the D-cache: invalidate a line before reading it */
+static NPU_INLINE u32 eagle_buf_cached(u32 buf_id)
+{
+	return ((eagle_pkt_buf_addr & 0x3FFFFFFF) | 0x80000000) +
+	       (buf_id << EAGLE_PKT_BUF_SHIFT);
+}
+
+/* report words past the 12-byte header that fit in one buffer */
+#define EAGLE_TXDONE_REPORT_MAX \
+	((1u << EAGLE_PKT_BUF_SHIFT) - EAGLE_PKT_HEADROOM - 12)
+#endif
+
 static u32 eagle_buf_phys(u32 buf_id)
 {
 	return ((((buf_id << EAGLE_PKT_BUF_SHIFT) + eagle_pkt_buf_addr) &
@@ -1317,18 +1330,31 @@ static int eagle_txdone_poll(void)
 		if ((s32)dw1 >= 0)
 			break;
 
-		buf = eagle_buf_uncached(ids[idx]);
-		hdr = REG32(buf + EAGLE_PKT_HEADROOM);
+#ifdef HAS_CACHED_TXDONE
+		buf = eagle_buf_cached(ids[idx]) + EAGLE_PKT_HEADROOM;
+		dcache_inv_line(buf);
+#else
+		buf = eagle_buf_uncached(ids[idx]) + EAGLE_PKT_HEADROOM;
+#endif
+		hdr = REG32(buf);
 
 		if ((hdr >> 27) == 6 || (hdr >> 27) == 24) {
 			/* token report: 15-bit ids, 0x7FFF is the terminator */
 			u32 left = (hdr & 0xFFFF);
 
 			left = (left > 12) ? left - 12 : 0;
+#ifdef HAS_CACHED_TXDONE
+			/* stay in the buffer: a stray invalidate loses data */
+			if (left > EAGLE_TXDONE_REPORT_MAX)
+				left = EAGLE_TXDONE_REPORT_MAX;
+			for (i = NPU_DCACHE_LINE; i < 12 + left;
+			     i += NPU_DCACHE_LINE)
+				dcache_inv_line(buf + i);
+#endif
 			cnt = (hdr >> 16) & 0xFF;
 			n = 0;
 			for (i = 0; n < cnt && left >= 4; i++, left -= 4) {
-				u32 w = REG32(buf + EAGLE_PKT_HEADROOM + 12 + 4 * i);
+				u32 w = REG32(buf + 12 + 4 * i);
 				u32 lo = w & 0x7FFF;
 				u32 hi = (w >> 15) & 0x7FFF;
 

@@ -172,7 +172,8 @@ Feature flags from `npu_config.h`:
 | `HAS_FAST_POLL` | AN7583 eagle (WiFi rx and tx loops without long idle waits; core 2 serves both bands every pass) |
 | `HAS_ASYNC_COPY` | AN7583 eagle (host out ring copy overlaps the next frame's work) |
 | `HAS_LEAN_TRAP` | AN7583 eagle (trap entry saves only caller-saved registers) |
-| `HAS_EAGLE_STA_QLIMIT` | AN7581 and AN7583 eagle with NPU tx (per-station limit on LAN to WiFi frames in the WiFi chip) |
+| `HAS_EAGLE_STA_QLIMIT` | AN7581 and AN7583 eagle with NPU tx (per-station limit on LAN to WiFi frames in the WiFi chip, by time) |
+| `HAS_CACHED_TXDONE` | AN7583 eagle (tx done reports read through the D-cache after a line invalidate) |
 
 ## Documentation
 
