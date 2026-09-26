@@ -123,6 +123,36 @@ Stores are posted and cost about one cycle. Back-to-back uncached
 loads do not overlap. Loads dominate: a restored callee-saved register
 costs as much as ten ALU instructions.
 
+## Core ISA and data cache
+
+A probe test on AN7583 with every encoding of the reserved shows some
+interesting results:
+
+- RV32IMAC, machine mode only. `misa` sets bit 23 (non-standard
+  extensions), `mvendorid` 0, `marchid` 1, `mimpid` `0x20210428`.
+- None of Zba, Zbb, Zbs, Zbc, Zicond, Zicbom, Zicboz, Zcb or Zcmp: all
+  trap as illegal. The custom-0..3 opcodes are empty.
+- `rdcycle`, `rdtime` and `rdinstret` trap; use `mcycle` and `minstret`.
+  `mhpmcounter3` and `4` (`0xB03`, `0xB04`) count with their event
+  CSRs at 0. `0x7C1` reads `0x20E`; `0x7DA`..`0x7DD` read 0.
+- A misaligned load or store traps as an access fault (cause 5 or 7).
+  AMOs and LR fault on the uncached DRAM alias.
+- Two vendor instructions act on one 64-byte D-cache line at the address
+  in rs1:
+
+| encoding | effect |
+|---|---|
+| `0xFC0xx073` (imm `0xFC0`, rd 0) | write the line back if dirty, then invalidate |
+| `0xFC2xx073` (imm `0xFC2`, rd 0) | invalidate the line; dirty data is lost |
+
+The stock eagle firmware issues `0xFC2` once per 64-byte line before it
+reads descriptors the chip wrote through the cached alias.
+
+The D-cache is 8 KB with 64-byte lines, write-back and write-allocate,
+and does not snoop DMA or uncached writes. Through `0x8xxxxxxx`, a hit
+costs about 7 cycles and a sequential miss about 50; `0x4xxxxxxx` loads
+cost 80 to 95 cycles in a loop.
+
 ## Console output
 
 Two output paths share mutex 15.
