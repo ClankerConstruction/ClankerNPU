@@ -1606,13 +1606,38 @@ static u32 eagle_tx_ring_push_n(u32 band, u32 max)
 	return n;
 }
 
-/* core 2: staged frames into the WiFi tx ring, paced by the ring's own
- * dma index so the chip is never overrun */
+/* Free slots in a band's tx ring, at most max. The chip hands slots
+ * back in order, bit 31 at +4, so slot cpu + n - 1 back means n free.
+ * One SRAM read when all of max is back, else a binary search. */
+static NPU_INLINE u32 eagle_tx_ring_room(u32 band, u32 max)
+{
+	u32 ring = eagle_tx_ring_desc[band], cpu = eagle_tx_ring_cpu_idx[band];
+	u32 lo = 0, hi = max - 1, mid;
+
+	if ((s32)REG32(ring + (((cpu + max - 1) & EAGLE_TX_RING_MASK) << 4) +
+		       4) < 0)
+		return max;
+	while (lo < hi) {
+		mid = (lo + hi + 1) >> 1;
+		if ((s32)REG32(ring + (((cpu + mid - 1) & EAGLE_TX_RING_MASK) << 4) +
+			       4) < 0)
+			lo = mid;
+		else
+			hi = mid - 1;
+	}
+	return lo;
+}
+
+/* core 2: staged frames into the WiFi tx ring, paced by the slots the
+ * chip has handed back so it is never overrun */
 void __attribute__((noreturn)) eagle_tx_fast_path(void)
 {
 	u8 chaining = 0;
+#ifdef HAS_FAST_POLL
 	u16 dma[2] = { 0, 0 };
-	u32 band, cpu, free;
+	u32 cpu;
+#endif
+	u32 band, free;
 	int empty;
 
 	while (eagle_init_done == 0 || eagle_fastpath_en == 0 ||
@@ -1636,8 +1661,11 @@ void __attribute__((noreturn)) eagle_tx_fast_path(void)
 				eagle_rx_busy = 0;
 			eagle_rx_stopped = 1;
 			eagle_delay(2000);
-			dma[0] = 0;
-			dma[1] = 0;
+#ifdef HAS_FAST_POLL
+			/* no room known: count it again on the first pass */
+			dma[0] = (u16)(eagle_tx_ring_cpu_idx[0] + 1);
+			dma[1] = (u16)(eagle_tx_ring_cpu_idx[1] + 1);
+#endif
 		}
 		eagle_rx_stopped = 0;
 
@@ -1652,15 +1680,14 @@ void __attribute__((noreturn)) eagle_tx_fast_path(void)
 #ifdef HAS_FAST_POLL
 		/* Both bands every pass: up to 32 host frames, then LAN
 		 * frames into the rest of the room, keeping 6 slots free.
-		 * The room comes from the last DMA index read, which only
-		 * undercounts; the costly PCIe read happens when it runs low. */
+		 * The room comes from the last count of slots the chip handed
+		 * back, which only undercounts; it is counted again when low. */
 		for (band = 1; band != (u32)-1; band--) {
 			cpu = eagle_tx_ring_cpu_idx[band];
 			free = (dma[band] - cpu - 1) & EAGLE_TX_RING_MASK;
 			if (free <= EAGLE_TX_RING_ROOM + EAGLE_TX_HOST_BUDGET + 128) {
-				dma[band] = (u16)REG32(eagle_tx_ring_pcie_base[band] +
-						       0xC);
-				free = (dma[band] - cpu - 1) & EAGLE_TX_RING_MASK;
+				free = eagle_tx_ring_room(band, EAGLE_TX_RING_MASK);
+				dma[band] = (u16)((cpu + free + 1) & EAGLE_TX_RING_MASK);
 				if (free <= EAGLE_TX_RING_ROOM) {
 					eagle_delay(5000);
 					continue;
@@ -1677,11 +1704,9 @@ void __attribute__((noreturn)) eagle_tx_fast_path(void)
 		}
 #else
 		for (band = 1; band != (u32)-1; band--) {
-			cpu = eagle_tx_ring_cpu_idx[band];
-			free = (dma[band] - cpu - 1) & EAGLE_TX_RING_MASK;
+			free = eagle_tx_ring_room(band, EAGLE_TX_RING_MASK);
 			if (free <= EAGLE_TX_RING_ROOM) {
 				eagle_delay(5000);
-				dma[band] = (u16)REG32(eagle_tx_ring_pcie_base[band] + 0xC);
 				continue;
 			}
 			while (free > EAGLE_TX_RING_ROOM) {
@@ -1696,7 +1721,6 @@ void __attribute__((noreturn)) eagle_tx_fast_path(void)
 					break;
 			}
 			eagle_delay(1000);
-			dma[band] = (u16)REG32(eagle_tx_ring_pcie_base[band] + 0xC);
 		}
 #endif
 	}
