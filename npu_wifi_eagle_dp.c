@@ -82,7 +82,7 @@ eagle_tx_ring_fill(u32 buf, u16 len, u16 token, u32 info, u8 *band_out)
 		if ((s32)REG32(desc + 4) < 0 || retry == 0 || eagle_stopping)
 			break;
 		dbg.lanwait++;
-		if (retry == 1000 || retry == 1)
+		if ((retry == 1000 || retry == 1) && NDBG_PRINTING(NDBG_WIFI))
 			npu_printf(band ? "fband1 cpuindex = %d, dmaindex = %d" :
 					  "fband0 cpuindex = %d, dmaindex = %d",
 				   cpu, REG32(eagle_tx_ring_pcie_base[band] + 0xC));
@@ -911,7 +911,8 @@ static int eagle_rxdmad_handle(u8 *chaining)
 						     1, 2, seg_len) != 0) {
 				dbg.rxdrop++;
 				buf_id_return((u16)buf_id);
-				npu_printf("enq slow path faill\n");
+				if (NDBG_PRINTING(NDBG_WIFI))
+					npu_printf("enq slow path faill\n");
 			}
 		} else if (eagle_pkt_enqueue((u16)buf_id, seg_len, 0, 0, 1, 2,
 					     seg_len) != 0) {
@@ -1116,7 +1117,7 @@ static int eagle_tx_ring_push(u32 band)
 		for (wait = 1000; wait != 0 && eagle_stopping == 0; wait--) {
 			if ((s32)REG32(desc + 4) < 0)
 				break;
-			if (wait == 1000 || wait == 1)
+			if ((wait == 1000 || wait == 1) && NDBG_PRINTING(NDBG_WIFI))
 				npu_printf(band ? "sband1 cpuindex = %d, dmaindex = %d" :
 						  "sband0 cpuindex = %d, dmaindex = %d", cpu,
 					   REG32(eagle_tx_ring_pcie_base[band] + 0xC));
@@ -1428,8 +1429,6 @@ static NPU_INLINE int eagle_rxdmad_fast(void)
 	if (eagle_txq1_put(buf_id, len) != 0) {
 		dbg.rxdrop++;
 		buf_id_return(buf_id);
-		if ((dw1 & 0x1800) != 0x800 && host == 0)
-			npu_printf("enq slow path faill\n");
 	}
 done:
 	eagle_rxdmad_ridx = next;

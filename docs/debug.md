@@ -213,7 +213,10 @@ the handler may have interrupted a print.
 | 15 | `stats` | print only: eagle datapath counters every two seconds from core 3 |
 
 Print bit 1 (`wifi`) also prints the first host tx frame and the first
-WiFi tx descriptors per band, and the first four large rx descriptors.
+WiFi tx descriptors per band, the first four large rx descriptors, and
+on eagle the per-frame messages of a full host queue (`enq slow path
+faill`) and of a WiFi tx slot the chip still owns (`fbandN`, `sbandN`).
+Those can repeat per frame, and a line costs about two milliseconds.
 
 A ring entry is `{tick, hart << 28 | subsystem << 20 | ev, a, b}`; the
 ring of hart `n` starts at `0x1E906C00 + n * 0x100` and holds the last
