@@ -819,7 +819,7 @@ static void eagle_mseg_drain(u32 band)
 	u32 idx = eagle_mseg_ridx[band];
 	u32 base = eagle_mseg_base[band];
 	u32 e = base + EAGLE_Q_ENTRY * idx;
-	u32 waited = 0, segs = 0, count, this_idx, buf_id;
+	u32 waited = 0, segs = 0, count, this_idx, buf_id, spin;
 	u8 flags;
 	int ok;
 
@@ -832,7 +832,11 @@ static void eagle_mseg_drain(u32 band)
 		if ((*(volatile u8 *)(e + 8) & 1) == 0) {
 			if (++waited > eagle_mseg_retry)
 				return;
-			eagle_delay(10000);
+			/* core 1 queues a frame's segments back to back:
+			 * wait for this one, as long as eagle_delay(10000) */
+			for (spin = 10000; spin != 0 &&
+			     (*(volatile u8 *)(e + 8) & 1) == 0; spin--)
+				;
 			continue;
 		}
 		flags = *(volatile u8 *)(e + 8);

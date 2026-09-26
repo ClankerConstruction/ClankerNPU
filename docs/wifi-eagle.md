@@ -197,6 +197,10 @@ write an rx one, and its DMA index never moves.
 - **WiFi to host.** Frames without `dst_sel`, with errors, or with force
   to CPU set go on the packet queue; core 3 copies them to the host
   adaptor out ring and returns the buffer id.
+  Frames spanning several buffers go on the multi-segment queue. Core
+  3 hands a frame up only whole: for a segment core 1 has not queued
+  yet it polls that entry up to 10000 times, three times at most, then
+  retries on its next pass.
 - **Host to WiFi.** Core 3 copies host TXDs from the in ring into the
   staging ring; core 2 moves them into the ring 0/1 TXD space. TXD word 7
   bit 27 selects the token layout.
