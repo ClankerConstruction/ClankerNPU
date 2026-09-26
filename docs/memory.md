@@ -55,8 +55,9 @@ flowchart LR
 - `npu_rv32.bin`: code and constants, fetched through the instruction
   cache from host DRAM. Each hart has 8 KB of instruction cache. With
   `HAS_HOT_TEXT` the functions marked `NPU_HOT` sit in `.text.hot`, one
-  block at the start of `.text`: hart 1's per-frame rx path, about
-  7 KB on AN7552 kite and 1.2 KB on AN7583 eagle.
+  block at the start of `.text`: the per-frame rx path and the buffer
+  id, token and host out helpers, about 7 KB on AN7552 kite and 3.5 KB
+  on AN7583 eagle.
 - `npu_data.bin`: initialized globals, in single-cycle NPU SRAM. The
   function pointer tables for mail dispatch and the timer tables live here.
 - `.bss` follows `.data`. `.data` plus `.bss` must fit `0x7800` bytes;
