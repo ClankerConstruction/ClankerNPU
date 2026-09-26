@@ -1172,9 +1172,9 @@ static int eagle_hostadpt_drain(u32 band)
 
 #endif /* HAS_NPU_WIFI_TX */
 
-/* Move one staged frame into the WiFi tx ring. The TXD the host built
- * goes into the ring's own 256-byte slot; bit 27 of DW7 picks which of
- * the two token layouts that TXD wants. */
+/* Move one staged frame into the WiFi tx ring, cpu index not
+ * published. The TXD the host built goes into the ring's own 256-byte
+ * slot; bit 27 of DW7 picks which of the two token layouts it wants. */
 static int eagle_tx_ring_push(u32 band)
 {
 	u32 idx = eagle_stage_ridx[band];
@@ -1244,7 +1244,6 @@ static int eagle_tx_ring_push(u32 band)
 		REG32(desc + 12) = 0;
 
 		eagle_tx_ring_cpu_idx[band] = (u16)next;
-		REG32(eagle_tx_ring_pcie_base[band] + 8) = next;
 		dbg.push[band]++;
 		pushed = 1;
 
@@ -1595,6 +1594,18 @@ NPU_HOT void eagle_rxdmad_loop(void)
 #define eagle_tx_ring_push(band) (0)
 #endif
 
+/* up to max staged frames into the ring, the cpu index published once */
+static u32 eagle_tx_ring_push_n(u32 band, u32 max)
+{
+	u32 n = 0;
+
+	while (n < max && eagle_tx_ring_push(band))
+		n++;
+	if (n != 0)
+		eagle_tx_ring_publish(band);
+	return n;
+}
+
 /* core 2: staged frames into the WiFi tx ring, paced by the ring's own
  * dma index so the chip is never overrun */
 void __attribute__((noreturn)) eagle_tx_fast_path(void)
@@ -1639,13 +1650,14 @@ void __attribute__((noreturn)) eagle_tx_fast_path(void)
 		}
 
 #ifdef HAS_FAST_POLL
-		/* Both bands every pass. The room comes from the last DMA
-		 * index read, which only undercounts; the costly PCIe read
-		 * happens when the room runs low. */
+		/* Both bands every pass: up to 32 host frames, then LAN
+		 * frames into the rest of the room, keeping 6 slots free.
+		 * The room comes from the last DMA index read, which only
+		 * undercounts; the costly PCIe read happens when it runs low. */
 		for (band = 1; band != (u32)-1; band--) {
 			cpu = eagle_tx_ring_cpu_idx[band];
 			free = (dma[band] - cpu - 1) & EAGLE_TX_RING_MASK;
-			if (free <= EAGLE_TX_RING_ROOM + 128) {
+			if (free <= EAGLE_TX_RING_ROOM + EAGLE_TX_HOST_BUDGET + 128) {
 				dma[band] = (u16)REG32(eagle_tx_ring_pcie_base[band] +
 						       0xC);
 				free = (dma[band] - cpu - 1) & EAGLE_TX_RING_MASK;
@@ -1654,10 +1666,14 @@ void __attribute__((noreturn)) eagle_tx_fast_path(void)
 					continue;
 				}
 			}
-			NPU_PROF(NP_ETXP, dbg.push[band], eagle_tx_ring_push(band));
-			if (--free > EAGLE_TX_RING_ROOM)
+			free -= EAGLE_TX_RING_ROOM;
+			NPU_PROF(NP_ETXP, dbg.push[band],
+				 free -= eagle_tx_ring_push_n(band,
+					free < EAGLE_TX_HOST_BUDGET ? free :
+					EAGLE_TX_HOST_BUDGET));
+			if (free > 1)
 				NPU_PROF(NP_ELAN, dbg.lan[0] + dbg.lan[1],
-					 eagle_tdma_to_wifi(band, free - 6));
+					 eagle_tdma_to_wifi(band, free - 1));
 		}
 #else
 		for (band = 1; band != (u32)-1; band--) {
@@ -1671,7 +1687,7 @@ void __attribute__((noreturn)) eagle_tx_fast_path(void)
 			while (free > EAGLE_TX_RING_ROOM) {
 				free--;
 				NPU_PROF(NP_ETXP, dbg.push[band],
-					 eagle_tx_ring_push(band));
+					 eagle_tx_ring_push_n(band, 1));
 				if (free == EAGLE_TX_RING_ROOM)
 					break;
 				NPU_PROF(NP_ELAN, dbg.lan[0] + dbg.lan[1],

@@ -288,6 +288,7 @@ void __attribute__((noinline)) npu_set_rxd_init(u32 ring_size, u32 band);
 #define EAGLE_TX_BUF_BYTES	2048
 #define EAGLE_TX_RING_MASK	0x7FF
 #define EAGLE_TX_RING_ROOM	5	/* keep this many slots free */
+#define EAGLE_TX_HOST_BUDGET	32	/* host frames per band per core 2 pass */
 #define EAGLE_TX_RING_ENTRIES	2048
 #define EAGLE_REFILL_BUDGET	1536
 #define EAGLE_HOSTADPT_BUDGET	256

@@ -52,7 +52,10 @@ last DMA index read left free, about 1900 times on an idle ring, then
 waits 1000 delay loops and reads the index over PCIe. A frame for the
 other band waits out that spin, a few hundred us. With `HAS_FAST_POLL`
 (AN7583) each pass serves both bands once and reads the index only when
-the room it gives drops to 133 slots or fewer.
+the room it gives drops to 165 slots or fewer. A pass takes up to 32
+staged host frames (`EAGLE_TX_HOST_BUDGET`), then up to 128 LAN frames
+into the room left, keeping 6 slots free. The cpu index goes to the
+chip once per batch of host frames and once per 8 LAN frames.
 
 A LAN frame goes to the ring its descriptor names (word 4 bit 25), which
 need not be the TDMA ring's band. Every band a batch filled is
