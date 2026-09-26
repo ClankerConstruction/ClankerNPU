@@ -37,9 +37,43 @@ frames of its station in the chip:
    counting the drops, as CoDel does (RFC 8289). The first frame with
    `q < target` ends the drops.
 
+```mermaid
+flowchart TD
+  F["LAN to WiFi frame on TDMA rx<br/>station = wcid in word 4"] --> T{"wcid below 1024,<br/>map allocated,<br/>limit or target set?"}
+  T -- no --> P["pass: take a token,<br/>sent[wcid]++ if the wcid is tracked,<br/>write the WiFi tx ring"]
+  T -- yes --> Q["q = sent[wcid] - done[wcid]"]
+  Q --> L{"limit set and<br/>q at or above limit?"}
+  L -- yes --> DL["drop<br/>limit_drops++"]
+  L -- no --> TG{"target set?"}
+  TG -- no --> P
+  TG -- yes --> B{"q below target?"}
+  B -- yes --> R["forget the standing queue<br/>(clear above and dropping)"] --> P
+  B -- no --> A{"above target<br/>already noted?"}
+  A -- no --> S["note it: standing at<br/>now + interval"] --> P
+  A -- yes --> W{"interval over?"}
+  W -- no --> P
+  W -- yes --> DS{"already dropping?"}
+  DS -- no --> E["enter dropping:<br/>count = 1, or the last rate<br/>if it left less than 16 intervals ago"] --> DA
+  DS -- yes --> N{"next drop time reached?"}
+  N -- no --> P
+  N -- yes --> C["count++"] --> DA["drop, aqm_drops++<br/>next += interval / sqrt(count)"]
+```
+
 A dropped frame never takes a token: its TDMA slot is re-armed with the
 buffer it already holds. TCP answers the loss by halving its window
 instead of filling the chip.
+
+The count `q` comes from two counters per station, each written by one
+hart only, so no lock is needed:
+
+```mermaid
+flowchart LR
+  PPE["PPE<br/>TDMA rx ring"] --> C2["core 2<br/>sta_q_drop, then<br/>tok to wcid map,<br/>sent[wcid]++"]
+  C2 -- "tx descriptor<br/>with the token" --> CHIP["WiFi chip queue"]
+  CHIP -- "tx done report:<br/>tokens sent" --> C3["core 3<br/>wcid = map[tok],<br/>done[wcid]++,<br/>token back to the pool"]
+  C3 -.-> Q2["q = sent - done<br/>frames of the station<br/>still in the chip"]
+  C2 -.-> Q2
+```
 
 ## Settings
 
