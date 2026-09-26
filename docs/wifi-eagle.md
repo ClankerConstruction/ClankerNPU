@@ -231,20 +231,27 @@ then sits in the chip as delay, and when the pool runs dry the NPU drops
 frames and host frames to every station wait for a token.
 
 With `HAS_EAGLE_STA_QLIMIT` (AN7581 and AN7583, the eagle builds with an
-NPU tx path) core 2 counts each station's frames in the chip and drops a
-TDMA rx frame, re-arming its slot, when:
+NPU tx path) core 2 counts each station's frames in the chip, times one
+of them at a time through the chip, and drops a TDMA rx frame,
+re-arming its slot, when:
 
 - the station has `limit` frames in the chip, or
-- the station's count has stayed at or above `target` for `interval`.
-  Drops then follow CoDel's control law (RFC 8289): the next one comes
-  `interval / sqrt(n)` later, and they stop as soon as the count dips
-  below `target`. Bursts shorter than `interval` pass untouched.
+- the station's queue has stood above target for `interval`: its frames
+  spend `delay` or more in the chip with at least `min_q` of them there,
+  or its count is at or above `target`. Drops then follow CoDel's
+  control law (RFC 8289): the next one comes `interval / sqrt(n)` later,
+  and they stop as soon as the queue is below target. Bursts shorter
+  than `interval` pass untouched, and frames of `small` bytes or less
+  are never dropped this way.
 
 | field of `wifi_sta_q` | default | |
 |---|---:|---|
 | `limit` | 8192 | frames; leaves about 3000 tokens for others |
-| `target` | 4096 | frames; about 30 ms at 1.6 Gbit/s |
+| `target` | 0 | frames; off |
 | `interval` | 100 ms | in cycles |
+| `delay` | 10 ms | in cycles |
+| `min_q` | 64 | frames |
+| `small` | 256 | bytes |
 
 Zero turns a field off. The fields can change at run time; the debug
 block tag `SQLM` gives their address. [sta-qlimit.md](sta-qlimit.md)
@@ -259,7 +266,8 @@ each token a tx done report frees.
 
 The station is the wcid in TDMA rx word 4. SRAM type 41 holds a station
 per tx token, and per station the frames sent (written by core 2 only),
-the frames done (core 3 only) and the drop state (core 2 only), for
+the frames done (core 3 only), the drop state (core 2 only) and the
+probe that times one frame (core 2 arms it, core 3 completes it), for
 wcids below 1024. A token maps to no station while it is free or carries
 a host frame. `limit_drops` and `aqm_drops` in `wifi_sta_q` count the two
 kinds of drop.

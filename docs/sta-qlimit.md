@@ -18,24 +18,37 @@ One fast download fills that queue:
   token. Under a 2 Gbit/s flood at one client the NPU refused 33000
   host frames a token, and a ping to that client stalled up to 2.6 s.
 
-`npu_sta_q.c` counts each station's frames in the chip and drops early,
-per station, before either happens. Code and hooks are in
+A queue of frames is also the wrong unit. 4096 frames drain in 30 ms at
+1.6 Gbit/s but in 220 ms at 2.4 GHz rates, and in half a second to a
+legacy 802.11a/g client. A game or call packet to that station waits
+behind all of it: the host path's ping does not, so ping under-reports it.
+
+`npu_sta_q.c` counts each station's frames in the chip, times one of
+them at a time through the chip, and drops early, per station, before
+the queue stands. Code and hooks are in
 [wifi-eagle.md](wifi-eagle.md#per-station-queue-limit).
 
 ## How it decides
 
 For each LAN to WiFi frame, before it takes a token, with `q` the
-frames of its station in the chip:
+frames of its station in the chip and `t` the time its frames spend in
+the chip:
 
 1. `q >= limit`: drop. A hard backstop; it keeps `11263 - limit`
    tokens for everyone else whatever one station does.
-2. `q < target`: pass, and forget any earlier standing queue.
-3. `q >= target` for less than `interval`: pass. Bursts, TCP slow start
+2. The queue is **above target** when `t >= delay` with at least
+   `min_q` frames in the chip, or when `q >= target` (frames; off by
+   default). Not above target: pass, and forget any earlier standing
+   queue.
+3. Above target for less than `interval`: pass. Bursts, TCP slow start
    and a client's short power save naps are allowed.
-4. `q >= target` for a whole `interval`: a standing queue. Drop one
+4. Above target for a whole `interval`: a standing queue. Drop one
    frame, then one every `interval / sqrt(n)` while it stands, `n`
-   counting the drops, as CoDel does (RFC 8289). The first frame with
-   `q < target` ends the drops.
+   counting the drops, as CoDel does (RFC 8289). The first frame that
+   finds the queue below target ends the drops.
+5. Frames of `small` bytes or less are never dropped in step 4: TCP
+   acks, game and voice packets cost little airtime and much when lost.
+   They still count in `q` and still meet the hard limit.
 
 ```mermaid
 flowchart TD
@@ -44,15 +57,17 @@ flowchart TD
   T -- yes --> Q["q = sent[wcid] - done[wcid]"]
   Q --> L{"limit set and<br/>q at or above limit?"}
   L -- yes --> DL["drop<br/>limit_drops++"]
-  L -- no --> TG{"target set?"}
+  L -- no --> TG{"delay or<br/>target set?"}
   TG -- no --> P
-  TG -- yes --> B{"q below target?"}
+  TG -- yes --> B{"below target?<br/>t under delay (or q under min_q)<br/>and q under the frame target"}
   B -- yes --> R["forget the standing queue<br/>(clear above and dropping)"] --> P
   B -- no --> A{"above target<br/>already noted?"}
   A -- no --> S["note it: standing at<br/>now + interval"] --> P
   A -- yes --> W{"interval over?"}
   W -- no --> P
-  W -- yes --> DS{"already dropping?"}
+  W -- yes --> SM{"frame of small<br/>bytes or less?"}
+  SM -- yes --> P
+  SM -- no --> DS{"already dropping?"}
   DS -- no --> E["enter dropping:<br/>count = 1, or the last rate<br/>if it left less than 16 intervals ago"] --> DA
   DS -- yes --> N{"next drop time reached?"}
   N -- no --> P
@@ -75,32 +90,53 @@ flowchart LR
   C2 -.-> Q2
 ```
 
+The time `t` comes from a probe per station. There is no room in SRAM
+for a time stamp per token, so one frame per station is timed at a
+time:
+
+- Core 2, sending a frame of a station whose probe is free, notes the
+  token and the time (`mcycle >> 16`, 91 us steps at 720 MHz).
+- Core 3, freeing that token from a tx done report, stores how long it
+  took and frees the probe; the next frame of the station is timed next.
+- `t` is the last timed frame's time in the chip, or the age of the
+  frame being timed if that is larger already, so a queue that stops
+  moving counts at once. A probe older than about 1 s is dropped (a
+  lost report or a WiFi restart) and the next frame is timed.
+
+One sample per trip through the queue is enough for CoDel, which only
+asks whether the delay has stayed above target for an interval. A short
+queue drains fast and is sampled often.
+
 ## Settings
 
 | field | default | unit | effect |
 |---|---:|---|---|
 | `limit` | 8192 | frames | hard cap per station; 0 turns it off |
-| `target` | 4096 | frames | standing queue threshold, about 30 ms at 1.6 Gbit/s; 0 turns the drops off |
+| `target` | 0 | frames | standing queue threshold in frames; 0 turns it off |
 | `interval` | 100 ms | cycles | how long a queue must stand; 72000000 at 720 MHz |
 | `limit_drops` | | frames | drops by the hard cap, since boot |
 | `aqm_drops` | | frames | drops against a standing queue, since boot |
+| `delay` | 10 ms | cycles | standing queue threshold in time in the chip; 7200000 at 720 MHz; 0 turns it off |
+| `min_q` | 64 | frames | a station with fewer frames in the chip is never above the delay target |
+| `small` | 256 | bytes | frames this long or shorter are never dropped against a standing queue; 0 drops them too |
 
-The target is in frames, not time: 4096 frames is about 30 ms at
-1.6 Gbit/s and longer for a slower station, whose queue the WiFi chip
-already caps on its own.
+The fields are in this order in memory. With `limit`, `target` and
+`delay` all 0 the limit is off and costs one test per frame.
 
 ### Changing them at run time
 
-The five fields are `struct wifi_sta_q`, whose NPU address the
+The eight fields are `struct wifi_sta_q`, whose NPU address the
 [debug block](debug.md#pcie-descriptor-block) symbol table gives under
 tag `SQLM` (`0x53514C4D`). From the host, values in hex:
 
 ```sh
 sys memory 1e906a00 80           # symbol table: find the word 53514c4d
                                  # the next word is the address, e.g. 3e900208
-sys memory 1e900208 14           # limit, target, interval, limit_drops, aqm_drops
-sys memwl 1e90020c 800           # target 2048 frames
-sys memwl 1e90020c 0             # standing queue drops off
+sys memory 1e900208 20           # the eight fields, in order
+sys memwl 1e90021c 36ee80        # delay 5 ms (3600000 cycles)
+sys memwl 1e900224 0             # small frames drop too
+sys memwl 1e90020c 1000          # frame target 4096, as before the delay target
+sys memwl 1e90021c 0             # delay target off
 sys memwl 1e900208 0             # hard cap off
 ```
 
@@ -113,6 +149,75 @@ back when the host sets up the tx done ring again, at WiFi driver load;
 
 ## Measurements
 
+### Delay target
+
+AN7583 + MT7993, every setting switched at run time on one boot, in
+rotating order, 3 rounds (4 for the two-client tie-break), 15 s TCP
+runs with 4 streams and a 5 s settle. The game flow is 100-byte UDP
+every 20 ms with DSCP 0, echoed by the client, beside the download:
+it waits in the same chip queue as the download, which the host path's
+ping does not. Clients: a 2.4 GHz USB station (2x2, 20 MHz), a WiFi 7
+PC and a WiFi 6 laptop on 5 GHz (160 MHz).
+
+| setting | 2.4 GHz Mbit/s | 2.4 GHz TCP RTT | game p50 / p99 | game loss | PC alone | 2 x 5 GHz total | laptop RTT |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| off | 225 | 226 ms | 139 / 400 ms | 60 % | 1545 | 1460 | 60 ms |
+| frame target 4096 | 226 | 183 ms | 182 / 233 ms | 30 % | 1542 | 1456 | 59 ms |
+| delay 5 ms | 227 | 30 ms | 23 / 63 ms | 3.2 % | 1524 | 1409 | 26 ms |
+| delay 10 ms | 229 | 33 ms | 26 / 60 ms | 5.2 % | 1546 | 1406 | 29 ms |
+| delay 20 ms | 227 | 40 ms | 32 / 65 ms | 4.6 % | 1543 | 1414 | 26 ms |
+| delay 40 ms | 227 | 52 ms | 44 / 97 ms | 3.6 % | 1514 | 1415 | 45 ms |
+| **delay 10 ms, small 256** | 226 | **29 ms** | **22 / 53 ms** | **0 %** | 1510 | 1427 to 1371 | 27 to 29 ms |
+
+A second 4-round test of the two 5 GHz clients: off 1456 Mbit/s
+(laptop RTT 53 ms), delay 10 ms small 256 1427 (29 ms), delay 20 ms
+small 256 1448 (36 ms). The PC alone and the PC at +20 ms RTT (about
+300 Mbit/s, 26 ms) do not change with any setting: its queue never
+stands.
+
+```mermaid
+xychart-beta
+    title "Game flow p50 beside a 2.4 GHz download (ms)"
+    x-axis ["off", "4096 frames", "5 ms", "10 ms", "20 ms", "40 ms", "10 ms, small 256"]
+    y-axis "ms" 0 --> 200
+    bar [139, 182, 23, 26, 32, 44, 22]
+```
+
+A game packet is only dropped against a standing queue if it is longer
+than `small`; with 256 none of them is, and the game flow lost nothing.
+
+### A slow client on a fast radio
+
+A legacy 802.11a client (the USB station with HT turned off: 54 Mbit/s
+at best, no aggregation, so every frame takes its own channel access)
+on the same 5 GHz radio as the WiFi 7 PC, 3 rounds:
+
+| | off | frame target 4096 | **delay 10 ms** | delay 20 ms |
+|---|---:|---:|---:|---:|
+| slow client alone, Mbit/s | 29.4 | 29.5 | 29.7 | 29.7 |
+| slow client alone, TCP RTT | 497 ms | 499 ms | **38 ms** | 38 ms |
+| slow client alone, retransmits per run | 680 | 690 | 84 | 86 |
+| PC beside the slow client, Mbit/s | 982 | 958 | **1167** | 1199 |
+| slow client beside the PC, Mbit/s | 10.5 | 9.8 | 8.0 | 7.3 |
+| slow client's game flow beside the PC, p50 / loss | 374 ms / 30 % | 377 ms / 33 % | 93 ms / 0 % | 92 ms / 0 % |
+
+```mermaid
+xychart-beta
+    title "PC throughput while a legacy client downloads on the same radio (Mbit/s)"
+    x-axis ["PC alone", "off", "4096 frames", "delay 10 ms", "delay 20 ms"]
+    y-axis "Mbit/s" 0 --> 1600
+    bar [1552, 982, 958, 1167, 1199]
+```
+
+Without a time target the legacy client's queue grows to half a
+second: 4096 frames take 2 s at its rate, so the frame target never
+acts. Its deep queue keeps it contending for the channel with single
+frames, and the PC loses 37 % of its rate. Held to 10 ms, the slow
+client keeps its rate alone, gives up about a fifth of it under
+contention, and the PC gets 19 % more.
+
+### Frame target (the first design)
+
 AN7583 + MT7993, 5 GHz 160 MHz. A WiFi 6 client (2x2, HE-MCS 11,
 2.4 Gbit/s PHY) receives TCP (CUBIC, iperf3, 15 to 20 s) from a host on
 a 2.5 Gbit/s LAN port. "+20 ms" adds 20 ms of delay at the sender, like
@@ -122,7 +227,7 @@ interleaved with runs with the limit off; throughput is given against
 those, as the client's rate drifted 1.2 to 1.35 Gbit/s between batches.
 2 to 9 runs per point.
 
-### LAN, 4 streams
+#### LAN, 4 streams
 
 | target | throughput | vs off | TCP RTT |
 |---|---:|---:|---:|
@@ -142,7 +247,7 @@ xychart-beta
 With one stream: off 56.6 ms, 1024 16.5 ms, 2048 17.6 ms, 4096 26.6 ms,
 throughput 97.5 to 99.9 % of off.
 
-### +20 ms, 1 stream
+#### +20 ms, 1 stream
 
 | target | throughput | vs off | TCP RTT |
 |---|---:|---:|---:|
@@ -173,7 +278,7 @@ With 4 streams: off 83.5 ms; 1024 49.1 ms at 90.4 %; 2048 51.7 ms at
 92.3 %; 4096 67.8 ms at 96.5 %. The 20 ms of added delay is part of
 every RTT here.
 
-### Why not a fixed cap
+#### Why not a fixed cap
 
 A per-station cap alone (`limit` with `target` 0) gives the lowest
 latency on the LAN (1024 frames: 6.8 ms, 1205 Mbit/s against 1236 off)
@@ -189,7 +294,7 @@ the window:
 Hence the default cap is far above any standing queue (8192) and the
 standing queue drops do the work.
 
-### Token pool and host frames
+#### Token pool and host frames
 
 A WiFi 7 station ran three internet speed tests over a 2.5 Gbit/s uplink
 with the limit off, then three with `target` 2048: download 1114 and
@@ -207,15 +312,17 @@ runs dry.
 
 | | |
 |---|---|
-| + | At the default target, queueing delay for offloaded downloads falls by 25 to 30 ms on the LAN (57 and 62 ms to 27 and 37 ms) and by about 16 ms with 20 ms of RTT. |
+| + | A target in time fits every link rate: 30 ms of queue at 2.4 GHz instead of 180 to 230 ms, 38 ms instead of 500 ms for a legacy client, with the same throughput. |
+| + | Game and call packets beside a download wait 20 to 30 ms instead of 140 to 180 ms, and small frames are never dropped early. |
+| + | A slow client no longer holds the channel with a deep queue: a fast client beside it gets up to a fifth more. |
 | + | One station can no longer drain the shared token pool, so host traffic and other stations keep getting tokens. |
 | + | Drops come early and one at a time, not in bursts when the pool is empty: fewer retransmissions. |
-| + | No cost in forwarding rate; the counts are single-writer, so no locks. |
+| + | No cost in forwarding rate; every count and probe has one writer per field, so no locks. |
 | + | Every value changes at run time, per the table above. |
-| − | A lower target trades single-stream throughput at high RTT for latency: target 2048 costs 5 to 16 %, 1024 about 14 %. |
-| − | The target is in frames. A slow station needs more time to send 4096 frames, so its limit in milliseconds is looser. |
+| − | Two fast clients on one radio lose up to 2 to 6 % of their sum, and the slower of them gives up share: it meets the delay target first. `delay` 20 ms gives that back for a few ms more queue at 2.4 GHz. |
+| − | One frame per station is timed at a time, so `t` lags a sudden change by up to one trip through the queue. |
 | − | Only wcids below 1024 are tracked; others pass unlimited. |
-| − | Drops only; no ECN marking, and one queue per station, not per flow. |
+| − | Drops only; no ECN marking, and one queue per station, not per flow. A packet marked DSCP EF goes to the chip's voice queue and waits far less (7 ms against 190 ms at 2.4 GHz, measured with no time target); unmarked flows share the station's queue. |
 | − | The upload direction (WiFi to LAN) and frames the host sends to WiFi are not limited; the host queues those. |
 
 ## Where it applies

@@ -3,7 +3,8 @@
  *
  * Frames the NPU hands to the WiFi chip wait there outside any host
  * queue, bounded only by the shared tx token pool. Per station, count
- * them and drop against a hard limit and against a standing queue.
+ * them, time one of them at a time through the chip, and drop against a
+ * hard limit and against a standing queue.
  */
 
 #include "npu_internal.h"
@@ -12,8 +13,12 @@
 #ifdef HAS_EAGLE_STA_QLIMIT
 
 #define STA_Q_LIMIT		8192	/* frames; leaves 3000 tokens free */
-#define STA_Q_TARGET		4096	/* frames; ~30 ms at 1.6 Gbit/s */
+#define STA_Q_TARGET		0	/* frames; off, the delay decides */
 #define STA_Q_INTERVAL_MS	100
+#define STA_Q_DELAY_MS		10	/* time in the chip for a standing queue */
+#define STA_Q_MIN_Q		64	/* frames; a shorter queue never stands */
+#define STA_Q_SMALL		256	/* bytes; shorter frames are never dropped early */
+#define STA_Q_PROBE_LOST	11000	/* ticks, ~1 s: the timed frame is gone */
 
 /* drop state per station, the sending hart only */
 struct sta_q_aqm {
@@ -39,9 +44,13 @@ void sta_q_init(void)
 	wifi_sta_q.limit = STA_Q_LIMIT;
 	wifi_sta_q.target = STA_Q_TARGET;
 	wifi_sta_q.interval = STA_Q_INTERVAL_MS * 1000 * cpu_clock_get();
+	wifi_sta_q.delay = STA_Q_DELAY_MS * 1000 * cpu_clock_get();
+	wifi_sta_q.min_q = STA_Q_MIN_Q;
+	wifi_sta_q.small = STA_Q_SMALL;
 	sta_q_sent = (volatile u16 *)base + STA_Q_TOKENS;
 	sta_q_done = sta_q_sent + STA_Q_STAS;
 	sta_q_aqm = (struct sta_q_aqm *)(sta_q_done + STA_Q_STAS);
+	sta_q_probe = (struct sta_q_probe *)(sta_q_aqm + STA_Q_STAS);
 	for (i = 0; i < STA_Q_TOKENS; i++)
 		((volatile u16 *)base)[i] = STA_Q_NONE;
 	for (i = 0; i < STA_Q_STAS; i++) {
@@ -49,29 +58,54 @@ void sta_q_init(void)
 		sta_q_done[i] = 0;
 	}
 	npu_memset(sta_q_aqm, 0, STA_Q_STAS * sizeof(*sta_q_aqm));
+	for (i = 0; i < STA_Q_STAS; i++) {
+		sta_q_probe[i].tok = STA_Q_NONE;
+		sta_q_probe[i].delay = 0;
+	}
 	/* last: the hooks start counting once the map is there */
 	sta_q_tok = (volatile u16 *)base;
 }
 
-/* 1: drop the frame. A station's frames in the chip that stay at or
- * above target for an interval start drops, spaced interval / sqrt(n)
- * as CoDel does (RFC 8289); dipping below target ends them. */
-NPU_HOT int sta_q_decide(u32 sta, u32 now)
+/* Ticks the station's frames spend in the chip: the last timed frame,
+ * or the one in flight if it is older already. */
+static NPU_HOT u32 sta_q_delay(u32 sta, u32 now)
+{
+	struct sta_q_probe *p = &sta_q_probe[sta];
+	u32 d = p->delay, tok = p->tok, age;
+
+	if (tok != STA_Q_NONE) {
+		age = (u16)((now >> STA_Q_TICK) - p->ts);
+		if (age > STA_Q_PROBE_LOST)
+			p->tok = STA_Q_NONE;	/* restart or lost report */
+		else if (age > d)
+			d = age;
+	}
+	return d;
+}
+
+/* 1: drop the frame. A station's queue in the chip that stands above
+ * target, in frames or in time, for an interval starts drops, spaced
+ * interval / sqrt(n) as CoDel does (RFC 8289); dipping below ends them. */
+NPU_HOT int sta_q_decide(u32 sta, u32 now, u32 len)
 {
 	struct sta_q_aqm *a = &sta_q_aqm[sta];
 	volatile struct wifi_sta_q *cfg = &wifi_sta_q;
 	u32 interval = cfg->interval, target = cfg->target, limit = cfg->limit;
+	u32 delay = cfg->delay;
 	s16 d = (s16)(sta_q_sent[sta] - sta_q_done[sta]);
 	/* done never passes sent, but a stale count must not read as full */
-	u32 q = d > 0 ? (u32)d : 0, n;
+	u32 q = d > 0 ? (u32)d : 0, n, above = 0;
 
 	if (limit != 0 && q >= limit) {
 		cfg->limit_drops++;
 		return 1;
 	}
-	if (target == 0)
-		return 0;
-	if (q < target) {
+	if (target != 0 && q >= target)
+		above = 1;
+	if (delay != 0 && q >= cfg->min_q &&
+	    (sta_q_delay(sta, now) << STA_Q_TICK) >= delay)
+		above = 1;
+	if (!above) {
 		a->flags = 0;
 		return 0;
 	}
@@ -81,6 +115,9 @@ NPU_HOT int sta_q_decide(u32 sta, u32 now)
 		return 0;
 	}
 	if ((s32)(now - a->above) < 0)
+		return 0;
+	/* acks, games, calls: little airtime, much harm when lost */
+	if (len <= cfg->small)
 		return 0;
 
 	if (a->flags & AQM_DROPPING) {

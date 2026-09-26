@@ -37,10 +37,11 @@ char get_core_char(void);
 
 #ifdef HAS_EAGLE_STA_QLIMIT
 /* npu_sta_q.c: LAN -> WiFi frames each station has in the WiFi chip.
- * Debug block tag SQLM; a zero limit or target is off. */
+ * Debug block tag SQLM; a zero limit, target or delay is off. */
 #define STA_Q_TOKENS	13312	/* the tx token pool */
 #define STA_Q_STAS	1024	/* stations tracked, by wcid */
 #define STA_Q_NONE	0xFFFF
+#define STA_Q_TICK	16	/* probe times: mcycle >> 16, 91 us at 720 MHz */
 
 struct wifi_sta_q {
 	u32 limit;	/* frames: drop at this many */
@@ -48,30 +49,50 @@ struct wifi_sta_q {
 	u32 interval;	/* cycles */
 	u32 limit_drops;
 	u32 aqm_drops;
+	u32 delay;	/* cycles in the chip: above this is standing, over target */
+	u32 min_q;	/* frames: never standing below this many */
+	u32 small;	/* bytes: frames this short skip the standing queue drops */
 };
+
+/* one frame per station timed through the chip; two harts write it */
+struct sta_q_probe {
+	volatile u16 tok;	/* timed token, or none; the sending hart arms it */
+	volatile u16 ts;	/* when it was sent, ticks */
+	volatile u16 delay;	/* ticks the last timed frame spent in the chip */
+	u16 pad;
+};
+
 extern struct wifi_sta_q wifi_sta_q;
 extern volatile u16 *sta_q_tok;		/* station per token, or none */
 extern volatile u16 *sta_q_sent;	/* the sending hart writes */
 extern volatile u16 *sta_q_done;	/* the tx done hart writes */
+extern struct sta_q_probe *sta_q_probe;
 
 void sta_q_init(void);
-int sta_q_decide(u32 sta, u32 now);
+int sta_q_decide(u32 sta, u32 now, u32 len);
 
-/* 1: drop this frame of station sta (wcid) */
-static NPU_INLINE int sta_q_drop(u32 sta, u32 now)
+/* 1: drop this len-byte frame of station sta (wcid) */
+static NPU_INLINE int sta_q_drop(u32 sta, u32 now, u32 len)
 {
 	if (sta >= STA_Q_STAS || sta_q_tok == NULL ||
-	    (wifi_sta_q.limit | wifi_sta_q.target) == 0)
+	    (wifi_sta_q.limit | wifi_sta_q.target | wifi_sta_q.delay) == 0)
 		return 0;
-	return sta_q_decide(sta, now);
+	return sta_q_decide(sta, now, len);
 }
 
 /* token tok carries a frame of station sta; before the chip sees it */
-static NPU_INLINE void sta_q_sent_tok(u32 tok, u32 sta)
+static NPU_INLINE void sta_q_sent_tok(u32 tok, u32 sta, u32 now)
 {
+	struct sta_q_probe *p;
+
 	if (sta < STA_Q_STAS && tok < STA_Q_TOKENS && sta_q_tok != NULL) {
 		sta_q_tok[tok] = (u16)sta;
 		sta_q_sent[sta]++;
+		p = &sta_q_probe[sta];
+		if (p->tok == STA_Q_NONE) {
+			p->ts = (u16)(now >> STA_Q_TICK);
+			p->tok = (u16)tok;
+		}
 	}
 }
 
@@ -81,13 +102,16 @@ static NPU_INLINE void sta_q_unsent_tok(u32 tok, u32 sta)
 	if (sta < STA_Q_STAS && tok < STA_Q_TOKENS && sta_q_tok != NULL) {
 		sta_q_tok[tok] = STA_Q_NONE;
 		sta_q_sent[sta]--;
+		if (sta_q_probe[sta].tok == tok)
+			sta_q_probe[sta].tok = STA_Q_NONE;
 	}
 }
 
-/* the chip reported token tok done */
-static NPU_INLINE void sta_q_done_tok(u32 tok)
+/* the chip reported token tok done; tick = mcycle >> STA_Q_TICK */
+static NPU_INLINE void sta_q_done_tok(u32 tok, u32 tick)
 {
 	volatile u16 *map = sta_q_tok;
+	struct sta_q_probe *p;
 	u32 sta;
 
 	if (map == NULL || tok >= STA_Q_TOKENS)
@@ -96,6 +120,11 @@ static NPU_INLINE void sta_q_done_tok(u32 tok)
 	if (sta != STA_Q_NONE) {
 		map[tok] = STA_Q_NONE;
 		sta_q_done[sta]++;
+		p = &sta_q_probe[sta];
+		if (p->tok == tok) {
+			p->delay = (u16)(tick - p->ts);
+			p->tok = STA_Q_NONE;
+		}
 	}
 }
 #endif
