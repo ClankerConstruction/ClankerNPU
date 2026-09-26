@@ -32,6 +32,7 @@ typedef int (*wifi_mail_fn_t)(u32 *msg);
 void *npu_memset(void *dst, int c, u32 n);
 void *npu_memcpy(void *dst, const void *src, u32 n);
 u32 npu_strlen(const char *s);
+u32 npu_isqrt(u32 x);
 char get_core_char(void);
 
 /* npu_mutex.c */

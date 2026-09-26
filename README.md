@@ -136,7 +136,7 @@ family's code, behind the matching `#ifdef`.
 | `npu_mbox.c` | mailbox dispatch and host notify |
 | `npu_dbg.c` | field debug block: heartbeats, counters, traces, host commands |
 | `npu_sram.c` | SRAM allocator |
-| `npu_util.c` | memset, memcpy, strlen |
+| `npu_util.c` | memset, memcpy, strlen, integer square root |
 | `npu_bridge.c` | NPU bridge channels |
 | `npu_tunnel.c`, `npu_l4s.c` | tunnel offload, L4S ECN marking |
 | `npu_ppe.c` | chip capability table, PPE setup, HWNAT mail |

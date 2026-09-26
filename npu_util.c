@@ -39,6 +39,25 @@ u32 npu_strlen(const char *s)
 	return (u32)(p - s);
 }
 
+/* floor(sqrt(x)), bit by bit: no multiply or divide */
+u32 npu_isqrt(u32 x)
+{
+	u32 r = 0, b = 1u << 30;
+
+	while (b > x)
+		b >>= 2;
+	while (b != 0) {
+		if (x >= r + b) {
+			x -= r + b;
+			r = (r >> 1) + b;
+		} else {
+			r >>= 1;
+		}
+		b >>= 2;
+	}
+	return r;
+}
+
 char get_core_char(void)
 {
 	u32 id = get_hartid();
