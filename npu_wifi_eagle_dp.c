@@ -419,7 +419,8 @@ static u32 eagle_buf_phys(u32 buf_id)
 
 /* Queue one packet for the host adaptor. A frame that arrived whole goes
  * to the per-band queue; one spread over several rx buffers goes to the
- * multi-segment queue, which keeps the segments together. */
+ * multi-segment queue, which keeps the segments together. There the
+ * first length field is the whole frame's, the second the segment's. */
 static NPU_HOT int eagle_pkt_enqueue(u32 buf_id, u16 seg_len, u16 wcid,
 				     u8 info, u32 dst, u8 flags, u16 pkt_len)
 {
@@ -727,7 +728,8 @@ static void eagle_txq_drain(u32 band)
 
 /* Drain one frame's worth of segments out of the multi-segment queue.
  * The segments of a frame are contiguous; the last one carries bit 1 and
- * every one of them carries the count in bits 7:5. */
+ * every one of them carries its number from 1 in bits 4:2 and the count
+ * in bits 7:5. */
 static void eagle_mseg_drain(u32 band)
 {
 	u32 idx = eagle_mseg_ridx[band];
@@ -754,7 +756,7 @@ static void eagle_mseg_drain(u32 band)
 		this_idx = (flags >> 2) & 7;
 		segs++;
 		if (flags & 2) {
-			ok = (count == segs && this_idx == segs - 1);
+			ok = (count == segs && this_idx == segs);
 			break;
 		}
 		if (segs >= count) {
@@ -936,13 +938,15 @@ static int eagle_rxdmad_handle(u8 *chaining)
 	head = eagle_buf_uncached(eagle_seg_bufid[0]);
 	REG32(head) = (REG32(head) & 0xFFFE0007) | (8 * eagle_rxdmad_seglen);
 
+	/* the host wants segments numbered from 1, the frame length in
+	 * the entry's first length field and the segment's in the second */
 	for (i = 0; i < count; i++) {
 		u8 flags = (u8)(((i == count - 1) << 1) | (count << 5) |
-				(i << 2));
+				((i + 1) << 2));
 
 		if (eagle_pkt_enqueue(eagle_seg_bufid[i],
-				      eagle_seg_len[i], 0, 0, 1, flags,
-				      (u16)eagle_rxdmad_seglen) != 0)
+				      (u16)eagle_rxdmad_seglen, 0, 0, 1, flags,
+				      eagle_seg_len[i]) != 0)
 			buf_id_return((u16)eagle_seg_bufid[i]);
 	}
 	*chaining = 0;

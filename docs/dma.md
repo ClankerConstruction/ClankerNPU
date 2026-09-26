@@ -32,8 +32,8 @@ Two rings, one per band, 512 entries of 24 bytes. Ring 0 base at
 each.
 
 ```
-word 0   bit 0 valid, bits 14:1 original length, bits 28:15 length,
-         bit 29 last segment
+word 0   bit 0 valid, bits 14:1 length of this segment, bits 28:15
+         length of the whole frame, bit 29 last segment
 word 1   bits 15:0 wcid, bits 20:16 A-MSDU, bits 31:26 forward type
 word 2   rx info
 word 3   host buffer address, filled by the host
