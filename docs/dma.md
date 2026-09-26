@@ -181,7 +181,10 @@ acknowledged.
 
 After a WiFi stop, `tdma_bmgr_reinit` waits until the PPE has returned
 every buffer, then rebuilds either the hardware allocator or the
-software pool.
+software pool. The restart mail runs it in the mailbox handler with
+interrupts off, so on the AN758x eagle parts the wait empties the PPE
+return FIFO itself (`ppe_wifi_bufid_isr`); left to the interrupt, an
+entry arriving after the stop would keep core 0 waiting forever.
 
 AN7581 uses a software pool instead (`buf_mgr_init`, SRAM type 140,
 5600 ids).

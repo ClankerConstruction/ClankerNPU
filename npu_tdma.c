@@ -224,8 +224,14 @@ void tdma_bmgr_reinit(void)
 
 	delay_ms(100);
 	for (pass = 0; pass < 2; pass++) {
-		while (REG32(0x1FB50FE4) & 0xFFFF)
+		while (REG32(0x1FB50FE4) & 0xFFFF) {
+#if defined(WIFI_EAGLE) && !defined(AN7552)
+			/* this runs in the mail handler with interrupts off,
+			 * so the return handler cannot empty the FIFO */
+			ppe_wifi_bufid_isr(0);
+#endif
 			delay_ms(100);
+		}
 		delay_ms(100);
 	}
 
