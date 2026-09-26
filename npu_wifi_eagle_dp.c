@@ -769,6 +769,40 @@ static void eagle_mseg_drain(u32 band)
 	}
 
 	idx = eagle_mseg_ridx[band];
+#ifdef HAS_ASYNC_COPY
+	{
+		/* copy every segment before any of them is published or
+		 * its buffer given back */
+		struct host_seg s[EAGLE_MSEG_MAX];
+		u16 ids[EAGLE_MSEG_MAX];
+		u32 n = segs, i;
+
+		for (i = 0; i < n; i++) {
+			e = base + EAGLE_Q_ENTRY * idx;
+			buf_id = *(volatile u32 *)e;
+			flags = *(volatile u8 *)(e + 8);
+			ids[i] = (u16)buf_id;
+			s[i].src = eagle_buf_phys(buf_id);
+			s[i].info = *(volatile u32 *)eagle_buf_uncached(buf_id);
+			s[i].frame = *(volatile u16 *)(e + 4);
+			s[i].seg = *(volatile u16 *)(e + 6);
+			s[i].fwd_type = flags >> 2;
+			s[i].last = (flags & 2) != 0;
+			*(volatile u32 *)e = 0xFFFFFFFF;
+			*(volatile u32 *)(e + 4) = 0;
+			*(volatile u8 *)(e + 8) = 0;
+			idx = (idx + 1 == EAGLE_MSEG_ENTRIES) ? 0 : idx + 1;
+		}
+		if (ok) {
+			dbg.rxout += n;
+			if (host_out_chain(s, n) != 0)
+				dbg.rxoutfail++;
+		}
+		buf_id_return_n(ids, n);
+		eagle_mseg_ridx[band] = idx;
+		return;
+	}
+#endif
 	while (segs != 0) {
 		e = base + EAGLE_Q_ENTRY * idx;
 		buf_id = *(volatile u32 *)e;

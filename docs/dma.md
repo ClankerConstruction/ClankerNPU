@@ -51,7 +51,11 @@ With `HAS_ASYNC_COPY` (AN7583 eagle) the eagle drain splits this in two:
 finishes the previous frame and starts this frame's copy;
 `host_out_finish` waits, writes the words and publishes the index. The
 next frame is read and claimed while a copy runs. Only one copy is in
-flight at a time. With two in flight (channels 3 and 2) the host got
+flight at a time. A frame chained over several slots goes through
+`host_out_chain`: every segment is copied first, then the valid bits
+are written from the last segment to the first, because the host busy
+waits a millisecond, up to three times, on a head whose tail is not
+valid yet. With two in flight (channels 3 and 2) the host got
 damaged TCP streams, though every copy checked correct in isolation.
 
 ### In rings, host to NPU

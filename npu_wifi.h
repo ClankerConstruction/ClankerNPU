@@ -120,6 +120,15 @@ int host_out_start(struct host_out *o, struct host_out *prev, u32 idx,
 		   u32 buf_addr, u16 pkt_len, u16 wcid, u8 amsdu,
 		   u8 fwd_type, u16 orig_len, u8 is_last, u32 info);
 void host_out_finish(struct host_out *o);
+
+/* one segment of a frame chained over several out ring slots */
+struct host_seg {
+	u32 src, info;
+	u16 frame, seg;
+	u8 fwd_type, last;
+};
+
+int host_out_chain(const struct host_seg *s, u32 n);
 #endif
 
 /* ================================================================

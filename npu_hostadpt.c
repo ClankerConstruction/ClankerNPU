@@ -232,6 +232,48 @@ NPU_HOT void host_out_finish(struct host_out *o)
 	d[0] = o->w0;
 	REG32(HOSTADPT_RX_DMA_IDX(0)) = o->next;
 }
+
+/* One chained frame into n consecutive ring 0 slots. Every copy runs
+ * first; the words go in from the last segment to the first, so the
+ * host never finds a head whose tail is still on its way. The host
+ * spins a millisecond on such a head. -1: no room, or counters on. */
+int host_out_chain(const struct host_seg *s, u32 n)
+{
+	u32 ring = hostadpt_tx_ring_base;
+	u32 idx = REG32(HOSTADPT_RX_DMA_IDX(0));
+	u32 check = idx + n + 1, slot, i, len;
+	volatile u32 *d;
+
+	if (check >= HOSTADPT_RING_SIZE)
+		check -= HOSTADPT_RING_SIZE;
+	if ((wifi_debug_flags & 4) ||
+	    (*(volatile u8 *)(ring + check * 24) & 1))
+		return -1;
+
+	for (i = 0, slot = idx; i < n; i++) {
+		d = (volatile u32 *)(ring + slot * 24);
+		len = s[i].seg > HOSTADPT_BUFFER_LEN ? HOSTADPT_BUFFER_LEN :
+						       s[i].seg;
+		host_out_copy(s[i].src, d[3], len);
+		host_out_wait();
+		slot = (slot + 1 < HOSTADPT_RING_SIZE) ? slot + 1 : 0;
+	}
+
+	for (i = n; i-- != 0; ) {
+		u32 k = idx + i;
+
+		if (k >= HOSTADPT_RING_SIZE)
+			k -= HOSTADPT_RING_SIZE;
+		d = (volatile u32 *)(ring + k * 24);
+		d[2] = s[i].info;
+		d[1] = (u32)(s[i].fwd_type & 0x3F) << 26;
+		d[0] = 1 | ((u32)(s[i].seg & 0x3FFF) << 1) |
+		       ((u32)(s[i].frame & 0x3FFF) << 15) |
+		       ((u32)(s[i].last & 1) << 29);
+	}
+	REG32(HOSTADPT_RX_DMA_IDX(0)) = slot;
+	return 0;
+}
 #endif
 
 #endif /* HAS_WIFI */
