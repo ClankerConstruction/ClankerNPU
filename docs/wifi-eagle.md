@@ -54,6 +54,10 @@ other band waits out that spin, a few hundred us. With `HAS_FAST_POLL`
 (AN7583) each pass serves both bands once and reads the index only when
 the room it gives drops to 133 slots or fewer.
 
+A LAN frame goes to the ring its descriptor names (word 4 bit 25), which
+need not be the TDMA ring's band. Every band a batch filled is
+published, and `lanxband` in the stats print counts such frames.
+
 AN7552 has two cores and no NPU tx path: core 1 runs the rxdmad loop and
 core 0 runs `eagle_core0_loop`, which drains the packet queues and
 refills the rx rings. See [AN7552](#an7552).

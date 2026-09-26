@@ -312,6 +312,7 @@ struct eagle_dbg {
 	u32 lan[2];	/* TDMA rx frames pushed to the WiFi tx ring */
 	u32 lanfail;	/* TDMA rx frames dropped: no token or ring stuck */
 	u32 lanwait;	/* waits for a free WiFi tx slot */
+	u32 lanxband;	/* TDMA rx frames for the other ring's band */
 };
 extern struct eagle_dbg dbg;
 
