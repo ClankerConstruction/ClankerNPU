@@ -41,7 +41,7 @@ flowchart LR
 
 | core | loop | work |
 |---:|---|---|
-| 0 | `ppe_wifi_bufid_isr` (PLIC 95) | frames the PPE did not forward go to the host queue; free-only entries return the buffer. With `HAS_HOT_TEXT` it reads the FIFO count again before returning, up to 256 entries |
+| 0 | `ppe_wifi_bufid_isr` (PLIC 95) | frames the PPE did not forward go to the host queue; free-only entries return the buffer, 16 to a hold of mutex 13 with `HAS_ID_BATCH`. With `HAS_HOT_TEXT` it reads the FIFO count again before returning, up to 256 entries |
 | 1 | `eagle_rxdmad_loop` | one rxdmad descriptor at a time: `dst_sel` frames to TDMA tx, the rest to the host queue; chains multi-buffer frames. An empty ring waits 500 delay loops, 20 with `HAS_FAST_POLL` |
 | 2 | `eagle_tx_fast_path` | staged host frames and the TDMA rx ring into the WiFi tx ring, paced by the ring's DMA index |
 | 3 | `eagle_core3_loop` | host adaptor in rings to staging, packet queue to host adaptor out rings, tx done ring |

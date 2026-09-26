@@ -599,6 +599,11 @@ static inline u32 eagle_ppe_drain(void)
 {
 	u32 n, i, v, info, hdr, done = 0;
 	u16 id;
+#ifdef HAS_ID_BATCH
+	/* freed ids go back 16 to a hold of mutex 13 */
+	u16 ids[16];
+	u32 nf = 0;
+#endif
 
 	while ((n = REG32(PPE_WIFI_BUF_CNT) & 0xFFFF) != 0) {
 		i = 0;
@@ -606,7 +611,15 @@ static inline u32 eagle_ppe_drain(void)
 		while ((s32)v < 0) {
 			id = v & 0xFFFF;
 			if (v & 0x40000000) {
+#ifdef HAS_ID_BATCH
+				ids[nf++] = id;
+				if (nf == 16) {
+					buf_id_return_n(ids, nf);
+					nf = 0;
+				}
+#else
 				buf_id_return(id);
+#endif
 			} else {
 				info = REG32(PPE_WIFI_BUF_INFO);
 				hdr = REG32(eagle_buf_uncached(id));
@@ -629,6 +642,10 @@ static inline u32 eagle_ppe_drain(void)
 		break;
 #endif
 	}
+#ifdef HAS_ID_BATCH
+	if (nf != 0)
+		buf_id_return_n(ids, nf);
+#endif
 	return done;
 }
 
