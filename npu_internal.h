@@ -35,6 +35,71 @@ u32 npu_strlen(const char *s);
 u32 npu_isqrt(u32 x);
 char get_core_char(void);
 
+#ifdef HAS_EAGLE_STA_QLIMIT
+/* npu_sta_q.c: LAN -> WiFi frames each station has in the WiFi chip.
+ * Debug block tag SQLM; a zero limit or target is off. */
+#define STA_Q_TOKENS	13312	/* the tx token pool */
+#define STA_Q_STAS	1024	/* stations tracked, by wcid */
+#define STA_Q_NONE	0xFFFF
+
+struct wifi_sta_q {
+	u32 limit;	/* frames: drop at this many */
+	u32 target;	/* frames: above this for interval is a standing queue */
+	u32 interval;	/* cycles */
+	u32 limit_drops;
+	u32 aqm_drops;
+};
+extern struct wifi_sta_q wifi_sta_q;
+extern volatile u16 *sta_q_tok;		/* station per token, or none */
+extern volatile u16 *sta_q_sent;	/* the sending hart writes */
+extern volatile u16 *sta_q_done;	/* the tx done hart writes */
+
+void sta_q_init(void);
+int sta_q_decide(u32 sta, u32 now);
+
+/* 1: drop this frame of station sta (wcid) */
+static NPU_INLINE int sta_q_drop(u32 sta, u32 now)
+{
+	if (sta >= STA_Q_STAS || sta_q_tok == NULL ||
+	    (wifi_sta_q.limit | wifi_sta_q.target) == 0)
+		return 0;
+	return sta_q_decide(sta, now);
+}
+
+/* token tok carries a frame of station sta; before the chip sees it */
+static NPU_INLINE void sta_q_sent_tok(u32 tok, u32 sta)
+{
+	if (sta < STA_Q_STAS && tok < STA_Q_TOKENS && sta_q_tok != NULL) {
+		sta_q_tok[tok] = (u16)sta;
+		sta_q_sent[sta]++;
+	}
+}
+
+/* the frame never reached the chip */
+static NPU_INLINE void sta_q_unsent_tok(u32 tok, u32 sta)
+{
+	if (sta < STA_Q_STAS && tok < STA_Q_TOKENS && sta_q_tok != NULL) {
+		sta_q_tok[tok] = STA_Q_NONE;
+		sta_q_sent[sta]--;
+	}
+}
+
+/* the chip reported token tok done */
+static NPU_INLINE void sta_q_done_tok(u32 tok)
+{
+	volatile u16 *map = sta_q_tok;
+	u32 sta;
+
+	if (map == NULL || tok >= STA_Q_TOKENS)
+		return;
+	sta = map[tok];
+	if (sta != STA_Q_NONE) {
+		map[tok] = STA_Q_NONE;
+		sta_q_done[sta]++;
+	}
+}
+#endif
+
 /* npu_mutex.c */
 int hw_mutex_lock(u32 *desc);
 int hw_mutex_unlock(u32 *desc);

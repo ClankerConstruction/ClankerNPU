@@ -72,6 +72,9 @@ void npu_dbg_init(void)
 #ifdef WIFI_EAGLE
 	ndbg_sym(i++, NDBG_TAG('E', 'D', 'B', 'G'), (u32)&dbg);
 #endif
+#ifdef HAS_EAGLE_STA_QLIMIT
+	ndbg_sym(i++, NDBG_TAG('S', 'Q', 'L', 'M'), (u32)&wifi_sta_q);
+#endif
 #ifdef NPU_PROFILE
 	ndbg_sym(i++, NDBG_TAG('P', 'R', 'O', 'F'), (u32)&npu_prof);
 #endif

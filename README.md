@@ -147,6 +147,7 @@ family's code, behind the matching `#ifdef`.
 | `npu_wifi_kite.c`, `npu_wifi_init.c` | kite mail handlers, kite setup |
 | `npu_wifi_rx.c`, `npu_wifi_ba.c`, `npu_wifi_fwd.c` | kite rx, BA reorder, host node rings |
 | `npu_wifi_bufid.c` | rx buffer ids, tx tokens, debug counters |
+| `npu_sta_q.c` | per-station limit on frames waiting in the WiFi chip |
 | `npu_tdma.c`, `npu_hostadpt.c` | TDMA, BME, BMGR, DMA copy, host adaptor |
 | `npu_config.h` | variant selection and feature flags |
 | `npu_regs.h`, `npu_types.h` | register addresses, types, CSR access |
@@ -171,6 +172,7 @@ Feature flags from `npu_config.h`:
 | `HAS_FAST_POLL` | AN7583 eagle (WiFi rx and tx loops without long idle waits; core 2 serves both bands every pass) |
 | `HAS_ASYNC_COPY` | AN7583 eagle (host out ring copy overlaps the next frame's work) |
 | `HAS_LEAN_TRAP` | AN7583 eagle (trap entry saves only caller-saved registers) |
+| `HAS_EAGLE_STA_QLIMIT` | AN7581 and AN7583 eagle with NPU tx (per-station limit on LAN to WiFi frames in the WiFi chip) |
 
 ## Documentation
 
@@ -182,6 +184,7 @@ Feature flags from `npu_config.h`:
 | [docs/mailbox.md](docs/mailbox.md) | mailbox, host notify, WiFi, tunnel and HWNAT commands |
 | [docs/dma.md](docs/dma.md) | host adaptor, TDMA, buffer return paths, BMGR |
 | [docs/wifi-eagle.md](docs/wifi-eagle.md) | eagle datapath and ring bring-up |
+| [docs/sta-qlimit.md](docs/sta-qlimit.md) | per-station queue limit: design, settings, measurements |
 | [docs/wifi-kite.md](docs/wifi-kite.md) | kite datapath and BA reorder |
 | [docs/tunnel.md](docs/tunnel.md) | tunnel offload, NPU bridge, L4S, PPE setup |
 | [docs/dba.md](docs/dba.md) | GPON dynamic bandwidth allocation |

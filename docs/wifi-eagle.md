@@ -204,6 +204,48 @@ write an rx one, and its DMA index never moves.
 - **Tx done.** Token reports (types 6 and 24) free tx tokens. Any other
   event is queued to the host on band 0.
 
+## Per-station queue limit
+
+LAN to WiFi frames bypass the host's queueing, so the only limit on what
+waits in the WiFi chip is the tx token pool, which every station and the
+host path share. One fast download can hold most of it: the TCP window
+then sits in the chip as delay, and when the pool runs dry the NPU drops
+frames and host frames to every station wait for a token.
+
+With `HAS_EAGLE_STA_QLIMIT` (AN7581 and AN7583, the eagle builds with an
+NPU tx path) core 2 counts each station's frames in the chip and drops a
+TDMA rx frame, re-arming its slot, when:
+
+- the station has `limit` frames in the chip, or
+- the station's count has stayed at or above `target` for `interval`.
+  Drops then follow CoDel's control law (RFC 8289): the next one comes
+  `interval / sqrt(n)` later, and they stop as soon as the count dips
+  below `target`. Bursts shorter than `interval` pass untouched.
+
+| field of `wifi_sta_q` | default | |
+|---|---:|---|
+| `limit` | 8192 | frames; leaves about 3000 tokens for others |
+| `target` | 4096 | frames; about 30 ms at 1.6 Gbit/s |
+| `interval` | 100 ms | in cycles |
+
+Zero turns a field off. The fields can change at run time; the debug
+block tag `SQLM` gives their address. [sta-qlimit.md](sta-qlimit.md)
+has the measurements behind the defaults, the trade-offs and the host
+commands.
+
+The accounting and the drop decision are in `npu_sta_q.c` and know
+nothing of eagle; the datapath calls four hooks: `sta_q_drop` before a
+frame takes a token, `sta_q_sent_tok` before the chip can see it,
+`sta_q_unsent_tok` when the ring write fails, and `sta_q_done_tok` for
+each token a tx done report frees.
+
+The station is the wcid in TDMA rx word 4. SRAM type 41 holds a station
+per tx token, and per station the frames sent (written by core 2 only),
+the frames done (core 3 only) and the drop state (core 2 only), for
+wcids below 1024. A token maps to no station while it is free or carries
+a host frame. `limit_drops` and `aqm_drops` in `wifi_sta_q` count the two
+kinds of drop.
+
 ## AN7552
 
 - Two cores: core 1 rxdmad, core 0 packet queue drain and rx refill,

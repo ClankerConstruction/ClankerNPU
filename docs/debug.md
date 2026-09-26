@@ -117,6 +117,7 @@ file. Convert the address to host view before reading it.
 | `TUNF` | tunnel mail handler table |
 | `L4SE` | L4S enable flag |
 | `EDBG` | eagle datapath counters, `struct eagle_dbg` in `npu_wifi.h` |
+| `SQLM` | eagle per-station queue limit, `struct wifi_sta_q`: limit, target, interval, then the two drop counts |
 | `KFLG` | kite debug flags: bit 2 turns the kite counter blocks on |
 | `KC2G`, `KC5G` | variables holding the kite 2.4 GHz and 5 GHz counter block addresses |
 | `PROF` | profile block, `PROF=1` builds only ([Profiling](#profiling)) |

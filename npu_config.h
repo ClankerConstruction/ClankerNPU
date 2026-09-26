@@ -98,6 +98,13 @@
 #define HAS_ASYNC_COPY
 #endif
 
+/* LAN -> WiFi frames each station has in the WiFi chip: a hard limit,
+ * and drops against a standing queue, as CoDel does. Needs the NPU tx
+ * path with a tx token per frame (eagle). */
+#if defined(HAS_NPU_WIFI_TX) && defined(WIFI_EAGLE)
+#define HAS_EAGLE_STA_QLIMIT
+#endif
+
 /* The trap entry saves only the registers a C call may clobber.
  * AN7583 eagle takes a PPE buffer return interrupt per frame. */
 #if defined(AN7583) && defined(WIFI_EAGLE)

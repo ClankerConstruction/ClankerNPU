@@ -183,6 +183,9 @@ static const struct sram_size_ent sram_size_hi[] = {
 static const struct sram_size_ent sram_size_ext[] = {
 	{  12, 0x01000 },	/* reorder primary index pool, 2000 u16 */
 	{  13, 0x02800 },	/* reorder secondary index pool, 5000 u16 */
+#ifdef HAS_EAGLE_STA_QLIMIT
+	{  41, 0x0A800 },	/* station per tx token, per station counts */
+#endif
 };
 
 static u32 sram_type_size(u32 addr_type)

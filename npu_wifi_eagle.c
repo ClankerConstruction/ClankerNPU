@@ -592,6 +592,9 @@ static void npu_mbox_init_rxd_wrapper(u32 ring_size, u32 ring)
 		/* AN7581 has no TDMA rx ring to reclaim buffers from */
 		np_skb_tx_force_reset();
 #endif
+#ifdef HAS_EAGLE_STA_QLIMIT
+		sta_q_init();
+#endif
 		eagle_txdone_ridx = 0;
 		eagle_fastpath_en = 1;
 #endif

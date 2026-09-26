@@ -104,6 +104,7 @@ first, so the order of its definitions is the layout of `npu_data.bin`.
 | 29 | eagle TDMA rx buffer ids |
 | 30 | reserved |
 | 31 | AN7552 eagle buffer sync bytes |
+| 41 | eagle station per tx token and per-station queue state (`npu_sta_q.c`) |
 | 129 | NPU bridge packet buffer |
 | 132 | TDMA tx rings |
 | 133 | TDMA rx rings |

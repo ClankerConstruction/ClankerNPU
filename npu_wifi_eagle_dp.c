@@ -205,6 +205,9 @@ static NPU_HOT __attribute__((noinline)) int eagle_tdma_to_wifi(u32 ring,
 	u16 toks[8];
 	int pushed = 0, r;
 	u8 band = 0;
+#ifdef HAS_EAGLE_STA_QLIMIT
+	u32 now = (u32)csr_read(mcycle), sta;
+#endif
 
 	if (budget > 127)
 		budget = 128;
@@ -217,6 +220,16 @@ static NPU_HOT __attribute__((noinline)) int eagle_tdma_to_wifi(u32 ring,
 
 		buf = REG32(d + 8);
 		stop = 0;
+#ifdef HAS_EAGLE_STA_QLIMIT
+		w0 = REG32(d + 16);
+		sta = (w0 >> 14) & 0x7FF;
+		if (sta_q_drop(sta, now)) {
+			/* drop: the slot keeps its buffer */
+			REG32(d + 4) = 0x800;
+			fail++;
+			goto next;
+		}
+#endif
 		if (used == ntok) {
 			ntok = tx_token_alloc_n(toks,
 				eagle_tdma_ready(base, ridx,
@@ -235,7 +248,11 @@ static NPU_HOT __attribute__((noinline)) int eagle_tdma_to_wifi(u32 ring,
 			REG32(d + 8) = ((((u32)toks[used++] << 11) + pkt) &
 					0x3FFFFFFF) | 0x80000000;
 			REG32(d + 4) = 0x800;
+#ifdef HAS_EAGLE_STA_QLIMIT
+			sta_q_sent_tok(tok, sta);
+#else
 			w0 = REG32(d + 16);
+#endif
 			band = (w0 >> 25) & 1;
 			r = eagle_tx_ring_fill_fast(buf, w1 & 0xFFFF, tok, w0,
 						    REG32(d + 24), band);
@@ -243,6 +260,9 @@ static NPU_HOT __attribute__((noinline)) int eagle_tdma_to_wifi(u32 ring,
 				r = eagle_tx_ring_fill(buf, w1 & 0xFFFF,
 						       (u16)tok, d + 16, &band);
 			if (r == -1) {
+#ifdef HAS_EAGLE_STA_QLIMIT
+				sta_q_unsent_tok(tok, sta);
+#endif
 				tx_token_free((u16)tok);
 				dbg.lanfail++;
 				fail++;
@@ -250,6 +270,9 @@ static NPU_HOT __attribute__((noinline)) int eagle_tdma_to_wifi(u32 ring,
 			}
 		}
 
+#ifdef HAS_EAGLE_STA_QLIMIT
+next:
+#endif
 		if (++batch == 8) {
 			REG32(kick) = ridx;
 			eagle_tx_ring_publish(band);
@@ -286,6 +309,9 @@ static int eagle_tdma_to_wifi(u32 ring, u32 budget)
 	int pushed = 0;
 	s32 ntok;
 	u8 band = 0;
+#ifdef HAS_EAGLE_STA_QLIMIT
+	u32 now = (u32)csr_read(mcycle), sta;
+#endif
 
 	if (budget > 127)
 		budget = 128;
@@ -298,6 +324,15 @@ static int eagle_tdma_to_wifi(u32 ring, u32 budget)
 
 		buf = REG32(d + 8);
 		stop = 0;
+#ifdef HAS_EAGLE_STA_QLIMIT
+		sta = (REG32(d + 16) >> 14) & 0x7FF;
+		if (sta_q_drop(sta, now)) {
+			/* drop: the slot keeps its buffer */
+			REG32(d + 4) = 0x800;
+			fail++;
+			goto next;
+		}
+#endif
 		ntok = tx_token_alloc();
 		if (ntok == -1) {
 			/* no spare buffer: drop the frame, rearm the slot */
@@ -311,8 +346,14 @@ static int eagle_tdma_to_wifi(u32 ring, u32 budget)
 			REG32(d + 8) = ((((u32)ntok << 11) + npu_tx_pkt_buf_addr) &
 					0x3FFFFFFF) | 0x80000000;
 			REG32(d + 4) = 0x800;
+#ifdef HAS_EAGLE_STA_QLIMIT
+			sta_q_sent_tok(tok, sta);
+#endif
 			if (eagle_tx_ring_fill(buf, w1 & 0xFFFF, (u16)tok,
 					       d + 16, &band) == -1) {
+#ifdef HAS_EAGLE_STA_QLIMIT
+				sta_q_unsent_tok(tok, sta);
+#endif
 				tx_token_free((u16)tok);
 				dbg.lanfail++;
 				fail++;
@@ -320,6 +361,9 @@ static int eagle_tdma_to_wifi(u32 ring, u32 budget)
 			}
 		}
 
+#ifdef HAS_EAGLE_STA_QLIMIT
+next:
+#endif
 		if (++batch == 8) {
 			REG32(kick) = ridx;
 			eagle_tx_ring_publish(band);
@@ -375,6 +419,11 @@ void eagle_dbg_print(void)
 	npu_printf("[NPU]lan push=%d/%d fail=%d wait=%d ridx=%d/%d\n",
 		   dbg.lan[0], dbg.lan[1], dbg.lanfail, dbg.lanwait,
 		   tdma_rx_ridx[0], tdma_rx_ridx[1]);
+#ifdef HAS_EAGLE_STA_QLIMIT
+	npu_printf("[NPU]lan limit=%d/%d drop=%d/%d\n", wifi_sta_q.limit,
+		   wifi_sta_q.target, wifi_sta_q.limit_drops,
+		   wifi_sta_q.aqm_drops);
+#endif
 	npu_printf("[NPU]wire sw=%d hw=%d cfg=%x glb=%x\n",
 		   tdma_tx_sw_idx[0], REG32(TDMA_TX_RING0_DMA_IDX) & 0xFFFF,
 		   REG32(TDMA_TX_RING0_CFG), REG32(TDMA_GLB_CFG));
@@ -1236,13 +1285,21 @@ static int eagle_txdone_poll(void)
 					continue;
 				if (lo != 0x7FFF) {
 					n++;
-					if (lo <= 0x33FF)
+					if (lo <= 0x33FF) {
+#ifdef HAS_EAGLE_STA_QLIMIT
+						sta_q_done_tok(lo);
+#endif
 						eagle_tok_free(lo);
+					}
 				}
 				if (hi != 0x7FFF) {
 					n++;
-					if (hi <= 0x33FF)
+					if (hi <= 0x33FF) {
+#ifdef HAS_EAGLE_STA_QLIMIT
+						sta_q_done_tok(hi);
+#endif
 						eagle_tok_free(hi);
+					}
 				}
 			}
 		} else {

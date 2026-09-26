@@ -587,6 +587,14 @@ u8 eagle_txdone_kick;
 /* sync_method (type 31): 1 once the id left its rx descriptor */
 volatile u8 *eagle_sync;
 #endif
+#ifdef HAS_EAGLE_STA_QLIMIT
+/* per station frames in the chip (npu_sta_q.c); SRAM type 41 holds
+ * the station per token, the per station counts and drop state */
+struct wifi_sta_q wifi_sta_q;
+volatile u16 *sta_q_tok;
+volatile u16 *sta_q_sent;
+volatile u16 *sta_q_done;
+#endif
 #endif
 
 #if defined(WIFI_KITE) && defined(HAS_TR471)
