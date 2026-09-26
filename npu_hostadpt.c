@@ -188,21 +188,31 @@ NPU_HOT u32 host_out_idx(void)
 	return REG32(HOSTADPT_RX_DMA_IDX(0));
 }
 
-/* host_ring_submit for ring 0 in two steps, one copy in flight. -1:
- * full ring or counters on, prev untouched; use host_ring_submit. */
-NPU_HOT int host_out_start(struct host_out *o, struct host_out *prev,
-			   u32 idx, u32 buf_addr, u16 pkt_len, u16 wcid,
-			   u8 amsdu, u8 fwd_type, u16 orig_len, u8 is_last,
-			   u32 info)
+/* n: ring 0 has room for n frames from idx, keeping a slot spare.
+ * The host takes slots in order, so the free ones are one run from
+ * idx. 0: no room, or counters on; use host_ring_submit. */
+NPU_HOT u32 host_out_room(u32 idx, u32 n)
 {
-	u32 ring = hostadpt_tx_ring_base;
-	u32 check_idx = (idx + 2 > 511) ? idx - 510 : idx + 2;
-	volatile u32 *d = (volatile u32 *)(ring + idx * 24);
+	u32 check = idx + n + 1;
+
+	if (check >= HOSTADPT_RING_SIZE)
+		check -= HOSTADPT_RING_SIZE;
+	if ((wifi_debug_flags & 4) ||
+	    (*(volatile u8 *)(hostadpt_tx_ring_base + check * 24) & 1))
+		return 0;
+	return n;
+}
+
+/* host_ring_submit for ring 0 in two steps, one copy in flight; the
+ * caller took the slot's room from host_out_room */
+NPU_HOT void host_out_start(struct host_out *o, struct host_out *prev,
+			    u32 idx, u32 buf_addr, u16 pkt_len, u16 wcid,
+			    u8 amsdu, u8 fwd_type, u16 orig_len, u8 is_last,
+			    u32 info)
+{
+	volatile u32 *d = (volatile u32 *)(hostadpt_tx_ring_base + idx * 24);
 	u32 dma_len = pkt_len;
 
-	if ((wifi_debug_flags & 4) ||
-	    (*(volatile u8 *)(ring + check_idx * 24) & 1))
-		return -1;
 	if (dma_len > HOSTADPT_BUFFER_LEN)
 		dma_len = orig_len < HOSTADPT_BUFFER_LEN ? orig_len :
 							   HOSTADPT_BUFFER_LEN;
@@ -218,7 +228,6 @@ NPU_HOT int host_out_start(struct host_out *o, struct host_out *prev,
 		((fwd_type & 0x3F) << 26);
 	o->w0 = 1 | ((orig_len & 0x3FFF) << 1) | ((pkt_len & 0x3FFF) << 15) |
 		((is_last & 1) << 29);
-	return 0;
 }
 
 /* word 0 carries the ready bit: store it last */

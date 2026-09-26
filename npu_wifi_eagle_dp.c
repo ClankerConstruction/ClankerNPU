@@ -684,41 +684,51 @@ static void eagle_txq_drain(u32 band)
 {
 	u32 base = eagle_txq_base[band];
 	u32 idx = eagle_txq_ridx[band];
-	u32 left = EAGLE_DRAIN_BATCH, n = 0, full = 0, e, buf_id;
+	u32 left = EAGLE_DRAIN_BATCH, n = 0, full = 0, e, buf_id, w1, w2;
 	u16 ids[EAGLE_DRAIN_BATCH];
 	u16 seg_len;
 	u8 flags;
 #ifdef HAS_ASYNC_COPY
 	/* a frame's copy runs while the next one is read and claimed */
 	struct host_out o[2];
-	u32 k = 0, pend = 0, oidx = 0;
+	u32 k = 0, pend = 0, oidx = 0, room = 0;
 #endif
 
 	do {
+		/* word 2 holds the flags byte the producer stores last */
 		e = base + EAGLE_Q_ENTRY * idx;
-		if ((*(volatile u8 *)(e + 10) & 1) == 0)
+		w2 = *(volatile u32 *)(e + 8);
+		if ((w2 & 0x10000) == 0)
 			break;
 
 		buf_id = *(volatile u32 *)e;
-		seg_len = *(volatile u16 *)(e + 6);
-		flags = *(volatile u8 *)(e + 10);
+		w1 = *(volatile u32 *)(e + 4);
+		seg_len = w1 >> 16;
+		flags = w2 >> 16;
 
 		if ((s32)buf_id >= 0 && seg_len != 0) {
 			u32 src = eagle_buf_phys(buf_id);
 			u32 info = *(volatile u32 *)eagle_buf_uncached(buf_id);
-			u16 wcid = *(volatile u16 *)(e + 4);
-			u16 orig = *(volatile u16 *)(e + 8);
-			u8 amsdu = *(volatile u8 *)(e + 11);
+			u16 wcid = (u16)w1;
+			u16 orig = (u16)w2;
+			u8 amsdu = w2 >> 24;
 
 			dbg.rxout++;
 #ifdef HAS_ASYNC_COPY
-			if (pend == 0)
+			/* one room check for the batch, one frame when short */
+			if (pend == 0) {
 				oidx = host_out_idx();
-			if (host_out_start(&o[k], pend ? &o[k ^ 1] : NULL,
-					   oidx, src, seg_len, wcid, amsdu,
-					   flags >> 2, orig, (flags >> 1) & 1,
-					   info) == 0) {
+				room = host_out_room(oidx, left);
+				if (room == 0)
+					room = host_out_room(oidx, 1);
+			}
+			if (room != 0) {
+				host_out_start(&o[k], pend ? &o[k ^ 1] : NULL,
+					       oidx, src, seg_len, wcid, amsdu,
+					       flags >> 2, orig, (flags >> 1) & 1,
+					       info);
 				pend = 1;
+				room--;
 				oidx = o[k].next;
 				k ^= 1;
 			} else {
@@ -746,9 +756,7 @@ static void eagle_txq_drain(u32 band)
 
 		*(volatile u32 *)e = 0xFFFFFFFF;
 		*(volatile u32 *)(e + 4) = 0;
-		*(volatile u16 *)(e + 8) = 0;
-		*(volatile u8 *)(e + 11) = 0;
-		*(volatile u8 *)(e + 10) = 0;
+		*(volatile u32 *)(e + 8) = 0;
 
 		idx = (idx + 1 == EAGLE_TXQ_ENTRIES) ? 0 : idx + 1;
 	} while (--left != 0 && full == 0);

@@ -116,9 +116,10 @@ struct host_out {
 };
 
 u32 host_out_idx(void);
-int host_out_start(struct host_out *o, struct host_out *prev, u32 idx,
-		   u32 buf_addr, u16 pkt_len, u16 wcid, u8 amsdu,
-		   u8 fwd_type, u16 orig_len, u8 is_last, u32 info);
+u32 host_out_room(u32 idx, u32 n);
+void host_out_start(struct host_out *o, struct host_out *prev, u32 idx,
+		    u32 buf_addr, u16 pkt_len, u16 wcid, u8 amsdu,
+		    u8 fwd_type, u16 orig_len, u8 is_last, u32 info);
 void host_out_finish(struct host_out *o);
 
 /* one segment of a frame chained over several out ring slots */

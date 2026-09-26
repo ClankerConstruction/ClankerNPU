@@ -46,8 +46,11 @@ so the valid bit lands last. The copy is capped at
 otherwise. If the entry two slots ahead is still valid, the ring counts
 as full and the call fails.
 
-With `HAS_ASYNC_COPY` (AN7583 eagle) the eagle drain splits this in two:
-`host_out_start` claims the slot, reads its buffer address, then
+With `HAS_ASYNC_COPY` (AN7583 eagle) the eagle drain splits this in two.
+The host takes slots in order, so the free slots are one run from the
+write index: `host_out_room(idx, n)` checks the one slot `idx + n + 1`
+for a batch of up to 16 frames, or two ahead for one frame when that
+fails. `host_out_start` then claims a slot, reads its buffer address,
 finishes the previous frame and starts this frame's copy;
 `host_out_finish` waits, writes the words and publishes the index. The
 next frame is read and claimed while a copy runs. Only one copy is in
