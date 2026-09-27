@@ -3,8 +3,9 @@
 LAN to WiFi frames the NPU forwards never pass through the host's
 queueing (qdisc, fq_codel, AQL). The NPU hands each frame to the WiFi
 chip with a tx token, and the chip keeps it until it is sent. The only
-limit on that queue is the tx token pool, 13312 tokens of which 11263
-are free when the TDMA rx rings are stocked, and every station on both
+limit on that queue is the tx token pool, 13312 tokens of which 11007
+are free when the TDMA rx rings are stocked (256 more are held back for
+host frames over 2 KB, see [wifi-eagle.md](wifi-eagle.md#rings-and-buffers)), and every station on both
 bands and the host path share it.
 
 One fast download fills that queue:
@@ -34,7 +35,7 @@ For each LAN to WiFi frame, before it takes a token, with `q` the
 frames of its station in the chip and `t` the time its frames spend in
 the chip:
 
-1. `q >= limit`: drop. A hard backstop; it keeps `11263 - limit`
+1. `q >= limit`: drop. A hard backstop; it keeps `11007 - limit`
    tokens for everyone else whatever one station does.
 2. The queue is **above target** when `t >= delay` with at least
    `min_q` frames in the chip, or when `q >= target` (frames; off by

@@ -76,6 +76,13 @@ void tx_token_free_n(const u16 *ids, u32 n);
 #endif
 void tx_token_free(u16 token);
 s32 tx_token_alloc(void);
+#ifdef HAS_EAGLE_TX_JUMBO
+/* the top token ids pair up: token t's buffer runs on into t + 1's */
+#define TX_JUMBO_PAIRS	128
+#define TX_JUMBO_FIRST	(13312 - 2 * TX_JUMBO_PAIRS)
+s32 tx_jumbo_alloc(void);
+void tx_jumbo_free(u16 token);
+#endif
 void counter_init(u32 band);
 void wcid_counter_init(u32 band);
 

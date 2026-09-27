@@ -98,10 +98,24 @@ Two buffer pools:
   on a drop, core 3 after the host copy. Returns take mutex 13 and read
   the ring's write index only while holding it. With `HAS_HOT_TEXT`
   mutex 13 and the packet queue's mutex 10 are taken inline.
-- **tx tokens**: 13312 tokens over the NPU tx packet buffer. The tx done
+- **tx tokens**: 13312 tokens over the NPU tx packet buffer (13056 in
+  the free ring with `HAS_EAGLE_TX_JUMBO`). The tx done
   ring returns them: each slot holds an rx buffer id whose buffer the
   chip fills with a token report, 15-bit tokens two per word after a
   12-byte header.
+
+Each token owns one 2 KB NPU tx buffer (`token << 11` past the tx
+packet buffer base). A LAN frame never needs more: TDMA rx fills one
+buffer. A frame the host sends through the host adaptor can be longer,
+up to the WLAN MTU. With `HAS_EAGLE_TX_JUMBO` the top 256 token ids
+(13056 to 13311) never enter the free ring; they form 128 pairs whose
+two buffers are adjacent. Core 3 stages a host frame over 2048 bytes in
+the first token of a free pair, copied whole up to 4096 bytes, and gives
+the pair back when the tx done report lists that token. Staging and tx
+done both run on core 3, so the pairs' free stack takes no lock. With
+every pair in flight the frame stays in the host in ring until one is
+back. The ring reset (`np_skb_tx_force_reset`) leaves the pairs out too
+and frees them all.
 
 With `HAS_CACHED_TXDONE` (AN7583) core 3 reads a token report through
 the D-cache alias (`0x8xxxxxxx`) instead of the uncached one. The cache
@@ -258,7 +272,7 @@ re-arming its slot, when:
 
 | field of `wifi_sta_q` | default | |
 |---|---:|---|
-| `limit` | 8192 | frames; leaves about 3000 tokens for others |
+| `limit` | 8192 | frames; leaves about 2800 tokens for others |
 | `target` | 0 | frames; off |
 | `interval` | 100 ms | in cycles |
 | `delay` | 10 ms | in cycles |

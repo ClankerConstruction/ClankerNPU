@@ -12,7 +12,7 @@
 
 #ifdef HAS_EAGLE_STA_QLIMIT
 
-#define STA_Q_LIMIT		8192	/* frames; leaves 3000 tokens free */
+#define STA_Q_LIMIT		8192	/* frames; leaves 2800 tokens free */
 #define STA_Q_TARGET		0	/* frames; off, the delay decides */
 #define STA_Q_INTERVAL_MS	100
 #define STA_Q_DELAY_MS		10	/* time in the chip for a standing queue */

@@ -1127,8 +1127,23 @@ static int eagle_tx_stage(u32 band, u32 *in)
 		return -1;
 
 	len = (u16)((in[0] << 1) >> 19);
+#ifdef HAS_EAGLE_TX_JUMBO
+	if (len > EAGLE_TX_BUF_BYTES) {
+		/* two adjacent buffers; none free: the frame waits */
+		if (len > 2 * EAGLE_TX_BUF_BYTES)
+			len = 2 * EAGLE_TX_BUF_BYTES;
+		*(volatile u16 *)(e + 10) = len;
+		token = tx_jumbo_alloc();
+		*(volatile u16 *)(e + 8) = (u16)token;
+		if (token == -1)
+			return -1;
+		goto copy;
+	}
+#else
+	/* the buffer holds 2 KB: cut the frame there (errata E9) */
 	if (len > EAGLE_TX_BUF_BYTES)
 		len = EAGLE_TX_BUF_BYTES;
+#endif
 	*(volatile u16 *)(e + 10) = len;
 
 	token = tx_token_alloc();
@@ -1136,6 +1151,9 @@ static int eagle_tx_stage(u32 band, u32 *in)
 	if (token == -1)
 		return -1;
 
+#ifdef HAS_EAGLE_TX_JUMBO
+copy:
+#endif
 	if (len != 0) {
 		buf = ((((u32)token << EAGLE_PKT_BUF_SHIFT) +
 			npu_tx_pkt_buf_addr) & 0x3FFFFFFF) | 0x80000000;
@@ -1295,7 +1313,7 @@ static int eagle_tx_ring_push(u32 band)
 #ifdef HAS_ID_BATCH
 /* tokens go back 32 to a hold of mutex 4 */
 #define EAGLE_TOK_BATCH	32
-#define eagle_tok_free(t) do {						\
+#define eagle_tok_put(t) do {						\
 	toks[nt++] = (u16)(t);						\
 	if (nt == EAGLE_TOK_BATCH) {					\
 		tx_token_free_n(toks, nt);				\
@@ -1303,7 +1321,17 @@ static int eagle_tx_ring_push(u32 band)
 	}								\
 } while (0)
 #else
-#define eagle_tok_free(t)	tx_token_free((u16)(t))
+#define eagle_tok_put(t)	tx_token_free((u16)(t))
+#endif
+#ifdef HAS_EAGLE_TX_JUMBO
+#define eagle_tok_free(t) do {						\
+	if ((t) >= TX_JUMBO_FIRST)					\
+		tx_jumbo_free((u16)(t));				\
+	else								\
+		eagle_tok_put(t);					\
+} while (0)
+#else
+#define eagle_tok_free(t)	eagle_tok_put(t)
 #endif
 
 static int eagle_txdone_poll(void)

@@ -105,6 +105,12 @@
 #define HAS_EAGLE_STA_QLIMIT
 #endif
 
+/* A host tx frame longer than one 2 KB NPU tx buffer takes one of a few
+ * reserved pairs of adjacent buffers instead of being cut short. */
+#if defined(HAS_NPU_WIFI_TX) && defined(WIFI_EAGLE)
+#define HAS_EAGLE_TX_JUMBO
+#endif
+
 /* Tx done reports are read through the D-cache after their lines are
  * invalidated, as the stock firmware reads RRO pages: one line fill
  * per 64 bytes instead of an uncached load per word. */

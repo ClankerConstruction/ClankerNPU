@@ -136,6 +136,17 @@ static volatile u16 bufid_widx;
 static u32 bufid_deq_count;
 static u32 bufid_enq_count;
 
+#ifdef HAS_EAGLE_TX_JUMBO
+/* ids from TX_JUMBO_FIRST never enter the ring. The free even ones
+ * stack here; the tx hart allocates and its tx done frees, so no lock. */
+static u16 tx_jumbo_stack[TX_JUMBO_PAIRS];
+static volatile u32 tx_jumbo_top;
+/* the ring holds the ids below TX_JUMBO_FIRST */
+#define TX_TOKEN_IDS	TX_JUMBO_FIRST
+#else
+#define TX_TOKEN_IDS	TX_FREE_RING_ENTRIES
+#endif
+
 #if defined(HAS_HOT_TEXT) && defined(WIFI_EAGLE)
 /* a return per frame: mutex 13 taken inline */
 #define rx_free_lock()		do { hw_mutex_take(13); npu_barrier(); } while (0)
@@ -297,6 +308,37 @@ s32 tx_token_alloc(void)
 	hw_mutex_unlock(tx_token_alloc_mutex);
 	return id;
 }
+#ifdef HAS_EAGLE_TX_JUMBO
+static void tx_jumbo_reset(void)
+{
+	u32 i;
+
+	for (i = 0; i < TX_JUMBO_PAIRS; i++)
+		tx_jumbo_stack[i] = (u16)(TX_JUMBO_FIRST + 2 * i);
+	tx_jumbo_top = TX_JUMBO_PAIRS;
+}
+
+/* a token whose buffer holds 2 x 2 KB, or -1 */
+s32 tx_jumbo_alloc(void)
+{
+	u32 top = tx_jumbo_top;
+
+	if (top == 0)
+		return -1;
+	tx_jumbo_top = --top;
+	return tx_jumbo_stack[top];
+}
+
+void tx_jumbo_free(u16 token)
+{
+	u32 top = tx_jumbo_top;
+
+	if (top < TX_JUMBO_PAIRS) {
+		tx_jumbo_stack[top] = token;
+		tx_jumbo_top = top + 1;
+	}
+}
+#endif
 
 /* back to every id free */
 void rx_bufid_pool_reset(void)
@@ -339,7 +381,7 @@ void bufid_pool_init(void)
 	/* tx tokens: AN7552 has none (no NPU tx) */
 	p = (u16 *)sram_buf_alloc(18);
 	bufid_ring_base = (u32)p;
-	for (i = 0; i < TX_FREE_RING_ENTRIES; i++)
+	for (i = 0; i < TX_TOKEN_IDS; i++)
 		p[i] = (u16)i;
 
 	tx_buf_state_base = sram_buf_alloc(28);
@@ -348,7 +390,11 @@ void bufid_pool_init(void)
 	tdma_rx_ids_base = sram_buf_alloc(29);
 
 	bufid_ridx = 0;
-	bufid_widx = 0;
+	/* 0 is a full ring: every slot but one holds an id */
+	bufid_widx = (TX_TOKEN_IDS == TX_FREE_RING_ENTRIES) ? 0 : TX_TOKEN_IDS;
+#ifdef HAS_EAGLE_TX_JUMBO
+	tx_jumbo_reset();
+#endif
 #endif
 }
 
@@ -409,12 +455,21 @@ void np_skb_tx_force_reset(void)
 		while (id < TX_FREE_RING_LAST &&
 		       state[id] == TX_BUF_STATE_IN_RX)
 			id++;
+#ifdef HAS_EAGLE_TX_JUMBO
+		if (id >= TX_TOKEN_IDS)
+			break;
+#endif
 		ring[w] = (u16)id;
 		id++;
 	}
 
 	bufid_ridx = (u16)in_rx;
+#ifdef HAS_EAGLE_TX_JUMBO
+	bufid_widx = (w == TX_FREE_RING_ENTRIES) ? 0 : (u16)w;
+	tx_jumbo_reset();
+#else
 	bufid_widx = 0;
+#endif
 
 	npu_printf("finish run %s() total_buf_in_tdmaRx:%d(%d)\n",
 		   "np_skb_tx_force_reset", in_rx, TDMA_RX_ID_ENTRIES);

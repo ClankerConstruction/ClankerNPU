@@ -16,6 +16,7 @@ decide whether an NPU path is used at all are listed after them.
 | E6 | AN7581, AN7583 | L4S keeps one packet count, mark count and sampled queue length for channels 1 and 2 together. Its debug line prints the mark threshold where it says `qlen`. | Kept, log text included. The debug block adds the sampled queue length as counter 14. |
 | E7 | all | An exception prints from the trap handler. If it hits while the same hart holds the print mutex, the hart freezes. | The trap is recorded in the debug block before the print, so a frozen hart still leaves `mcause`, `mepc`, `mtval`, `ra` and `sp` behind. |
 | E8 | AN7581, AN7583 | Hart 0 prints `Error: src:8 already registered ISR` at boot: the tunnel loop registers its mailbox source a second time. | Kept. Registering again only enables the source on the calling hart, which is what the loop needs. |
+| E9 | eagle with the NPU tx path (AN7581 MT7992, AN7583 MT7992 and MT7993) | A frame the host sends to WiFi through the host adaptor is copied into its tx token's 2048-byte NPU buffer at its full length, up to 8191 bytes. A frame over 2048 bytes overwrites the next tokens' buffers, which may hold frames still queued in the WiFi chip. | Fixed: 128 pairs of adjacent buffers at the top of the token range are kept out of the free ring. A frame over 2048 bytes takes a pair and is copied whole, up to 4096 bytes; the pair's second token is never handed out. With every pair in flight the frame waits in the in ring. |
 
 ## Host side
 
@@ -28,6 +29,7 @@ show with either NPU image.
 | H2 | SRv6 | Forwarded LAN traffic into an `encap seg6` route re-enters IPv6 forwarding. The default IPv6 firewall drops it without a counter. | Accept the forwarded IPv6 traffic on the WAN, and set `ip sr tunsrc` to the address given to the NPU with `myip`. |
 | H3 | VXLAN | On AN7581 and AN7583 the host hands VXLAN to the frame engine's tunnel table and never stores an NPU header template, so NPU UDFs 1..40 are never used. | None needed; VXLAN runs in hardware. |
 | H4 | L4S | Enabling L4S affects only flows bound afterwards. | Flush the flow table after `echo enable > /proc/tc3162/hwnat_l4s`. |
+| H5 | AN7583 Ethernet MTU | `eth0` takes an MTU of 2000 at most (2048 is refused), so LAN and WiFi frames forwarded through the DUT stay at or under 2014 bytes; the WLANs and `br-lan` take 2304. | None needed; frames the DUT itself sends to WiFi can be larger (E9). |
 
 ## Verified paths
 
