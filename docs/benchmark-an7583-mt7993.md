@@ -397,6 +397,10 @@ xychart-beta
 
 ```
 
+*Higher bar: Stock NPU; lower bar: Custom NPU*
+
+*Latency, lower is better.*
+
 
 ```mermaid
 xychart-beta
@@ -408,17 +412,24 @@ xychart-beta
 
 ```
 
+*Higher bar: Stock NPU; lower bar: Custom NPU*
+
+*Packet loss, lower is better.*
+
+
 ```mermaid
 xychart-beta
     title "Q-W7 download throughput beside other clients (Mbit/s)"
     x-axis ["alone", "beside MT-W7", "beside RT-Legacy", "all four", "RT-Legacy flooded"]
     y-axis "Mbit/s" 0 --> 1700
-    bar [1538, 1552, 951, 651, 795]
     bar [1545, 1579, 1204, 995, 777]
+    bar [1538, 1552, 951, 651, 795]
 
 ```
 
-*Bar order per pair: Stock NPU (light color), Custom NPU (bold color).*
+*Higher bar: Custom NPU; lower bar: Stock NPU*
+
+*Throughput, higher is better.*
 
 ## Architectural Analysis
 
