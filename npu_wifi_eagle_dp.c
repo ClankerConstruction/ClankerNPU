@@ -1003,6 +1003,12 @@ static int eagle_rxdmad_handle(u8 *chaining)
 		}
 		REG32(buf) = info;
 
+		if (err != 0)
+			dbg.rxh_err++;
+		else if (dw2 & 0x80)
+			dbg.rxh_flag++;
+		else if ((info & 2) == 0)
+			dbg.rxh_raw++;
 		if (err == 0 && wifi_force_to_cpu == 0 && (dw2 & 0x80) == 0) {
 			/* dst_sel 1: the chip reordered the frame and gives its
 			 * ethernet header offset; send it to the wired side. The

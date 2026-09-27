@@ -322,6 +322,9 @@ struct eagle_dbg {
 	u32 lanfail;	/* TDMA rx frames dropped: no token or ring stuck */
 	u32 lanwait;	/* waits for a free WiFi tx slot */
 	u32 lanxband;	/* TDMA rx frames for the other ring's band */
+	u32 rxh_err;	/* rx to the host: descriptor error */
+	u32 rxh_flag;	/* rx to the host: chip asks for the host */
+	u32 rxh_raw;	/* rx to the host: no ethernet header offset */
 };
 extern struct eagle_dbg dbg;
 
