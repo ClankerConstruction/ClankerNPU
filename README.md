@@ -110,6 +110,7 @@ make SOC=AN7583 WIFI=MT7993 disasm # build/<variant>/firmware.dis
 | `NPUTX` | 1 | 0 stages host tx frames but never writes the WiFi tx ring |
 | `NPUDBG` | 0 | 1 starts with the WiFi and stats print bits of the [debug block](docs/debug.md) set |
 | `PROF` | 0 | 1 builds the [profiler](docs/debug.md#profiling): section timers and PC sampling |
+| `CLANKER` | 0 | 1 defines `USE_CLANKER_DRIVER`: Special behaviour to be used with Clanker's host driver |
 | `GITREV` | `git describe` | hash in the boot `NPU Version` line |
 | `CROSS` | `riscv64-unknown-elf-` | toolchain prefix |
 

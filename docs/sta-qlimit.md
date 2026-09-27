@@ -325,7 +325,7 @@ runs dry.
 | − | Core 2 spends about 155 cycles more per LAN to WiFi frame with the delay target than with everything off (1194 against 1039, `ELAN` in a `PROF=1` build), 65 more than with the frame target alone. Its ceiling falls from about 690 to 600 kpps, several times what one radio carries. |
 | − | Only wcids below 1024 are tracked; others pass unlimited. |
 | − | Drops only; no ECN marking, and one queue per station, not per flow. A packet marked DSCP EF goes to the chip's voice queue and waits far less (7 ms against 190 ms at 2.4 GHz, measured with no time target); unmarked flows share the station's queue. |
-| − | The upload direction (WiFi to LAN) and frames the host sends to WiFi are not limited; the host queues those. |
+| − | The upload direction (WiFi to LAN) is not limited, nor are frames the host sends to WiFi unless built with `CLANKER=1`; the host queues those. |
 
 ## Where it applies
 

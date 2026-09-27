@@ -232,7 +232,10 @@ write an rx one, and its DMA index never moves.
   descriptor goes to `eagle_rxdmad_handle`.
 - **WiFi to host.** Frames without `dst_sel`, with errors, or with force
   to CPU set go on the packet queue; core 3 copies them to the host
-  adaptor out ring and returns the buffer id.
+  adaptor out ring and returns the buffer id. `EDBG` counts why, for
+  frames `eagle_rxdmad_handle` sees: `rxh_err` (descriptor error),
+  `rxh_flag` (the chip asks for the host) and `rxh_raw` (no ethernet
+  header offset). Frames the PPE returns are not among them.
   Frames spanning several buffers go on the multi-segment queue. Core
   3 hands a frame up only whole: for a segment core 1 has not queued
   yet it polls that entry up to 10000 times, three times at most, then
@@ -297,6 +300,21 @@ probe that times one frame (core 2 arms it, core 3 completes it), for
 wcids below 1024. A token maps to no station while it is free or carries
 a host frame. `limit_drops` and `aqm_drops` in `wifi_sta_q` count the two
 kinds of drop.
+
+With `USE_CLANKER_DRIVER` (`make CLANKER=1`) host frames count too, and
+may be dropped: the vendor host driver does not expect that, so default
+builds leave them alone. Core 3 stages host frames, so it finds their
+station in the TXP behind the TXD:
+
+| TXD / TXP form | station |
+|---|---|
+| HIF TXP v1 (vendor default, mt76) | `rept_wds_wcid`, TXP bytes 5-6 |
+| HIF TXP v2/v3 (vendor SW A-MSDU): TXD word 0 version 2 or 3 in bits 22:19, word 1 zero | TXP word 2 bits 27:16 |
+| MAC TXP (TXD word 7 bit 27, AddBA) | none, not limited |
+
+Each counter keeps one writer: core 3 counts host frames sent and dropped
+in their own arrays, and the decision uses host sent + LAN sent - done.
+SRAM type 41 grows to 64 KB for them.
 
 ## AN7552
 
