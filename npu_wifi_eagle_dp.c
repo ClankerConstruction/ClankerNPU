@@ -1114,19 +1114,59 @@ done:
 /* ---- host -> WiFi ---- */
 
 #ifdef HAS_NPU_WIFI_TX
-/* Copy one host tx frame into an NPU tx buffer and stage its TXD. */
-static int eagle_tx_stage(u32 band, u32 *in)
+/* Host frames under the station queue limit: a vendor host driver
+ * never sees them dropped, so only the Clanker build does it. */
+#if defined(HAS_EAGLE_STA_QLIMIT) && defined(USE_CLANKER_DRIVER)
+#define EAGLE_HOST_QLIMIT
+#endif
+
+#ifdef EAGLE_HOST_QLIMIT
+/* Station of a host frame, from the TXP after the TXD:
+ * - HIF TXP v2/v3 (vendor SW A-MSDU): TXD holds only DW0 with version
+ *   2 or 3 in bits 22:19; wcid in TXP word 2 bits 27:16
+ * - HIF TXP v1 (vendor default, mt76): rept_wds_wcid, bytes 5-6
+ * - MAC TXP (DW7 bit 27, AddBA): none */
+static u32 eagle_host_sta(const u32 *in)
+{
+	const volatile u32 *txd = in + 4;
+	const volatile u8 *txp = (const volatile u8 *)(txd + 8);
+	u32 ver = (txd[0] >> 19) & 0xF;
+
+	if (txd[7] & (1u << 27))
+		return STA_Q_NONE;
+	if ((ver == 2 || ver == 3) && txd[1] == 0)
+		return (txd[8 + 2] >> 16) & 0xFFF;
+	return (txp[5] | txp[6] << 8) & 0xFFF;
+}
+#endif
+
+struct sta_q_cfg;
+
+/* Copy one host tx frame into an NPU tx buffer and stage its TXD.
+ * 0: staged, 1: dropped by the station queue limit, -1: no room */
+static int eagle_tx_stage(u32 band, u32 *in, struct sta_q_cfg *qc)
 {
 	u32 idx = eagle_stage_widx[band];
 	u32 e = eagle_stage_base[band] + EAGLE_STAGE_ENTRY * idx;
 	s32 token;
 	u16 len;
 	u32 buf;
+#ifdef EAGLE_HOST_QLIMIT
+	u32 now = (u32)csr_read(mcycle), sta;
+#endif
 
 	if (*(volatile u8 *)(e + 12) == 1)
 		return -1;
 
 	len = (u16)((in[0] << 1) >> 19);
+#ifdef EAGLE_HOST_QLIMIT
+	/* host frames wait in the chip beside LAN ones: same limit */
+	sta = eagle_host_sta(in);
+	if (sta_q_drop(qc, sta, now, len))
+		return 1;
+#else
+	(void)qc;
+#endif
 #ifdef HAS_EAGLE_TX_JUMBO
 	if (len > EAGLE_TX_BUF_BYTES) {
 		/* two adjacent buffers; none free: the frame waits */
@@ -1154,6 +1194,9 @@ static int eagle_tx_stage(u32 band, u32 *in)
 #ifdef HAS_EAGLE_TX_JUMBO
 copy:
 #endif
+#ifdef EAGLE_HOST_QLIMIT
+	sta_q_sent_tok(qc, (u32)token, sta, now);
+#endif
 	if (len != 0) {
 		buf = ((((u32)token << EAGLE_PKT_BUF_SHIFT) +
 			npu_tx_pkt_buf_addr) & 0x3FFFFFFF) | 0x80000000;
@@ -1175,10 +1218,19 @@ static int eagle_hostadpt_drain(u32 band)
 	u32 budget = EAGLE_HOSTADPT_BUDGET;
 	u32 idx = hostadpt_in_ridx[band];
 	u32 e = hostadpt_in_base[band] + HOSTADPT_IN_ENTRY * idx;
-	int moved = 0;
+	struct sta_q_cfg *qcp = NULL;
+	int moved = 0, r;
+#ifdef EAGLE_HOST_QLIMIT
+	struct sta_q_cfg qc;
+#endif
 
 	if (hostadpt_in_size[band] == 0)
 		return 0;
+
+#ifdef EAGLE_HOST_QLIMIT
+	sta_q_snap_host(&qc);
+	qcp = &qc;
+#endif
 
 	while (*(volatile u32 *)e & 1) {
 		if (NDBG_PRINTING(NDBG_WIFI) && eagle_in_first[band] == 0) {
@@ -1193,11 +1245,13 @@ static int eagle_hostadpt_drain(u32 band)
 				    32);
 		}
 		dbg.in[band]++;
-		if (eagle_tx_stage(band, (u32 *)e) < 0) {
+		r = eagle_tx_stage(band, (u32 *)e, qcp);
+		if (r < 0) {
 			dbg.nostage[band]++;
 			return moved;
 		}
-		dbg.stage[band]++;
+		if (r == 0)
+			dbg.stage[band]++;
 		idx++;
 		if (idx == hostadpt_in_size[band])
 			idx = 0;

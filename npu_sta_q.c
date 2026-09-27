@@ -51,6 +51,13 @@ void sta_q_init(void)
 	sta_q_done = sta_q_sent + STA_Q_STAS;
 	sta_q_aqm = (struct sta_q_aqm *)(sta_q_done + STA_Q_STAS);
 	sta_q_probe = (struct sta_q_probe *)(sta_q_aqm + STA_Q_STAS);
+#ifdef USE_CLANKER_DRIVER
+	sta_q_sent_host = (volatile u16 *)(sta_q_probe + STA_Q_STAS);
+	sta_q_aqm_host = (void *)(sta_q_sent_host + STA_Q_STAS);
+	for (i = 0; i < STA_Q_STAS; i++)
+		sta_q_sent_host[i] = 0;
+	npu_memset(sta_q_aqm_host, 0, STA_Q_STAS * sizeof(*sta_q_aqm));
+#endif
 	for (i = 0; i < STA_Q_TOKENS; i++)
 		((volatile u16 *)base)[i] = STA_Q_NONE;
 	for (i = 0; i < STA_Q_STAS; i++) {
@@ -89,7 +96,15 @@ NPU_HOT int sta_q_decide(const struct sta_q_cfg *c, u32 sta, u32 now, u32 len)
 {
 	struct sta_q_aqm *a = &sta_q_aqm[sta];
 	u32 interval = c->interval;
+#ifdef USE_CLANKER_DRIVER
+	/* done counts both kinds of frame */
+	s16 d = (s16)(c->sent[sta] + c->other[sta] - c->done[sta]);
+
+	if (c->aqm != NULL)
+		a = &((struct sta_q_aqm *)c->aqm)[sta];
+#else
 	s16 d = (s16)(c->sent[sta] - c->done[sta]);
+#endif
 	/* done never passes sent, but a stale count must not read as full */
 	u32 q = d > 0 ? (u32)d : 0, n, above = 0;
 

@@ -183,7 +183,9 @@ static const struct sram_size_ent sram_size_hi[] = {
 static const struct sram_size_ent sram_size_ext[] = {
 	{  12, 0x01000 },	/* reorder primary index pool, 2000 u16 */
 	{  13, 0x02800 },	/* reorder secondary index pool, 5000 u16 */
-#ifdef HAS_EAGLE_STA_QLIMIT
+#if defined(HAS_EAGLE_STA_QLIMIT) && defined(USE_CLANKER_DRIVER)
+	{  41, 0x10000 },	/* ... plus host frame counts and drop state */
+#elif defined(HAS_EAGLE_STA_QLIMIT)
 	{  41, 0x0C800 },	/* station per tx token, per station state */
 #endif
 };

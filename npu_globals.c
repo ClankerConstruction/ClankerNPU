@@ -593,6 +593,10 @@ volatile u8 *eagle_sync;
 struct wifi_sta_q wifi_sta_q;
 volatile u16 *sta_q_tok;
 volatile u16 *sta_q_sent;
+#ifdef USE_CLANKER_DRIVER
+volatile u16 *sta_q_sent_host;
+void *sta_q_aqm_host;
+#endif
 volatile u16 *sta_q_done;
 struct sta_q_probe *sta_q_probe;
 #endif

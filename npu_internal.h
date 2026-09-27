@@ -64,6 +64,10 @@ struct sta_q_probe {
 extern struct wifi_sta_q wifi_sta_q;
 extern volatile u16 *sta_q_tok;		/* station per token, or none */
 extern volatile u16 *sta_q_sent;	/* the sending hart writes */
+#ifdef USE_CLANKER_DRIVER
+extern volatile u16 *sta_q_sent_host;	/* host frames: core 3 writes */
+extern void *sta_q_aqm_host;		/* drop state of host frames */
+#endif
 extern volatile u16 *sta_q_done;	/* the tx done hart writes */
 extern struct sta_q_probe *sta_q_probe;
 
@@ -73,6 +77,10 @@ struct sta_q_cfg {
 	u32 limit, target, interval, delay, min_q, small;
 	volatile u16 *map, *sent, *done;
 	struct sta_q_probe *probe;
+#ifdef USE_CLANKER_DRIVER
+	volatile u16 *other;	/* the other sending hart's count */
+	void *aqm;		/* host frames' drop state, or NULL */
+#endif
 };
 
 void sta_q_init(void);
@@ -94,7 +102,23 @@ static NPU_INLINE void sta_q_snap(struct sta_q_cfg *c)
 	c->min_q = q->min_q;
 	c->small = q->small;
 	c->on = c->map != NULL && (c->limit | c->target | c->delay) != 0;
+#ifdef USE_CLANKER_DRIVER
+	c->other = sta_q_sent_host;
+	c->aqm = NULL;
+#endif
 }
+
+#ifdef USE_CLANKER_DRIVER
+/* Host frames: core 3 counts them apart, each count keeps one writer */
+static NPU_INLINE void sta_q_snap_host(struct sta_q_cfg *c)
+{
+	sta_q_snap(c);
+	c->sent = sta_q_sent_host;
+	c->other = sta_q_sent;
+	c->aqm = sta_q_aqm_host;
+	c->on = c->on && c->sent != NULL;
+}
+#endif
 
 /* 1: drop this len-byte frame of station sta (wcid) */
 static NPU_INLINE int sta_q_drop(const struct sta_q_cfg *c, u32 sta, u32 now,

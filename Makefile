@@ -17,6 +17,8 @@ NPUTX ?= 1
 NPUDBG ?= 0
 # 1 builds the profiler: section timers and PC sampling (docs/debug.md)
 PROF ?= 0
+# 1 builds for the Clanker host drivers, this changes behaviour and might break with stock driver
+CLANKER ?= 0
 # git short hash in the boot version line; pin it to compare images
 GITREV ?= $(shell git describe --always --dirty --abbrev=7 2>/dev/null || echo nogit)
 
@@ -28,7 +30,8 @@ CFLAGS  := $(ARCH) -Os -ffunction-sections -fdata-sections \
            -DNPU_GIT_REV='"$(GITREV)"' $(if $(filter 1,$(MAILTRACE)),-DNPU_MAIL_TRACE) \
            $(if $(filter 0,$(NPUTX)),-DEAGLE_NO_TX_PUSH) \
            $(if $(filter 1,$(NPUDBG)),-DNPU_DATAPATH_DBG) \
-           $(if $(filter 1,$(PROF)),-DNPU_PROFILE)
+           $(if $(filter 1,$(PROF)),-DNPU_PROFILE) \
+           $(if $(filter 1,$(CLANKER)),-DUSE_CLANKER_DRIVER)
 ASFLAGS := $(ARCH) -D$(SOC) -D$(WIFI)
 LIBGCC  := $(shell $(CC) $(ARCH) -print-libgcc-file-name)
 LDFLAGS := -m elf32lriscv -T link.ld -nostdlib --gc-sections --relax \
