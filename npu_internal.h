@@ -277,6 +277,10 @@ void core0_wifi_init_wrapper(void);
 void core3_wifi_init_wrapper(void);
 #ifdef HAS_WIFI
 void buf_mgr_init(void);
+#if defined(WIFI_KITE) && !defined(HAS_BME)
+s32 buf_mgr_alloc(void);
+void buf_mgr_free(u32 buf_id);
+#endif
 int wifi_mail_dispatch(u32 base, u32 cnt);
 void wifi_bridge_loop(void);
 #ifdef WIFI_KITE

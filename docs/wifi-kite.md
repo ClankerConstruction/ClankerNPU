@@ -76,7 +76,8 @@ For every received frame the loop:
 Buffer ids come from the hardware buffer manager (BMGR) through custom
 CSRs: reading CSR `0xBC8 + band` pops one id, or -1 when it is empty.
 AN7552 has no id CSRs: a 16-bit load from `0x1EC08800 + band * 0x800 +
-(64 + band) * 4` pops the id instead.
+(64 + band) * 4` pops the id instead. AN7581 has no BMGR: ids come
+from a software pool, one for both bands (see [dma.md](dma.md)).
 When none is left, the loop flushes every BA window of the band to free
 buffers.
 

@@ -37,6 +37,13 @@ NPU_HOT s32 buf_id_alloc_hw(u32 type, u32 band)
 
 	return (s16)REG32(base + band * 0x800 + (64 + band) * 4);
 #endif
+#if defined(WIFI_KITE) && !defined(HAS_BME)
+	/* no buffer manager behind the CSRs: the software pool, one for
+	 * every band, as the stock AN7581 image does */
+	(void)type;
+	(void)band;
+	return buf_mgr_alloc();
+#endif
 	switch (type * 4 + band) {
 	case 0:
 		return bufid_csr(0xBC8);
@@ -65,6 +72,13 @@ NPU_HOT s32 buf_id_alloc_hw(u32 type, u32 band)
 NPU_HOT void buf_id_free(u32 type, u32 band, u32 buf_id)
 {
 	u32 base;
+
+#if defined(WIFI_KITE) && !defined(HAS_BME)
+	(void)type;
+	(void)band;
+	buf_mgr_free(buf_id);
+	return;
+#endif
 
 	if (type == 0)
 		base = BMGR_BASE;

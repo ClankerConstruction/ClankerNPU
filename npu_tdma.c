@@ -642,18 +642,19 @@ int __attribute__((noinline)) tdma_tx_submit(u32 token, u32 pkt_len,
 #endif
 #endif /* HAS_WIFI */
 
-/* Software buffer manager init (non-TDMA path) */
+/* The software rx id pool of kite without a BMGR (AN7581): 5600 ids,
+ * mutexes 28 and 29, SRAM type 138, as the stock image has it */
 void buf_mgr_init(void)
 {
 	u16 *pool;
 	u32 i;
 
-	buf_mgr_alloc_cfg = 12;
+	buf_mgr_alloc_cfg = 28;
 	buf_mgr_alloc_idx = 0;
-	buf_mgr_free_cfg = 13;
+	buf_mgr_free_cfg = 29;
 	buf_mgr_free_idx = 0;
 
-	pool = (u16 *)sram_buf_alloc(140);
+	pool = (u16 *)sram_buf_alloc(138);
 	buf_mgr_id_base = (u32)pool;
 
 	for (i = 0; i < 5600; i++)
@@ -662,3 +663,42 @@ void buf_mgr_init(void)
 	buf_mgr_alloc_widx = 0;
 	buf_mgr_free_widx = 0;
 }
+
+#if defined(WIFI_KITE) && !defined(HAS_BME)
+/* one rx id from the pool, -1 when it is empty (the ring keeps one
+ * slot free), counted as the other id pools count */
+s32 buf_mgr_alloc(void)
+{
+	u16 next;
+	s32 id;
+
+	hw_mutex_lock(&buf_mgr_alloc_cfg);
+	next = (buf_mgr_alloc_widx + 1 == 5600) ? 0 : buf_mgr_alloc_widx + 1;
+	if (next == buf_mgr_free_widx) {
+		if ((wifi_debug_flags & 4) && counter_base_tri)
+			(*(u32 *)(counter_base_tri + 0x20))++;
+		hw_mutex_unlock(&buf_mgr_alloc_cfg);
+		return -1;
+	}
+	if ((wifi_debug_flags & 4) && counter_base_tri)
+		(*(u32 *)(counter_base_tri + 0x1C))++;
+	id = *(volatile s16 *)(buf_mgr_id_base + 2 * (u32)buf_mgr_alloc_widx);
+	buf_mgr_alloc_widx = next;
+	hw_mutex_unlock(&buf_mgr_alloc_cfg);
+	return id;
+}
+
+/* several harts free: read the write index only under the mutex */
+void buf_mgr_free(u32 buf_id)
+{
+	u16 widx;
+
+	hw_mutex_lock(&buf_mgr_free_cfg);
+	widx = buf_mgr_free_widx;
+	*(volatile u16 *)(buf_mgr_id_base + 2 * (u32)widx) = (u16)buf_id;
+	if ((wifi_debug_flags & 4) && counter_base_tri)
+		(*(u32 *)(counter_base_tri + 0x18))++;
+	buf_mgr_free_widx = (widx + 1 == 5600) ? 0 : widx + 1;
+	hw_mutex_unlock(&buf_mgr_free_cfg);
+}
+#endif

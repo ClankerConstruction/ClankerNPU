@@ -110,8 +110,7 @@ first, so the order of its definitions is the layout of `npu_data.bin`.
 | 133 | TDMA rx rings |
 | 134 | BME descriptor ring |
 | 136 | DBA report ring |
-| 138 | rx buffer id ring |
-| 140 | AN7581 kite software buffer id pool |
+| 138 | rx buffer id ring; on AN7581 kite the software id pool |
 
 ### Core 0 allocation order
 
@@ -120,6 +119,7 @@ first, so the order of its definitions is the layout of `npu_data.bin`.
 | `tdma_init` | wipe SRAM, reset the allocator |
 | `bufid_pool_init` (eagle) | 138, 18, 28, 29 |
 | `tdma_bmgr_init` (kite) | 138 |
+| `buf_mgr_init` (AN7581 kite) | 138 |
 | `core0_wifi_init_wrapper` | 1, then the ring and table types |
 | `npu_bridge_buf_init` | 129 |
 
