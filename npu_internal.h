@@ -263,8 +263,10 @@ void boot_uart_init(void);
 int hostadpt_init(void);
 void tdma_init(void);
 void dbg_cnt_isr(int src);
-#ifdef HAS_BME
+#if defined(HAS_BME) || defined(WIFI_EAGLE)
 void bufid_pool_init(void);
+#endif
+#ifdef HAS_BME
 void rx_bufid_pool_reset(void);
 void tdma_tx_wait_idle(void);
 void tdma_bmgr_reinit(void);

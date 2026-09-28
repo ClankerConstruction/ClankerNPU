@@ -219,6 +219,9 @@ static void __attribute__((noinline)) core0_main(void)
 	} else {
 		bufid_pool_init();
 	}
+#elif defined(WIFI_EAGLE)
+	/* AN7581 eagle takes rx ids and tx tokens from the same pool */
+	bufid_pool_init();
 #elif defined(HAS_WIFI)
 	buf_mgr_init();
 #endif

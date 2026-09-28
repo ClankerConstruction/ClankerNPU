@@ -111,7 +111,7 @@ first, so the order of its definitions is the layout of `npu_data.bin`.
 | 134 | BME descriptor ring |
 | 136 | DBA report ring |
 | 138 | rx buffer id ring |
-| 140 | AN7581 software buffer id pool |
+| 140 | AN7581 kite software buffer id pool |
 
 ### Core 0 allocation order
 

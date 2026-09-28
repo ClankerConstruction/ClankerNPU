@@ -189,5 +189,7 @@ interrupts off, so on the AN758x eagle parts the wait empties the PPE
 return FIFO itself (`ppe_wifi_bufid_isr`); left to the interrupt, an
 entry arriving after the stop would keep core 0 waiting forever.
 
-AN7581 uses a software pool instead (`buf_mgr_init`, SRAM type 140,
-5600 ids).
+On AN7581, which has no BMGR, kite builds a software pool instead
+(`buf_mgr_init`, SRAM type 140, 5600 ids), and eagle runs the same
+buffer id pool as the other eagle parts (`bufid_pool_init`): rx buffer
+ids and tx tokens.
