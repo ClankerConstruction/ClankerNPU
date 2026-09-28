@@ -402,6 +402,19 @@ static void ppe_tb_sel(u32 sel)
 				     0x30000000;
 }
 
+/* Table size, bits 26:24 of the table config: 1024 << n entries. On
+ * AN7581 the table spans both PPEs' SRAM, 16384 entries, as the stock
+ * image has it; PPE1's entries are 0x2000 and up. */
+#if defined(AN7581)
+#define PPE_TB_SIZE		0x4000000
+#define PPE_TB_SIZE_PPE1	0x3000000
+#define PPE_TB_ENTRIES		0x4000
+#else
+#define PPE_TB_SIZE		0x3000000
+#define PPE_TB_SIZE_PPE1	0x2000000
+#define PPE_TB_ENTRIES		0x2000
+#endif
+
 /* Flow-table scan: turn the table walker on, tell it how many entries
  * the chip has, and seed the hash. */
 static void ppe_enable_config(u32 sel)
@@ -426,16 +439,26 @@ static void ppe_enable_config(u32 sel)
 		if (chip_rev == 14)
 			REG32(PPE1_ENABLE) |= 0x100u;
 
-		REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xF8FFFFFF) | 0x3000000;
+		REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xF8FFFFFF) |
+				   PPE_TB_SIZE;
 		if (chip_rev == 14 && (REG32(PPE1_CTRL) & 1)) {
 			REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xF8FFFFFF) |
-					   0x2000000;
+					   PPE_TB_SIZE_PPE1;
 			REG32(PPE1_MISC) = (REG32(PPE1_MISC) & 0xF8FFFFFF) |
-					   0x2000000;
+					   PPE_TB_SIZE_PPE1;
 		}
 	}
 
+#if defined(AN7581)
+	if (chip_rev == 14 && (REG32(PPE1_CTRL) & 1)) {
+		REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xFFFFFFF8) | 4;
+		REG32(PPE1_MISC) = (REG32(PPE1_MISC) & 0xFFFFFFF8) | 5;
+	} else {
+		REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xFFFFFFF8) | 6;
+	}
+#else
 	REG32(PPE0_MISC) = (REG32(PPE0_MISC) & 0xFFFFFFF8) | 4;
+#endif
 	ppe_tb_sel(sel);
 	REG32(PPE0_HASH_SEED) = 0x12345678;
 	if (chip_rev == 14)
@@ -864,14 +887,22 @@ static int sram_set_entry_to_zero(u32 size)
 {
 	u32 i;
 
-	if (size != 0x2000) {
+	if (size != PPE_TB_ENTRIES) {
 		npu_printf("%s [ERROR] expected data_size is %d, now data_size is %d\n",
-			   "sram_set_entry_to_zero", 0x2000, size);
+			   "sram_set_entry_to_zero", PPE_TB_ENTRIES, size);
 		return 0;
 	}
-	for (i = 0; i < 0x2000; i++) {
+	for (i = 0; i < PPE_TB_ENTRIES; i++) {
+#if defined(AN7581)
+		if (CHIP_FAMILY == 14 && (REG32(PPE1_CTRL) & 1) && i >= 0x2000) {
+			REG32(0x1FB51F20) = 0;
+			ppe_tbl_cmd(0x1FB51F1C, (i << 8) | 3);
+			continue;
+		}
+#else
 		if (CHIP_FAMILY == 14)
 			(void)REG32(PPE1_CTRL);
+#endif
 		REG32(0x1FB50F20) = 0;
 		ppe_tbl_cmd(0x1FB50F1C, (i << 8) | 3);
 	}

@@ -158,7 +158,15 @@ that gets the same setup.
 
 `HWNAT_DEINIT` clears the PPE control and misc bits, the FOE pause and
 the QDMA egress ports. The `API` call writes an 80-byte FOE entry into a
-PPE entry window, writes one value, or clears the 8192-entry table.
+PPE entry window, writes one value, or clears the table.
+
+The FOE table has 8192 entries, 16384 on AN7581, where it spans both
+PPEs' SRAM as in the stock image: the table config (`0x1FB50E1C`) gives
+the size in bits 26:24 (`1024 << n`) and 6 in bits 2:0, and entries from
+`0x2000` up are the second PPE's. With the second PPE already enabled at
+init, both PPEs get 8192 each (3, and 4 and 5 in bits 2:0). The clear
+takes the whole table and sends entries from `0x2000` up to the second
+PPE while it is enabled, as the value write does.
 
 ### xPON license check
 
