@@ -40,7 +40,7 @@ static int npu_vsprintf(char *buf, const char *fmt, u32 *args)
 				arg_idx += 2;
 				s64 sv = (s64)v64;
 				int neg = 0;
-				if (sv < 0) { neg = 1; v64 = (u64)(-sv); }
+				if (sv < 0) { neg = 1; v64 = 0 - v64; }
 				len = 0;
 				do {
 					tmp[len++] = '0' + (u32)(v64 % 10);
@@ -51,7 +51,7 @@ static int npu_vsprintf(char *buf, const char *fmt, u32 *args)
 				s32 v = (s32)args[arg_idx++];
 				int neg = 0;
 				u32 uv;
-				if (v < 0) { neg = 1; uv = (u32)(-v); }
+				if (v < 0) { neg = 1; uv = 0u - (u32)v; }
 				else uv = (u32)v;
 				len = 0;
 				do {
@@ -59,6 +59,12 @@ static int npu_vsprintf(char *buf, const char *fmt, u32 *args)
 					uv /= 10;
 				} while (uv);
 				if (neg) tmp[len++] = '-';
+			}
+			/* zero padding goes between the sign and the digits */
+			if (pad_zero && !left && tmp[len - 1] == '-') {
+				*p++ = '-';
+				len--;
+				width--;
 			}
 			if (!left)
 				for (i = 0; i < width - len; i++)

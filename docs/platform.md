@@ -174,7 +174,8 @@ character after 200000 busy polls, so a stuck UART cannot hold the mutex
 forever.
 
 The formatter supports `%d %u %x %X %s %c %p %%`, the `l` and `ll`
-modifiers, width, `0` padding and `-` alignment.
+modifiers, width, `0` padding and `-` alignment. As in C, zero padding
+goes after the sign of a negative number (`%05d` of -42 is `-0042`).
 
 ### Boot UART console
 
