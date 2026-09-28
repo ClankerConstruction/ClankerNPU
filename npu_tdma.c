@@ -372,17 +372,23 @@ void tdma_tx_init(void)
 #endif
 }
 
-#ifdef HAS_BME
+#endif /* HAS_BME */
+
+#if defined(HAS_BME) || (defined(AN7581) && defined(HAS_NPU_WIFI_TX) && \
+			 defined(WIFI_EAGLE))
 /* TDMA RX init: two 1024-entry rings of 32-byte descriptors, each
- * pointing at a 2KB slot of the host tx packet buffer */
+ * pointing at a 2KB slot of the host tx packet buffer. AN7581 does it
+ * as its stock image, quietly and with its own register masks. */
 void tdma_rx_init(void)
 {
 	u32 base, phys, ring, i, desc;
 	s32 buf_id;
 
+#ifndef AN7581
 	npu_printf("%s\n", "tdma_rx_init");
 
 	REG32(TDMA_GLB_CFG) &= ~0x80000u;
+#endif
 	REG32(TDMA_RX_CFG) |= 0x80000000u;
 
 	base = sram_buf_alloc(133);
@@ -391,10 +397,16 @@ void tdma_rx_init(void)
 	for (ring = 0; ring < TDMA_RX_RINGS; ring++) {
 		REG32(TDMA_RX_BASE_PTR(ring)) =
 			(base + ring * TDMA_RX_RING_STRIDE) & 0x1FFFFFFF;
+#ifdef AN7581
+		REG32(TDMA_RX_BASE_PTR(ring) + 4) =
+			(REG32(TDMA_RX_BASE_PTR(ring) + 4) & 0xFFFFE000) |
+			TDMA_RX_RING_DESCS;
+#else
 		REG32(TDMA_RX_BASE_PTR(ring) + 4) =
 			(REG32(TDMA_RX_BASE_PTR(ring) + 4) & 0xFFFFF000) |
 			TDMA_RX_RING_DESCS;
 		REG32(TDMA_RX_BASE_PTR(ring) + 4) &= 0x8000FFFFu;
+#endif
 	}
 
 	/* the host publishes the tx packet buffer over the mailbox */
@@ -408,8 +420,13 @@ void tdma_rx_init(void)
 			buf_id = tx_token_alloc();
 			if (buf_id == -1) {
 				tdma_rx_alloc_fail++;
+#ifdef AN7581
+				npu_printf("skbufid=%d index=%d maclloc failed\n",
+					   -1, i);
+#else
 				npu_printf("%s skbufid=%d index=%d maclloc failed\n",
 					   "tdma_rx_init", -1, i);
+#endif
 				continue;
 			}
 			desc = tdma_rx_dscp_base[ring] + TDMA_RX_DESC_SIZE * i;
@@ -424,13 +441,17 @@ void tdma_rx_init(void)
 		REG32(TDMA_RX_BASE_PTR(ring) + 12) = 0;
 	}
 
+#ifdef AN7581
+	(void)phys;
+	REG32(TDMA_GLB_CFG) |= 4;
+#else
 	REG32(TDMA_GLB_CFG) = (REG32(TDMA_GLB_CFG) & 0xFFF8FFFB) | 0x40004;
 
 	npu_printf("%s L%d tdma rx ring dscpBaseAddr_uncache=%x reg:%x tdma used pkt_buf_phy_addr:%x\n",
 		   "tdma_rx_init", 1570, base, phys, npu_tx_pkt_buf_addr);
+#endif
 }
-#endif /* HAS_BME */
-#endif /* HAS_BME */
+#endif
 
 #if defined(AN7581)
 #ifdef WIFI_KITE

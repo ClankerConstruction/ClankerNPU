@@ -591,10 +591,7 @@ static void npu_mbox_init_rxd_wrapper(u32 ring_size, u32 ring)
 	case EAGLE_RING_TXDONE0:
 #ifdef HAS_NPU_WIFI_TX
 		eagle_txdone_ring_fill(ring_size);
-#ifdef HAS_BME
-		/* AN7581 has no TDMA rx ring to reclaim buffers from */
 		np_skb_tx_force_reset();
-#endif
 #ifdef HAS_EAGLE_STA_QLIMIT
 		sta_q_init();
 #endif

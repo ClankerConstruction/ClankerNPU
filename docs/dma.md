@@ -140,12 +140,16 @@ and `0x1FB501BC = 0x00EB00EA`; elsewhere `TDMA_FC_CFG2 = 3`.
 
 ### TDMA rx, wired to WiFi
 
-AN7583 eagle only. Two rings of 1024 descriptors of 32 bytes,
-SRAM type 133, registers at `0x1FB50900`. `tdma_rx_init` waits for the
-host's tx packet buffer address (SET_WAIT 23), then points every
-descriptor at a 2 KB slot of that buffer through a tx token. Frames the
-PPE forwards to WiFi arrive here; eagle core 2 moves them into the WiFi
-tx ring.
+Eagle with an NPU tx path (AN7581, AN7583). Two rings of 1024
+descriptors of 32 bytes, SRAM type 133, registers at `0x1FB50900`.
+`tdma_rx_init` waits for the host's tx packet buffer address (SET_WAIT
+23), then points every descriptor at a 2 KB slot of that buffer through
+a tx token. Frames the PPE forwards to WiFi arrive here; eagle core 2
+moves them into the WiFi tx ring. When the tx done ring comes up,
+`np_skb_tx_force_reset` rebuilds the tx token ring around the tokens the
+rx descriptors hold. AN7581 sets the rings up as its stock image does:
+no log lines, the ring size field masked with `0xFFFFE000`, and only
+the rx enable bit (`GLB_CFG` bit 2) set at the end.
 
 ### TDMA tx on AN7581
 

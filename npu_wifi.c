@@ -153,7 +153,7 @@ void core0_wifi_init_wrapper(void)
 #if defined(HAS_BME) || defined(AN7581)
 	tdma_tx_init();
 #endif
-#if defined(HAS_BME) && defined(HAS_NPU_WIFI_TX)
+#ifdef HAS_NPU_WIFI_TX
 	/* AN7552 has no TDMA rx ring: host never
 	 * sends tx_pkt_buf, so this would wait forever */
 	tdma_rx_init();

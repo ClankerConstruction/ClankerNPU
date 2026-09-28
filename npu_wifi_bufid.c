@@ -412,7 +412,8 @@ void bufid_pool_init(void)
 #endif
 }
 
-#ifdef HAS_BME
+#if defined(HAS_BME) || (defined(AN7581) && defined(HAS_NPU_WIFI_TX) && \
+			 defined(WIFI_EAGLE))
 /* Recover the buffer ids parked in the TDMA rx descriptors. Each
  * descriptor keeps the buffer pointer at +8. */
 static u32 tdma_rx_collect_bufids(u16 *out, u32 max)
@@ -491,7 +492,7 @@ void np_skb_tx_force_reset(void)
 	hw_mutex_unlock(tx_token_free_mutex);
 	hw_mutex_unlock(tx_token_alloc_mutex);
 }
-#endif /* HAS_BME */
+#endif
 
 /* per-band counter words: 170 on AN7552 (types 9/10 are 0x2A8) */
 #ifdef AN7552
