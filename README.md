@@ -174,7 +174,7 @@ Feature flags from `npu_config.h`:
 | `HAS_ASYNC_COPY` | AN7583 eagle (host out ring copy overlaps the next frame's work) |
 | `HAS_LEAN_TRAP` | AN7583 eagle (trap entry saves only caller-saved registers) |
 | `HAS_EAGLE_SYNC` | AN7552, AN7581 eagle (rx refill marks when an id has left its descriptor; rxdmad and TDMA tx wait briefly for it) |
-| `HAS_EAGLE_STA_QLIMIT` | AN7581 and AN7583 eagle with NPU tx (per-station limit on LAN to WiFi frames in the WiFi chip, by time) |
+| `HAS_EAGLE_STA_QLIMIT` | AN7583 eagle (per-station limit on LAN to WiFi frames in the WiFi chip, by time) |
 | `HAS_CACHED_TXDONE` | AN7583 eagle (tx done reports read through the D-cache after a line invalidate) |
 | `HAS_EAGLE_TX_JUMBO` | AN7581 and AN7583 eagle with NPU tx (host tx frames over 2 KB in reserved pairs of tx buffers) |
 

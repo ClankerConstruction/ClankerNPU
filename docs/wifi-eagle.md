@@ -266,10 +266,9 @@ host path share. One fast download can hold most of it: the TCP window
 then sits in the chip as delay, and when the pool runs dry the NPU drops
 frames and host frames to every station wait for a token.
 
-With `HAS_EAGLE_STA_QLIMIT` (AN7581 and AN7583, the eagle builds with an
-NPU tx path) core 2 counts each station's frames in the chip, times one
-of them at a time through the chip, and drops a TDMA rx frame,
-re-arming its slot, when:
+With `HAS_EAGLE_STA_QLIMIT` (AN7583 eagle) core 2 counts each station's
+frames in the chip, times one of them at a time through the chip, and
+drops a TDMA rx frame, re-arming its slot, when:
 
 - the station has `limit` frames in the chip, or
 - the station's queue has stood above target for `interval`: its frames

@@ -329,6 +329,8 @@ runs dry.
 
 ## Where it applies
 
-`HAS_EAGLE_STA_QLIMIT`: the eagle builds whose NPU runs the WiFi tx path
-(AN7581 MT7992, AN7583 MT7992 and MT7993). The kite datapath has no per
-frame token in the NPU, and AN7552 leaves LAN to WiFi traffic to the host.
+`HAS_EAGLE_STA_QLIMIT`: AN7583 MT7992 and MT7993. The kite datapath has
+no per frame token in the NPU, and AN7552 leaves LAN to WiFi traffic to
+the host. AN7581 MT7992 runs the WiFi tx path too, but its SRAM holds
+the stock image's 64 KB TDMA tx and rx rings and has no room for the
+station table.

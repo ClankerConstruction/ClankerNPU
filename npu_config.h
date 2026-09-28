@@ -100,8 +100,9 @@
 
 /* LAN -> WiFi frames each station has in the WiFi chip: a hard limit,
  * and drops against a standing queue, as CoDel does. Needs the NPU tx
- * path with a tx token per frame (eagle). */
-#if defined(HAS_NPU_WIFI_TX) && defined(WIFI_EAGLE)
+ * path with a tx token per frame (eagle). Not on AN7581: its SRAM holds
+ * the stock 64 KB TDMA rings and no room for the table. */
+#if defined(AN7583) && defined(WIFI_EAGLE)
 #define HAS_EAGLE_STA_QLIMIT
 #endif
 
