@@ -792,8 +792,10 @@ NPU_HOT void __attribute__((noreturn)) kite_core1_loop(void)
 #if MAX_CORE_NUM > 2
 		if (rxd_5g_init_done != 0)
 			goto rx_5g;
+		/* leaves only on a mode change: each pass is a main loop pass */
 		while (rxd_2g_init_done != 0 &&
 		       kite_dbdc_model(kite_driver_model())) {
+			npu_dbg_poll();
 			NPU_PROF1(NP_KRX2G, rxd_2g_cpu_idx, kite_rx_2g());
 			if (rxd_5g_init_done != 0) {
 rx_5g:

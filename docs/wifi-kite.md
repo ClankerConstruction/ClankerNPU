@@ -36,7 +36,8 @@ flowchart LR
 
 Core 2's 2.4 GHz rx loop polls the [debug block](debug.md) on every
 pass, so its `KRX2` heartbeat moves and it serves debug commands while
-the ring is idle.
+the ring is idle. Core 1 does the same in its DBDC loop, which serves
+both bands until the driver model changes.
 
 AN7552 kite has two cores. Core 0 runs init, then drains both bands'
 node rings to the host (core 3's job elsewhere); core 1 runs rx. Core
