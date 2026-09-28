@@ -1061,9 +1061,9 @@ static int eagle_rxdmad_handle(u8 *chaining)
 		buf_id_return((u16)buf_id);
 		goto done;
 	}
-#if defined(AN7552)
-	/* give core 0 1 ms to refill its descriptor */
-	if (eagle_sync[buf_id] == 0)
+#ifdef HAS_EAGLE_SYNC
+	/* give the refill 1 ms to reach its descriptor */
+	if (!eagle_synced(buf_id))
 		delay_ms(1);
 #endif
 
@@ -1514,15 +1514,15 @@ static int eagle_rx_ring_refill(u32 band, u32 desc, u32 *idx)
 	s32 buf_id;
 	u32 i = *idx;
 
-#if defined(AN7552)
+#ifdef HAS_EAGLE_SYNC
 	/* the id leaving the descriptor is now safe */
-	eagle_sync[(s16)(REG32(desc + 8) >> 16)] = 1;
+	eagle_sync_set((s16)(REG32(desc + 8) >> 16));
 #endif
 	buf_id = buf_id_alloc_ring();
 	if (buf_id == -1)
 		return 1;
-#if defined(AN7552)
-	eagle_sync[buf_id] = 0;
+#ifdef HAS_EAGLE_SYNC
+	eagle_sync_clr(buf_id);
 #endif
 
 	dbg.refill[band]++;

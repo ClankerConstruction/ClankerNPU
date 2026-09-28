@@ -118,6 +118,13 @@
 #define HAS_CACHED_TXDONE
 #endif
 
+/* The rx refill marks when an rx buffer id has left its descriptor;
+ * the rxdmad path and TDMA tx wait briefly for an id not yet marked.
+ * A byte per id on AN7552, a bit per id on AN7581, as the stock images. */
+#if (defined(AN7552) || defined(AN7581)) && defined(WIFI_EAGLE)
+#define HAS_EAGLE_SYNC
+#endif
+
 /* The trap entry saves only the registers a C call may clobber.
  * AN7583 eagle takes a PPE buffer return interrupt per frame. */
 #if defined(AN7583) && defined(WIFI_EAGLE)

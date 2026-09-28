@@ -721,8 +721,30 @@ extern u8 eagle_in_first[2];
 extern u8 eagle_txdone_kick;
 extern volatile u32 eagle_rro_cfg[26];
 extern volatile u32 eagle_rro_active;
-#if defined(AN7552)
+#ifdef HAS_EAGLE_SYNC
 extern volatile u8 *eagle_sync;
+
+#if defined(AN7552)
+#define EAGLE_SYNC_BYTES	BUFID_POOL_ENTRIES
+#define eagle_sync_set(id)	(eagle_sync[id] = 1)
+#define eagle_sync_clr(id)	(eagle_sync[id] = 0)
+#define eagle_synced(id)	(eagle_sync[id])
+#else
+/* one bit per id: 1537 bytes cover 12288 ids */
+#define EAGLE_SYNC_BYTES	(BUFID_POOL_ENTRIES / 8 + 1)
+static inline void eagle_sync_set(u32 id)
+{
+	eagle_sync[(u16)(id >> 3)] |= (u8)(1u << (id & 7));
+}
+static inline void eagle_sync_clr(u32 id)
+{
+	eagle_sync[(u16)(id >> 3)] &= (u8)~(1u << (id & 7));
+}
+static inline u32 eagle_synced(u32 id)
+{
+	return (eagle_sync[(u16)(id >> 3)] >> (id & 7)) & 1;
+}
+#endif
 #endif
 #endif
 

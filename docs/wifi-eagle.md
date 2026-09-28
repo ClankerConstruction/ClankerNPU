@@ -104,6 +104,13 @@ Two buffer pools:
   chip fills with a token report, 15-bit tokens two per word after a
   12-byte header.
 
+On AN7552 and AN7581 (`HAS_EAGLE_SYNC`) the refill marks an rx buffer id
+once it has left its descriptor, and clears the mark of the id it puts
+there; a new ring's ids start marked on AN7581. The rxdmad path waits
+1 ms for a segment whose id is not marked yet. SRAM type 31 holds the
+marks: a byte per id on AN7552, a bit per id on AN7581, as the stock
+images keep them.
+
 Each token owns one 2 KB NPU tx buffer (`token << 11` past the tx
 packet buffer base). A LAN frame never needs more: TDMA rx fills one
 buffer. A frame the host sends through the host adaptor can be longer,

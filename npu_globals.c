@@ -583,8 +583,8 @@ u32 eagle_txdone_ridx;
 u8 eagle_tx_first_push[2];
 u8 eagle_in_first[2];
 u8 eagle_txdone_kick;
-#if defined(AN7552)
-/* sync_method (type 31): 1 once the id left its rx descriptor */
+#ifdef HAS_EAGLE_SYNC
+/* sync_method (type 31): set once the id left its rx descriptor */
 volatile u8 *eagle_sync;
 #endif
 #ifdef HAS_EAGLE_STA_QLIMIT
