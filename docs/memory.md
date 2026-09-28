@@ -74,7 +74,10 @@ first, so the order of its definitions is the layout of `npu_data.bin`.
 
 - Blocks are keyed by an address type (1..255) and each type has a fixed
   size from a per-variant table. Types 1..128 are WiFi rings and tables,
-  129 and above are bridge, DMA and DBA buffers.
+  129 and above are bridge, DMA and DBA buffers. The tables are the stock
+  images': AN7581 eagle has its own, with 64 KB TDMA tx and rx rings
+  (132, 133) and the rx sync bitmap (31), where AN7583 eagle has 16 KB
+  and 64 KB rings and the BME and DBA rings.
 - Allocating a type that already exists returns the existing block and
   prints `already exist!!AddrType=...`.
 - Each block starts on a 32-byte boundary.
@@ -103,7 +106,7 @@ first, so the order of its definitions is the layout of `npu_data.bin`.
 | 28 | eagle tx buffer state |
 | 29 | eagle TDMA rx buffer ids |
 | 30 | reserved |
-| 31 | AN7552 eagle buffer sync bytes |
+| 31 | eagle rx buffer sync: bytes on AN7552, a bitmap on AN7581 |
 | 41 | eagle station per tx token and per-station queue state and delay probes (`npu_sta_q.c`), 0xC800 bytes |
 | 129 | NPU bridge packet buffer |
 | 132 | TDMA tx rings |

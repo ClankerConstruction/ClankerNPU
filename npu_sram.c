@@ -161,6 +161,21 @@ static const struct sram_size_ent sram_size_hi[] = {
 	{ 138, 0x05780 }, { 129, 0x10FFF }, { 132, 0x04000 }, { 134, 0x01000 },
 	{ 137, 0x00004 },
 };
+#elif defined(AN7581)
+/* AN7581 eagle, as the stock image: the rx sync bitmap (31), 64 KB TDMA
+ * tx and rx rings (132, 133), no BME or DBA ring */
+static const struct sram_size_ent sram_size_lo[] = {
+	{   1, 0x220C0 }, {   2, 0x01818 }, {   3, 0x01818 }, {   9, 0x003E8 },
+	{  10, 0x003E8 }, {  11, 0x00078 }, {  14, 0x00600 }, {  15, 0x00600 },
+	{  22, 0x01008 }, {  25, 0x00040 }, {  26, 0x00010 }, {  30, 0x00100 },
+	{  31, 0x00601 }, {  18, 0x06800 }, {  16, 0x02020 }, {  17, 0x02020 },
+	{  28, 0x06800 }, {  29, 0x01000 }, {  23, 0x00800 },
+};
+
+static const struct sram_size_ent sram_size_hi[] = {
+	{ 138, 0x06000 }, { 129, 0x13FFF }, { 132, 0x11000 }, { 133, 0x11000 },
+	{ 130, 0x00004 }, { 137, 0x00004 },
+};
 #else
 static const struct sram_size_ent sram_size_lo[] = {
 	{   1, 0x220C0 }, {   2, 0x01818 }, {   3, 0x01818 }, {   9, 0x003E8 },
