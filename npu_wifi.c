@@ -124,7 +124,7 @@ void core0_wifi_init_wrapper(void)
 
 #ifdef WIFI_KITE
 	/* no TDMA rx ring on kite */
-#ifdef HAS_BME
+#if defined(HAS_BME) || defined(AN7581)
 	tdma_tx_init();
 #endif
 	wifi_bridge_init();
@@ -150,7 +150,7 @@ void core0_wifi_init_wrapper(void)
 
 #ifdef WIFI_EAGLE
 	eagle_msdu_pg_pool_init();
-#ifdef HAS_BME
+#if defined(HAS_BME) || defined(AN7581)
 	tdma_tx_init();
 #endif
 #if defined(HAS_BME) && defined(HAS_NPU_WIFI_TX)

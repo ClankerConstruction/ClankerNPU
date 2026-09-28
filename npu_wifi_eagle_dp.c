@@ -618,9 +618,21 @@ void eagle_queue_init(u32 band)
  * bound, so the frame goes to the host. */
 /* entries taken. With HAS_HOT_TEXT it polls the FIFO again, up to 256
  * entries, which spares a trap entry and exit per burst. */
+#if defined(AN7581)
+/* the stock AN7581 image counts returns in the common counter block */
+#define eagle_ppe_cnt(off) \
+	do { \
+		if (counter_base_tri) \
+			(*(u32 *)(counter_base_tri + (off)))++; \
+	} while (0)
+#else
+#define eagle_ppe_cnt(off)	do { } while (0)
+#endif
+
 static inline u32 eagle_ppe_drain(void)
 {
 	u32 n, i, v, info, hdr, done = 0;
+	int r;
 	u16 id;
 #ifdef HAS_ID_BATCH
 	/* freed ids go back 16 to a hold of mutex 13 */
@@ -631,9 +643,9 @@ static inline u32 eagle_ppe_drain(void)
 	while ((n = REG32(PPE_WIFI_BUF_CNT) & 0xFFFF) != 0) {
 		i = 0;
 		v = REG32(PPE_WIFI_BUF_ID);
-		while ((s32)v < 0) {
+		while (PPE_WIFI_BUF_VALID(v)) {
 			id = v & 0xFFFF;
-			if (v & 0x40000000) {
+			if (v & PPE_WIFI_BUF_FREE) {
 #ifdef HAS_ID_BATCH
 				ids[nf++] = id;
 				if (nf == 16) {
@@ -643,16 +655,21 @@ static inline u32 eagle_ppe_drain(void)
 #else
 				buf_id_return(id);
 #endif
+				eagle_ppe_cnt(4);
 			} else {
 				info = REG32(PPE_WIFI_BUF_INFO);
 				hdr = REG32(eagle_buf_uncached(id));
-				if (eagle_pkt_enqueue(id, (hdr >> 3) & 0x3FFF,
+				r = eagle_pkt_enqueue(id, (hdr >> 3) & 0x3FFF,
 						      info & PPE_WIFI_BUF_WCID,
 						      (info >> 16) & 31,
-						      0, 2, (hdr >> 3) & 0x3FFF) != 0)
+						      0, 2, (hdr >> 3) & 0x3FFF);
+				eagle_ppe_cnt(8);
+				if (r != 0) {
 					buf_id_return(id);
+					eagle_ppe_cnt(12);
+				}
 			}
-			REG32(PPE_WIFI_BUF_ID) = 0x80000000;
+			REG32(PPE_WIFI_BUF_ID) = PPE_WIFI_BUF_POP;
 			if (++i == n)
 				break;
 			v = REG32(PPE_WIFI_BUF_ID);

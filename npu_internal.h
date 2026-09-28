@@ -271,6 +271,8 @@ void rx_bufid_pool_reset(void);
 void tdma_tx_wait_idle(void);
 void tdma_bmgr_reinit(void);
 void tdma_bmgr_init(void);
+#endif
+#if defined(HAS_BME) || (defined(AN7581) && defined(HAS_WIFI))
 void tdma_tx_init(void);
 #endif
 void core0_wifi_init_wrapper(void);

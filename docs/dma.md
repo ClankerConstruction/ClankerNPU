@@ -95,8 +95,8 @@ slower.
 
 ## TDMA
 
-AN7552 and AN7583 with a WiFi chip (`HAS_BME`). AN7581 has no TDMA WiFi
-path.
+Every part with a WiFi chip. AN7552 and AN7583 (`HAS_BME`) use 8-byte
+tx descriptors, AN7581 32-byte ones; see [TDMA tx on AN7581](#tdma-tx-on-an7581).
 
 ### TDMA tx, WiFi to wired
 
@@ -147,6 +147,27 @@ descriptor at a 2 KB slot of that buffer through a tx token. Frames the
 PPE forwards to WiFi arrive here; eagle core 2 moves them into the WiFi
 tx ring.
 
+### TDMA tx on AN7581
+
+As the stock images' `tdma_tx_init` and `tdma_tx_submit`: SRAM type 132,
+32-byte descriptors, one ring of 2048 on eagle, two of 1024 on kite
+(ring 1 at `+0x8000`). The size register (`+4`) holds the ring length.
+
+```
+word 1   bit 31 done, bits 15:0 length
+word 2   buffer address | 0x80000000
+word 4   0x80000000 | buffer id << 14
+word 5   0x7F4087FF, from ring init
+```
+
+Descriptors start done. A submit needs more than nine free slots, five
+tries apart; a slot the engine has not handed back prints `tdma tx (%d)
+full. cpu %d desc word %x` and fails. It fills words 4, 2 and then 1, and
+on eagle waits for the id's rx refill mark (`HAS_EAGLE_SYNC`) before
+moving the cpu index. Eagle counts in the band's debug block whatever
+the debug flags say, kite only with them on. Flow control: `0x1FB52230`
+= 3, and on eagle `0x1FB521F0` = `0xC004C004`.
+
 ## Returning unforwarded frames
 
 WiFi frames sent to TDMA tx that the PPE does not forward come back to
@@ -164,6 +185,13 @@ PLIC source 95, `ppe_wifi_bufid_isr` on core 0.
 
 Each entry is popped by writing `0x80000000` to `0x1FB50FE0`. A "free
 only" entry returns the buffer id; any other goes to the host queue.
+
+AN7581 lays the FIFO out differently: an entry is valid while bit 31 is
+clear, bit 16 marks it free only, the wcid has 16 bits, and a pop writes
+`0x40000000`. Kite has no BME ring there: its PLIC 95 handler,
+`kite_ppe_return_isr`, reads the same FIFO and frees into the software
+pool. Both count returns in the common debug block (+4 free, +8 frame,
++12 frame refused), eagle whatever the debug flags say.
 Without this handler, unbound WiFi to LAN flows (DHCP included) never
 reach the host.
 

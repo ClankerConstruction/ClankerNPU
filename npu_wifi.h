@@ -30,13 +30,24 @@
 #define TDMA_FC_CFG2          0x1FB52230
 #define TDMA_WIFI_BUF_CFG     0x1FB50FE8
 #define AN7552_FC_REG         0x1FB501BC
-#define PPE_WIFI_BUF_INFO     0x1FB50FDC	/* wcid 14:0, info 20:16 */
-#define PPE_WIFI_BUF_ID       0x1FB50FE0	/* 31 valid, 30 free only, 15:0 id */
+#define PPE_WIFI_BUF_INFO     0x1FB50FDC	/* wcid, info 20:16 */
+#define PPE_WIFI_BUF_ID       0x1FB50FE0	/* valid, free only, 15:0 id */
 #define PPE_WIFI_BUF_CNT      0x1FB50FE4
-#ifdef AN7552
+#if defined(AN7552) || defined(AN7581)
 #define PPE_WIFI_BUF_WCID     0xFFFF
 #else
 #define PPE_WIFI_BUF_WCID     0x7FFF
+#endif
+#if defined(AN7581)
+/* an entry is valid while bit 31 is clear, bit 16 marks it free only,
+ * and writing bit 30 pops it (the stock AN7581 PLIC 95 handler) */
+#define PPE_WIFI_BUF_VALID(v) ((s32)(v) >= 0)
+#define PPE_WIFI_BUF_FREE     0x10000
+#define PPE_WIFI_BUF_POP      0x40000000
+#else
+#define PPE_WIFI_BUF_VALID(v) ((s32)(v) < 0)
+#define PPE_WIFI_BUF_FREE     0x40000000
+#define PPE_WIFI_BUF_POP      0x80000000
 #endif
 
 /* TDMA rx ring geometry */

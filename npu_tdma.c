@@ -1,9 +1,9 @@
 /*
  * AN75XX NPU firmware - TDMA rings, buffer manager and DMA copy
  *
- * The TDMA engine carries frames between the NPU and the wired side.
- * The rings exist only where HAS_BME does, which is AN7552 and AN7583
- * with a WiFi chip. AN7581 has no TDMA WiFi path.
+ * The TDMA engine carries frames between the NPU and the wired side:
+ * 8-byte tx descriptors on AN7552 and AN7583 (HAS_BME), 32-byte ones
+ * on AN7581, as the stock images have them.
  */
 
 #include "npu_internal.h"
@@ -432,6 +432,99 @@ void tdma_rx_init(void)
 #endif /* HAS_BME */
 #endif /* HAS_BME */
 
+#if defined(AN7581)
+#ifdef WIFI_KITE
+/* PLIC 95: frames the PPE did not forward, and forwarded frames' buffers
+ * (free only), come back on the buffer return FIFO; kite has no BME ring
+ * on AN7581. As the stock MT7916 image's handler (0x84009250). */
+static void kite_ppe_return_isr(int src)
+{
+	u32 n = REG32(PPE_WIFI_BUF_CNT) & 0xFFFF;
+	u32 i = 0, v, info;
+
+	(void)src;
+	if (n == 0)
+		return;
+	v = REG32(PPE_WIFI_BUF_ID);
+	while (PPE_WIFI_BUF_VALID(v)) {
+		if (v & PPE_WIFI_BUF_FREE) {
+			buf_id_free(0, 0, v & 0xFFFF);
+			wifi_cnt_inc(2, 4);
+		} else {
+			info = REG32(PPE_WIFI_BUF_INFO);
+			if (pkt_forward_bme((s16)v, info & PPE_WIFI_BUF_WCID,
+					    (info >> 16) & 31) != 0) {
+				wifi_cnt_inc(2, 8);
+				buf_id_free(0, 0, v & 0xFFFF);
+				wifi_cnt_inc(2, 12);
+			} else {
+				wifi_cnt_inc(2, 8);
+			}
+		}
+		REG32(PPE_WIFI_BUF_ID) = PPE_WIFI_BUF_POP;
+		if (++i == n)
+			break;
+		v = REG32(PPE_WIFI_BUF_ID);
+	}
+}
+#endif
+
+/* descriptors start done, word 5 as the engine wants it */
+static void tdma_tx_ring_fill(u32 base, u32 n)
+{
+	u32 d;
+
+	for (d = base; d != base + 32 * n; d += 32) {
+		REG32(d + 20) = 0x7F4087FF;
+		*(volatile u8 *)(d + 7) = (*(volatile u8 *)(d + 7) & 0x3F) | 0x80;
+	}
+}
+
+/* TDMA TX init on AN7581, as the stock image's: 32-byte descriptors,
+ * one ring of 2048 on eagle, two of 1024 on kite */
+void tdma_tx_init(void)
+{
+	u32 ring = sram_buf_alloc(132);
+
+	REG32(TDMA_TX_RING0_BASE) = ring & 0x1FFFFFFF;
+#ifdef WIFI_EAGLE
+	REG32(TDMA_TX_RING0_CFG) = 0x800;
+	tdma_tx_ring0_base = ring;
+	tdma_tx_ring_fill(ring, 2048);
+	REG32(TDMA_TX_RING0_IDX) = 0;
+	REG32(TDMA_INT_CFG1) = 0x01010101;
+	REG32(TDMA_INT_CFG0) = 1;
+#else
+	REG32(TDMA_TX_RING0_CFG) = 1024;
+	REG32(TDMA_TX_RING1_BASE) = (ring + 0x8000) & 0x1FFFFFFF;
+	REG32(TDMA_TX_RING1_CFG) = 1024;
+	tdma_tx_ring0_base = ring;
+	tdma_tx_ring_fill(ring, 1024);
+	REG32(TDMA_TX_RING0_IDX) = 0;
+	REG32(TDMA_INT_CFG1) = 0x01010101;
+	REG32(TDMA_INT_CFG0) = 1;
+	tdma_tx_ring1_base = ring + 0x8000;
+	tdma_tx_ring_fill(ring + 0x8000, 1024);
+	REG32(TDMA_TX_RING1_IDX) = 0;
+	REG32(TDMA_INT_CFG1) = 0x02020202;
+	REG32(TDMA_INT_CFG0) = 17;
+#endif
+	REG32(TDMA_GLB_CFG) |= 1;
+	REG32(TDMA_GLB_CFG) |= 0x40;
+	REG32(TDMA_GLB_CFG) |= 0x30;
+#ifdef WIFI_EAGLE
+	plic_register_isr(95, ppe_wifi_bufid_isr);
+	REG32(TDMA_FC_CFG2) = 3;
+	REG32(TDMA_FC_CFG0) = 0xC004C004;
+#else
+	plic_register_isr(95, kite_ppe_return_isr);
+	REG32(TDMA_FC_CFG2) = 3;
+#endif
+	REG32(TDMA_WIFI_BUF_CFG) =
+		(REG32(TDMA_WIFI_BUF_CFG) & 0xFFF300FF) | 0x190100;
+}
+#endif /* AN7581 */
+
 static u32 *tdma_stats_base(u32 band)
 {
 	if (band == 0)
@@ -555,6 +648,81 @@ NPU_HOT int tdma_tx_submit(u32 token, u32 pkt_len, u32 buf_addr, u32 band)
 	tdma_tx_unlock();
 	return 0;
 }
+#elif defined(AN7581)
+/* AN7581, as the stock image's tdma_tx_submit: 32-byte descriptors,
+ * word 1 done (bit 31) and length, word 2 the buffer, word 4 the token.
+ * Eagle has one ring of 2048 and counts whatever the debug flags say;
+ * kite has two of 1024. */
+#ifdef WIFI_EAGLE
+#define TDMA_TX_LAST		2047
+#define tdma_tx_counting()	1
+#else
+#define TDMA_TX_LAST		1023
+#define tdma_tx_counting()	(wifi_debug_flags & 4)
+#endif
+
+int __attribute__((noinline)) tdma_tx_submit(u32 token, u32 pkt_len,
+					     u32 buf_addr, u32 band)
+{
+	u32 base = (band != 0) ? tdma_tx_ring1_base : tdma_tx_ring0_base;
+	u32 sw_idx = tdma_tx_sw_idx[band];
+	u32 retries = 5;
+	u32 hw_idx, free_slots, next;
+	volatile u32 *desc;
+
+	if (base == 0)
+		return -1;
+	while (1) {
+		hw_idx = REG32(TDMA_TX_RING0_DMA_IDX + 16 * band);
+		free_slots = (sw_idx < hw_idx) ? (hw_idx - sw_idx - 1)
+					       : (TDMA_TX_LAST - sw_idx + hw_idx);
+		if (free_slots > 9)
+			break;
+		{ volatile u32 i; for (i = 0; i < 300; i++) ; }
+		if (tdma_tx_counting())
+			(*(tdma_stats_base(band) + 63))++;
+		if (--retries == 0) {
+			NDBG_CNT(NC_TDMA_TX_FULL);
+			NDBG_TRACE(NDBG_TDMA, band, sw_idx, hw_idx);
+			if (tdma_tx_counting())
+				(*(tdma_stats_base(band) + 64))++;
+			return -1;
+		}
+	}
+
+	desc = (volatile u32 *)(base + 32 * sw_idx);
+	if ((s32)desc[1] >= 0) {
+		/* the engine has not handed the slot back */
+		if (tdma_tx_counting())
+			(*(tdma_stats_base(band) + 63))++;
+		npu_printf("tdma tx (%d) full. cpu %d desc word %x\n",
+			   band, sw_idx, desc[1]);
+		return -1;
+	}
+	if (tdma_tx_counting())
+		(*(tdma_stats_base(band) + 79))++;
+	if (pkt_len < 60) {
+		npu_memset((void *)(buf_addr + pkt_len), 0, 60 - pkt_len);
+		pkt_len = 60;
+	}
+	next = (sw_idx >= TDMA_TX_LAST) ? 0 : sw_idx + 1;
+
+	desc[4] = 0x80000000 | (token << 14);
+	desc[2] = (buf_addr & 0x3FFFFFFF) | 0x80000000;
+	desc[1] = pkt_len & 0xFFFF;
+#ifdef HAS_EAGLE_SYNC
+	/* short wait for the id's rx refill */
+	if (!eagle_synced(token)) {
+		volatile u32 i;
+
+		for (i = 0; i < 1000; i++)
+			;
+	}
+#endif
+	REG32(TDMA_TX_RING0_IDX + 16 * band) = next;
+	tdma_tx_sw_idx[band] = next;
+	return 0;
+}
 #else
 #ifdef WIFI_KITE
 static u32 tdma_tx_mutex[2];
@@ -623,9 +791,9 @@ int __attribute__((noinline)) tdma_tx_submit(u32 token, u32 pkt_len,
 	desc[1] = (buf_addr & 0x3FFFFFFF) | 0x80000000;
 	tdma_tx_sw_idx[band] = next;
 	desc[0] = (w0 & 0xFFFFE000) | (pkt_len & 0x1FFF);
-#if defined(AN7552) && defined(WIFI_EAGLE)
+#ifdef HAS_EAGLE_SYNC
 	/* short wait for the id's rx refill */
-	if (eagle_sync[token] == 0) {
+	if (!eagle_synced(token)) {
 		volatile u32 i;
 
 		for (i = 0; i < 1000; i++)
