@@ -817,7 +817,9 @@ static void kite_core2_rx_2g(void)
 {
 	u8 model = kite_driver_model();
 
+	/* leaves only on a mode change: each pass is a main loop pass */
 	do {
+		npu_dbg_poll();
 		if (rxd_2g_init_done != 0 && model == 0) {
 			NPU_PROF1(NP_KRX2G, rxd_2g_cpu_idx, kite_rx_2g());
 			model = kite_driver_model();
